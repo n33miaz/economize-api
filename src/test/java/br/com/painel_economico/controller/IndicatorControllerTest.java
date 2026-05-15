@@ -9,6 +9,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.reactive.WebFluxTest;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.reactive.server.WebTestClient;
@@ -29,6 +30,9 @@ class IndicatorControllerTest {
         @Autowired
         private WebTestClient webTestClient;
 
+        @Autowired
+        private JwtUtil jwtUtil;
+
         @MockitoBean
         private IndicatorService indicatorService;
 
@@ -44,6 +48,7 @@ class IndicatorControllerTest {
 
                 webTestClient.get()
                                 .uri("/api/indicators/all")
+                                .header(HttpHeaders.AUTHORIZATION, bearerToken())
                                 .accept(MediaType.APPLICATION_JSON)
                                 .exchange()
                                 .expectStatus().isOk()
@@ -66,6 +71,7 @@ class IndicatorControllerTest {
                                                 .queryParam("code", "USD")
                                                 .queryParam("amount", "100.00")
                                                 .build())
+                                .header(HttpHeaders.AUTHORIZATION, bearerToken())
                                 .exchange()
                                 .expectStatus().isOk()
                                 .expectBody()
@@ -85,9 +91,14 @@ class IndicatorControllerTest {
                                                 .queryParam("code", "INVALID")
                                                 .queryParam("amount", "100")
                                                 .build())
+                                .header(HttpHeaders.AUTHORIZATION, bearerToken())
                                 .exchange()
                                 .expectStatus().isBadRequest()
                                 .expectBody()
                                 .jsonPath("$.error").exists();
+        }
+
+        private String bearerToken() {
+                return "Bearer " + jwtUtil.generateToken("teste@economize.app");
         }
 }

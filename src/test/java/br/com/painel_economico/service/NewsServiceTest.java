@@ -7,14 +7,10 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
-import java.util.function.Function;
-
-import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.when;
 
@@ -41,48 +37,60 @@ class NewsServiceTest {
     @BeforeEach
     void setUp() {
         newsService = new NewsService(webClient);
-        ReflectionTestUtils.setField(newsService, "newsApiUrl", "https://newsapi.org/v2");
-        ReflectionTestUtils.setField(newsService, "newsApiKey", "dummy-key");
     }
 
-    @SuppressWarnings("unchecked")
-    private void mockWebClientSuccess(NewsResponse response) {
+    private void mockWebClientSuccess(String rssXml) {
         when(webClient.get()).thenReturn(requestHeadersUriSpec);
-        when(requestHeadersUriSpec.uri(any(Function.class))).thenReturn(requestHeadersSpec);
-        when(requestHeadersSpec.header(anyString(), anyString())).thenReturn(requestHeadersSpec);
+        when(requestHeadersUriSpec.uri(anyString())).thenReturn(requestHeadersSpec);
         when(requestHeadersSpec.retrieve()).thenReturn(responseSpec);
-        when(responseSpec.onStatus(any(), any())).thenReturn(responseSpec);
-        when(responseSpec.bodyToMono(NewsResponse.class)).thenReturn(Mono.just(response));
+        when(responseSpec.bodyToMono(String.class)).thenReturn(Mono.just(rssXml));
+    }
+
+    private void mockWebClientFailure() {
+        when(webClient.get()).thenReturn(requestHeadersUriSpec);
+        when(requestHeadersUriSpec.uri(anyString())).thenReturn(requestHeadersSpec);
+        when(requestHeadersSpec.retrieve()).thenReturn(responseSpec);
+        when(responseSpec.bodyToMono(String.class)).thenReturn(Mono.error(new RuntimeException("rss offline")));
     }
 
     @Test
-    @DisplayName("Deve retornar notícias quando a API responder com sucesso")
+    @DisplayName("Deve retornar notícias quando o RSS responder com sucesso")
     void shouldReturnNewsSuccessfully() {
-        NewsResponse mockResponse = new NewsResponse();
-        mockResponse.setStatus("ok");
-        mockResponse.setTotalResults(5);
-
-        mockWebClientSuccess(mockResponse);
+        mockWebClientSuccess("""
+                <?xml version="1.0" encoding="UTF-8" ?>
+                <rss version="2.0">
+                  <channel>
+                    <title>InfoMoney</title>
+                    <item>
+                      <title>Mercado sobe hoje</title>
+                      <description>Bolsa fecha em alta.</description>
+                      <link>https://example.com/noticia</link>
+                      <pubDate>Fri, 15 May 2026 12:00:00 GMT</pubDate>
+                    </item>
+                  </channel>
+                </rss>
+                """);
 
         Mono<NewsResponse> result = newsService.getTopHeadlines("br", "business");
 
         StepVerifier.create(result)
-                .expectNextMatches(response -> response.getStatus().equals("ok") && response.getTotalResults() == 5)
+                .expectNextMatches(response -> response.getStatus().equals("ok")
+                        && response.getTotalResults() == 3
+                        && response.getArticles().get(0).getTitle().equals("Mercado sobe hoje"))
                 .verifyComplete();
     }
 
     @Test
-    @DisplayName("Deve retornar fallback se a API Key não estiver configurada")
-    void shouldReturnFallbackIfApiKeyIsMissing() {
-        // Força a API Key a ser vazia
-        ReflectionTestUtils.setField(newsService, "newsApiKey", "");
+    @DisplayName("Deve retornar lista vazia se os feeds RSS falharem")
+    void shouldReturnEmptyListWhenFeedsFail() {
+        mockWebClientFailure();
 
         Mono<NewsResponse> result = newsService.getTopHeadlines("br", "business");
 
         StepVerifier.create(result)
-                .expectNextMatches(response -> response.getStatus().equals("ok") &&
-                        response.getArticles().size() == 4 && // O seu fallback tem 4 artigos
-                        response.getArticles().get(0).getSource().getName().equals("InfoMoney"))
+                .expectNextMatches(response -> response.getStatus().equals("ok")
+                        && response.getTotalResults() == 0
+                        && response.getArticles().isEmpty())
                 .verifyComplete();
     }
 }

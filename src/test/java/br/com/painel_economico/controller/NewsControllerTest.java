@@ -12,6 +12,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.context.annotation.Import;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.reactive.WebFluxTest;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.reactive.server.WebTestClient;
@@ -28,6 +29,9 @@ class NewsControllerTest {
 
     @Autowired
     private WebTestClient webTestClient;
+
+    @Autowired
+    private JwtUtil jwtUtil;
 
     @MockitoBean
     private NewsService newsService;
@@ -56,6 +60,7 @@ class NewsControllerTest {
                         .queryParam("country", "br")
                         .queryParam("category", "business")
                         .build())
+                .header(HttpHeaders.AUTHORIZATION, bearerToken())
                 .accept(MediaType.APPLICATION_JSON)
                 .exchange()
                 .expectStatus().isOk()
@@ -73,7 +78,12 @@ class NewsControllerTest {
 
         webTestClient.get()
                 .uri("/api/news/top-headlines")
+                .header(HttpHeaders.AUTHORIZATION, bearerToken())
                 .exchange()
                 .expectStatus().is5xxServerError();
+    }
+
+    private String bearerToken() {
+        return "Bearer " + jwtUtil.generateToken("teste@economize.app");
     }
 }
