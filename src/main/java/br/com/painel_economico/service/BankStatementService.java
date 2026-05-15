@@ -1,27 +1,31 @@
 package br.com.painel_economico.service;
 
 import br.com.painel_economico.model.BankTransaction;
+import br.com.painel_economico.model.StatementUpload;
 import br.com.painel_economico.model.User;
 import br.com.painel_economico.repository.BankTransactionRepository;
+import br.com.painel_economico.repository.StatementUploadRepository;
 import br.com.painel_economico.repository.UserRepository;
+import br.com.painel_economico.service.event.DomainEventPublisher;
+import br.com.painel_economico.service.event.StatementImportedEvent;
+import br.com.painel_economico.service.statement.category.RuleBasedCategorizationService;
+import br.com.painel_economico.service.statement.parser.ParsedTransaction;
+import br.com.painel_economico.service.statement.parser.StatementFormat;
+import br.com.painel_economico.service.statement.parser.StatementParserFactory;
+import br.com.painel_economico.service.statement.parser.StatementParserStrategy;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.io.buffer.DataBufferUtils;
 import org.springframework.http.codec.multipart.FilePart;
 import org.springframework.stereotype.Service;
-import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
-import java.math.BigDecimal;
-import java.nio.charset.StandardCharsets;
-import java.time.LocalDateTime;
-import java.time.ZoneOffset;
-import java.time.format.DateTimeFormatter;
+import java.io.ByteArrayInputStream;
+import java.security.MessageDigest;
 import java.util.ArrayList;
+import java.util.HexFormat;
 import java.util.List;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 @Slf4j
 @Service
@@ -29,107 +33,90 @@ import java.util.regex.Pattern;
 public class BankStatementService {
 
     private final BankTransactionRepository bankTransactionRepository;
+    private final StatementUploadRepository statementUploadRepository;
     private final UserRepository userRepository;
+    private final StatementParserFactory parserFactory;
+    private final RuleBasedCategorizationService categorizationService;
+    private final DomainEventPublisher eventPublisher;
 
-    private static final Pattern STMTTRN_PATTERN = Pattern.compile("<STMTTRN>(.*?)</STMTTRN>", Pattern.DOTALL);
-    private static final Pattern TRNTYPE_PATTERN = Pattern.compile("<TRNTYPE>([^<\\r\\n]+)");
-    private static final Pattern DTPOSTED_PATTERN = Pattern.compile("<DTPOSTED>([^<\\r\\n\\[]+)");
-    private static final Pattern TRNAMT_PATTERN = Pattern.compile("<TRNAMT>([^<\\r\\n]+)");
-    private static final Pattern FITID_PATTERN = Pattern.compile("<FITID>([^<\\r\\n]+)");
-    private static final Pattern MEMO_PATTERN = Pattern.compile("<MEMO>([^<\\r\\n]+)");
-
-    public Mono<Integer> processOfxFile(String email, FilePart filePart) {
+    public Mono<ImportResult> processFile(String email, FilePart filePart) {
         return Mono.fromCallable(() -> userRepository.findByEmail(email)
-                .orElseThrow(() -> new IllegalArgumentException("Usuário não encontrado")))
+                        .orElseThrow(() -> new IllegalArgumentException("Usuário não encontrado")))
                 .subscribeOn(Schedulers.boundedElastic())
-                .flatMap(user ->
-                DataBufferUtils.join(filePart.content())
-                        .map(dataBuffer -> {
-                            byte[] bytes = new byte[dataBuffer.readableByteCount()];
-                            dataBuffer.read(bytes);
-                            DataBufferUtils.release(dataBuffer);
-                            return new String(bytes, StandardCharsets.UTF_8);
+                .flatMap(user -> DataBufferUtils.join(filePart.content())
+                        .map(buffer -> {
+                            byte[] bytes = new byte[buffer.readableByteCount()];
+                            buffer.read(bytes);
+                            DataBufferUtils.release(buffer);
+                            return bytes;
                         })
-                        .flatMap(ofxContent -> parseAndSaveTransactions(user, ofxContent)));
+                        .flatMap(bytes -> processBytes(user, filePart.filename(), bytes)));
     }
 
-    private Mono<Integer> parseAndSaveTransactions(User user, String ofxContent) {
+    private Mono<ImportResult> processBytes(User user, String fileName, byte[] bytes) {
         return Mono.fromCallable(() -> {
-            List<BankTransaction> transactionsToSave = new ArrayList<>();
-            Matcher matcher = STMTTRN_PATTERN.matcher(ofxContent);
-            int savedCount = 0;
-
-            while (matcher.find()) {
-                String block = matcher.group(1);
-
-                String fitId = extract(FITID_PATTERN, block);
-                String trnAmt = extract(TRNAMT_PATTERN, block);
-
-                if (fitId != null && trnAmt != null) {
-                    String cleanFitId = fitId.trim();
-
-                    if (!bankTransactionRepository.existsByUserIdAndTransactionId(user.getId(), cleanFitId)) {
-                        String type = extract(TRNTYPE_PATTERN, block);
-                        String dtPosted = extract(DTPOSTED_PATTERN, block);
-                        String memo = extract(MEMO_PATTERN, block);
-
-                        BankTransaction trx = BankTransaction.builder()
-                                .user(user)
-                                .transactionId(cleanFitId)
-                                .type(type != null ? type.trim() : "UNKNOWN")
-                                .amount(new BigDecimal(trnAmt.trim()))
-                                .description(memo != null ? memo.trim() : "")
-                                .date(parseOfxDate(dtPosted))
-                                .build();
-
-                        transactionsToSave.add(trx);
-                        savedCount++;
-                    }
-                }
-            }
-
-            if (!transactionsToSave.isEmpty()) {
-                bankTransactionRepository.saveAll(transactionsToSave);
-                log.info("Salvas {} novas transações bancárias para o usuário {}", savedCount, user.getEmail());
-            } else if (savedCount == 0 && ofxContent.contains("<STMTTRN>")) {
-                log.info("Todas as transações do arquivo OFX já existiam no banco de dados.");
-            } else {
-                throw new IllegalArgumentException("Nenhuma transação financeira encontrada no arquivo.");
-            }
-
-            return savedCount;
+            StatementFormat format = StatementFormat.fromFilename(fileName);
+            String hash = sha256(bytes);
+            return statementUploadRepository.findByUserIdAndFileHash(user.getId(), hash)
+                    .map(existing -> new ImportResult(existing.getTransactionsImported(), true, format.name()))
+                    .orElseGet(() -> importFresh(user, fileName, bytes, format, hash));
         }).subscribeOn(Schedulers.boundedElastic());
     }
 
-    private String extract(Pattern pattern, String text) {
-        Matcher m = pattern.matcher(text);
-        if (m.find()) {
-            return m.group(1);
+    private ImportResult importFresh(User user, String fileName, byte[] bytes, StatementFormat format, String hash) {
+        StatementParserStrategy parser = parserFactory.resolve(format);
+        List<ParsedTransaction> parsed = parser.parse(new ByteArrayInputStream(bytes));
+        if (parsed.isEmpty()) {
+            throw new IllegalArgumentException("Nenhuma transação encontrada no arquivo");
         }
-        return null;
+
+        List<BankTransaction> toSave = new ArrayList<>();
+        for (ParsedTransaction tx : parsed) {
+            if (bankTransactionRepository.existsByUserIdAndTransactionId(user.getId(), tx.getExternalId())) {
+                continue;
+            }
+            toSave.add(BankTransaction.builder()
+                    .user(user)
+                    .transactionId(tx.getExternalId())
+                    .type(tx.getType())
+                    .amount(tx.getAmount())
+                    .description(tx.getDescription())
+                    .date(tx.getDate())
+                    .category(categorizationService.categorize(tx.getDescription(), tx.getType()).name())
+                    .build());
+        }
+
+        if (!toSave.isEmpty()) {
+            bankTransactionRepository.saveAll(toSave);
+        }
+
+        statementUploadRepository.save(StatementUpload.builder()
+                .user(user)
+                .fileHash(hash)
+                .fileName(fileName)
+                .format(format.name())
+                .transactionsImported(toSave.size())
+                .build());
+
+        eventPublisher.publish(new StatementImportedEvent(user.getId(), format, toSave.size()));
+        log.info("Importadas {} novas transações ({}), user={}", toSave.size(), format, user.getEmail());
+        return new ImportResult(toSave.size(), false, format.name());
     }
 
-    private java.time.OffsetDateTime parseOfxDate(String dateStr) {
-        if (dateStr == null || dateStr.length() < 8)
-            return java.time.OffsetDateTime.now();
+    public List<BankTransaction> listTransactions(String email) {
+        User user = userRepository.findByEmail(email)
+                .orElseThrow(() -> new IllegalArgumentException("Usuário não encontrado"));
+        return bankTransactionRepository.findAllByUserIdOrderByDateDesc(user.getId());
+    }
+
+    private String sha256(byte[] bytes) {
         try {
-            dateStr = dateStr.trim();
-            String cleanDate = dateStr.length() >= 14 ? dateStr.substring(0, 14) : dateStr.substring(0, 8) + "000000";
-            LocalDateTime ldt = LocalDateTime.parse(cleanDate, DateTimeFormatter.ofPattern("yyyyMMddHHmmss"));
-            return ldt.atOffset(ZoneOffset.UTC);
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            return HexFormat.of().formatHex(md.digest(bytes));
         } catch (Exception e) {
-            log.warn("Erro ao fazer parse da data OFX '{}', utilizando data atual.", dateStr);
-            return java.time.OffsetDateTime.now();
+            throw new IllegalStateException("Falha ao calcular hash", e);
         }
     }
 
-    public Flux<BankTransaction> getUserBankTransactions(String email) {
-        return Mono.fromCallable(() -> {
-            User user = userRepository.findByEmail(email)
-                    .orElseThrow(() -> new IllegalArgumentException("Usuário não encontrado"));
-            return bankTransactionRepository.findAllByUserIdOrderByDateDesc(user.getId());
-        })
-                .subscribeOn(Schedulers.boundedElastic())
-                .flatMapIterable(list -> list);
-    }
+    public record ImportResult(int transactionsImported, boolean duplicated, String format) {}
 }

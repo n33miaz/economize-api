@@ -36,6 +36,9 @@ public class BankTransaction {
     @Column(length = 255)
     private String description;
 
+    @Column(length = 32)
+    private String category;
+
     @Column(nullable = false)
     private OffsetDateTime date;
 
