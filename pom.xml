@@ -10,10 +10,10 @@
 		<relativePath />
 	</parent>
 	<groupId>br.com</groupId>
-	<artifactId>painel_economico</artifactId>
+	<artifactId>economize-api</artifactId>
 	<version>1.0.0-SNAPSHOT</version>
-	<name>painel-economico-api</name>
-	<description>BFF para o App Painel Econômico</description>
+	<name>economize-api</name>
+	<description>BFF para o app Economize!</description>
 	<properties>
 		<java.version>17</java.version>
 	</properties>
@@ -151,16 +151,16 @@
 		</dependency>
 
 		<dependency>
+			<groupId>org.springframework.ai</groupId>
+			<artifactId>spring-ai-openai-spring-boot-starter</artifactId>
+			<version>1.0.0-M1</version>
+		</dependency>
+
+		<dependency>
 			<groupId>io.jsonwebtoken</groupId>
 			<artifactId>jjwt-jackson</artifactId>
 			<version>0.12.5</version>
 			<scope>runtime</scope>
-		</dependency>
-
-		<dependency>
-			<groupId>org.springframework.ai</groupId>
-			<artifactId>spring-ai-openai-spring-boot-starter</artifactId>
-			<version>1.0.0-M1</version>
 		</dependency>
 	</dependencies>
 

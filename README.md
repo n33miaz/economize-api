@@ -1,6 +1,6 @@
-# Painel Econômico - API (BFF)
+# Economize! - API (BFF)
 
-Este projeto é um **Backend for Frontend (BFF)** desenvolvido em **Java 17** com **Spring Boot 3**. Ele atua como uma camada de orquestração e segurança para o aplicativo mobile "Painel Econômico", centralizando regras de negócio, cacheamento de dados e integração com APIs externas de mercado financeiro.
+Este projeto é um **Backend for Frontend (BFF)** desenvolvido em **Java 17** com **Spring Boot 3**. Ele atua como uma camada de orquestração e segurança para o aplicativo mobile **Economize!**, centralizando regras de negócio, cacheamento de dados e integração com APIs externas de mercado financeiro.
 
 > **Destaque:** O projeto utiliza **Programação Reativa (Spring WebFlux)** para alta performance e **Caffeine Cache** para otimização de requisições.
 
@@ -92,8 +92,8 @@ Proxy para a API de notícias globais, protegendo a API Key no servidor (evitand
 ### 🐳 Executando com Docker
 
 ```bash
-docker build -t painel-economico-api .
-docker run -p 8080:8080 -e NEWS_API_KEY=sua_chave painel-economico-api
+docker build -t economize-api .
+docker run -p 8080:8080 -e NEWS_API_KEY=sua_chave economize-api
 ```
 
 ---

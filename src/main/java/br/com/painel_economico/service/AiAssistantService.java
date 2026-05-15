@@ -49,9 +49,8 @@ public class AiAssistantService {
 
             String context = buildFinancialContext(bankTxs, walletTxs);
 
-            // Contexto AI
             String systemPromptText = """
-                    Você é o assistente financeiro virtual do aplicativo 'Painel Econômico'.
+                    Você é Nino, o assistente financeiro virtual do aplicativo Economize!.
                     Seu objetivo é ajudar o usuário a entender suas finanças, analisar gastos e dar dicas de investimentos.
                     Seja conciso, profissional, mas amigável. Responda em português do Brasil.
                     Use formatação Markdown para destacar valores e tópicos.
