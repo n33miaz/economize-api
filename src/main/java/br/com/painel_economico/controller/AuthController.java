@@ -14,7 +14,7 @@ import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
 @RestController
-@RequestMapping("/api/auth")
+@RequestMapping("/auth")
 @SuppressWarnings("null")
 public class AuthController {
 

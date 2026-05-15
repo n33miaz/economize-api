@@ -16,7 +16,7 @@ import reactor.core.publisher.Mono;
 import java.util.Map;
 
 @RestController
-@RequestMapping("/api/bank-statements")
+@RequestMapping("/bank-statements")
 @RequiredArgsConstructor
 @Tag(name = "Extratos Bancários", description = "Importação e gestão de extratos via OFX")
 public class BankStatementController {

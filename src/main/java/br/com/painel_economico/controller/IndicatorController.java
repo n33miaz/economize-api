@@ -15,7 +15,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
-@RequestMapping("/api/indicators")
+@RequestMapping("/indicators")
 @Tag(name = "Indicadores Econômicos", description = "Endpoints para cotações e índices financeiros")
 public class IndicatorController {
 
