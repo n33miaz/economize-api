@@ -18,12 +18,16 @@ public class JwtUtil {
     @Value("${jwt.expiration}")
     private long expirationTime;
 
+    @Value("${jwt.issuer:economize}")
+    private String issuer;
+
     private SecretKey getSigningKey() {
         return Keys.hmacShaKeyFor(secret.getBytes());
     }
 
     public String generateToken(String email) {
         return Jwts.builder()
+                .issuer(issuer)
                 .subject(email)
                 .issuedAt(new Date())
                 .expiration(new Date(System.currentTimeMillis() + expirationTime))
