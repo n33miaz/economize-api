@@ -14,7 +14,7 @@ import reactor.core.publisher.Mono;
 import java.util.UUID;
 
 @RestController
-@RequestMapping("/wallet")
+@RequestMapping("/api/v1/wallet")
 @RequiredArgsConstructor
 @Tag(name = "Wallet", description = "Gerenciamento da carteira de investimentos do usuário")
 public class WalletController {

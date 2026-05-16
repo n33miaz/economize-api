@@ -13,7 +13,7 @@ import reactor.core.publisher.Mono;
 import java.util.Map;
 
 @RestController
-@RequestMapping("/chat")
+@RequestMapping("/api/v1/chat")
 @RequiredArgsConstructor
 @Tag(name = "Assistente IA", description = "Chatbot financeiro integrado com Google Gemini via Spring AI")
 public class AiAssistantController {

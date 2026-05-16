@@ -47,7 +47,7 @@ class IndicatorControllerTest {
                 when(indicatorService.getAllIndicators()).thenReturn(Mono.just(List.of(ind)));
 
                 webTestClient.get()
-                                .uri("/api/indicators/all")
+                                .uri("/api/v1/indicators/all")
                                 .header(HttpHeaders.AUTHORIZATION, bearerToken())
                                 .accept(MediaType.APPLICATION_JSON)
                                 .exchange()
@@ -67,7 +67,7 @@ class IndicatorControllerTest {
 
                 webTestClient.get()
                                 .uri(uriBuilder -> uriBuilder
-                                                .path("/api/indicators/convert")
+                                                .path("/api/v1/indicators/convert")
                                                 .queryParam("code", "USD")
                                                 .queryParam("amount", "100.00")
                                                 .build())
@@ -87,7 +87,7 @@ class IndicatorControllerTest {
 
                 webTestClient.get()
                                 .uri(uriBuilder -> uriBuilder
-                                                .path("/api/indicators/convert")
+                                                .path("/api/v1/indicators/convert")
                                                 .queryParam("code", "INVALID")
                                                 .queryParam("amount", "100")
                                                 .build())

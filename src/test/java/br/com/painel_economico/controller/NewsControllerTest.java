@@ -56,7 +56,7 @@ class NewsControllerTest {
 
         webTestClient.get()
                 .uri(uriBuilder -> uriBuilder
-                        .path("/api/news/top-headlines")
+                        .path("/api/v1/news/top-headlines")
                         .queryParam("country", "br")
                         .queryParam("category", "business")
                         .build())
@@ -77,7 +77,7 @@ class NewsControllerTest {
                 .thenReturn(Mono.error(new IllegalStateException("API Key missing")));
 
         webTestClient.get()
-                .uri("/api/news/top-headlines")
+                .uri("/api/v1/news/top-headlines")
                 .header(HttpHeaders.AUTHORIZATION, bearerToken())
                 .exchange()
                 .expectStatus().is5xxServerError();

@@ -18,7 +18,7 @@ import reactor.core.scheduler.Schedulers;
 import java.util.Map;
 
 @RestController
-@RequestMapping("/bank-statements")
+@RequestMapping("/api/v1/bank-statements")
 @RequiredArgsConstructor
 @Tag(name = "Extratos Bancários", description = "Importação multi-formato (OFX, CSV, XLSX, PDF, TXT) com idempotência por hash")
 public class BankStatementController {

@@ -18,7 +18,7 @@ import reactor.core.scheduler.Schedulers;
 import java.util.UUID;
 
 @RestController
-@RequestMapping("/reports")
+@RequestMapping("/api/v1/reports")
 @RequiredArgsConstructor
 @Tag(name = "Relatórios", description = "Relatórios consolidados de gastos por período")
 public class ReportController {

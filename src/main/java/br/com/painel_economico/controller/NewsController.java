@@ -14,7 +14,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 @RestController
-@RequestMapping("/news")
+@RequestMapping("/api/v1/news")
 @Tag(name = "Notícias Financeiras", description = "Endpoints para busca de notícias do mercado")
 public class NewsController {
 

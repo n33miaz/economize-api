@@ -76,7 +76,7 @@ public class CsvParser implements StatementParserStrategy {
         if (date == null || amount == null) return null;
         BigDecimal value;
         try {
-            value = new BigDecimal(amount.replace("R$", "").replace(".", "").replace(",", ".").trim());
+            value = new BigDecimal(normalizeNumber(amount));
         } catch (Exception e) {
             log.warn("Valor inválido '{}', ignorando linha", amount);
             return null;
@@ -88,6 +88,20 @@ public class CsvParser implements StatementParserStrategy {
                 .description(description != null ? description : "")
                 .date(parseDate(date))
                 .build();
+    }
+
+    private String normalizeNumber(String raw) {
+        String value = raw.replace("R$", "").replaceAll("\\s+", "").trim();
+        int lastComma = value.lastIndexOf(',');
+        int lastDot = value.lastIndexOf('.');
+        if (lastComma > lastDot) {
+            // Vírgula como decimal (PT-BR)
+            value = value.replace(".", "").replace(",", ".");
+        } else if (lastDot > lastComma) {
+            // Ponto como decimal (EN)
+            value = value.replace(",", "");
+        }
+        return value;
     }
 
     private String firstOf(CSVRecord rec, String... keys) {
