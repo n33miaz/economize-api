@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  build:
+    name: Build & Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: "17"
+          distribution: temurin
+          cache: maven
+
+      - name: Verify
+        # Valores dummy apenas para o contexto Spring subir nos testes
+        env:
+          BRAPI_TOKEN: dummy
+          GEMINI_API_KEY: dummy
+          DB_URL: jdbc:h2:mem:test
+          DB_USER: sa
+          DB_PASSWORD: sa
+          JWT_SECRET: ci_secret_ci_secret_ci_secret_ci_secret_
+        run: ./mvnw -B verify
