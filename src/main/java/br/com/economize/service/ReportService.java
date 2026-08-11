@@ -88,13 +88,17 @@ public class ReportService {
                 : reportRepository.findByUserIdAndPeriodOrderByStartDateDesc(user.getId(), period, pageable);
     }
 
-    public Report detail(UUID id) {
-        return reportRepository.findById(id)
+    // busca sempre amarrada ao dono do token — relatório é dado privado
+    public Report detail(String email, UUID id) {
+        User user = userRepository.findByEmail(email)
+                .orElseThrow(() -> new IllegalArgumentException("Usuário não encontrado"));
+        return reportRepository.findByIdAndUserId(id, user.getId())
                 .orElseThrow(() -> new IllegalArgumentException("Relatório não encontrado"));
     }
 
-    public void delete(UUID id) {
-        reportRepository.deleteById(id);
+    public void delete(String email, UUID id) {
+        Report report = detail(email, id);
+        reportRepository.delete(report);
     }
 
     private String buildSummary(Report.Period period, BigDecimal income, BigDecimal expense, String dominant) {

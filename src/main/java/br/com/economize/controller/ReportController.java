@@ -48,15 +48,19 @@ public class ReportController {
 
     @Operation(summary = "Detalhe de relatório")
     @GetMapping("/{id}")
-    public Mono<ReportResponse> detail(@PathVariable UUID id) {
-        return Mono.fromCallable(() -> ReportResponse.from(reportService.detail(id)))
+    public Mono<ReportResponse> detail(
+            @AuthenticationPrincipal String email,
+            @PathVariable UUID id) {
+        return Mono.fromCallable(() -> ReportResponse.from(reportService.detail(email, id)))
                 .subscribeOn(Schedulers.boundedElastic());
     }
 
     @Operation(summary = "Apagar relatório")
     @DeleteMapping("/{id}")
-    public Mono<ResponseEntity<Void>> delete(@PathVariable UUID id) {
-        return Mono.fromRunnable(() -> reportService.delete(id))
+    public Mono<ResponseEntity<Void>> delete(
+            @AuthenticationPrincipal String email,
+            @PathVariable UUID id) {
+        return Mono.fromRunnable(() -> reportService.delete(email, id))
                 .subscribeOn(Schedulers.boundedElastic())
                 .then(Mono.just(ResponseEntity.noContent().<Void>build()));
     }
