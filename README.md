@@ -8,7 +8,7 @@ Este projeto é um **Backend for Frontend (BFF)** desenvolvido em **Java 17** co
 
 Este backend serve dados exclusivamente para o aplicativo mobile desenvolvido em React Native.
 
-- **Repositório Mobile:** [painel_economico-mobile](https://github.com/n33miaz/painel_economico-mobile)
+- **Repositório Mobile:** [economize-app](https://github.com/n33miaz/economize-app)
 
 ---
 
@@ -17,7 +17,7 @@ Este backend serve dados exclusivamente para o aplicativo mobile desenvolvido em
 A arquitetura foi pensada para ser escalável, resiliente e fácil de manter, utilizando as melhores práticas do ecossistema Spring:
 
 - **Linguagem:** Java 17 (LTS).
-- **Framework:** Spring Boot 3.5.
+- **Framework:** Spring Boot 3.4.3.
 - **Stack Reativa:** Spring WebFlux (Netty) para I/O não bloqueante.
 - **Cliente HTTP:** WebClient (Chamadas assíncronas a APIs externas).
 - **Cache:** Caffeine (Cache em memória para reduzir latência e economizar cota de APIs externas).
@@ -31,25 +31,25 @@ A arquitetura foi pensada para ser escalável, resiliente e fácil de manter, ut
 
 Consolida dados de múltiplas fontes (moedas, criptoativos e índices de bolsa) em um formato unificado para o frontend.
 
-- **Endpoint:** `/api/indicators/all`
+- **Endpoint:** `/api/v1/indicators/all`
 
 ### 2. Dados Históricos
 
 Fornece histórico de variação de preços (High/Low) dos últimos dias para geração de gráficos.
 
-- **Endpoint:** `/api/indicators/historical/{currencyCode}`
+- **Endpoint:** `/api/v1/indicators/historical/{currencyCode}`
 
 ### 3. Motor de Conversão de Moedas
 
 Realiza cálculos de conversão monetária no lado do servidor, garantindo que a regra de negócio e a cotação utilizada sejam confiáveis.
 
-- **Endpoint:** `/api/indicators/convert`
+- **Endpoint:** `/api/v1/indicators/convert`
 
 ### 4. Feed de Notícias
 
 Proxy para a API de notícias globais, protegendo a API Key no servidor (evitando exposição no app mobile) e tratando falhas de fornecedores externos com _fallbacks_.
 
-- **Endpoint:** `/api/news/top-headlines`
+- **Endpoint:** `/api/v1/news/top-headlines`
 
 ---
 
@@ -59,22 +59,22 @@ Proxy para a API de notícias globais, protegendo a API Key no servidor (evitand
 
 - JDK 17 instalado.
 - Maven 3.8+.
-- Uma chave de API gratuita do [NewsAPI](https://newsapi.org/) (Opcional, o sistema possui fallback).
+- Docker (para subir Postgres e RabbitMQ locais via `docker compose up -d`).
 
 ### Passos
 
 1. Clone o repositório:
 
    ```bash
-   git clone https://github.com/n33miaz/painel_economico-api.git
-   cd painel_economico-api
+   git clone https://github.com/n33miaz/economize-api.git
+   cd economize-api
    ```
 
 2. Configuração de Variáveis de Ambiente:
-   Crie um arquivo `.env` na raiz do projeto (ou configure nas variáveis do sistema):
+   Copie o `.env.example` para `.env` na raiz do projeto e preencha os valores (ou configure nas variáveis do sistema):
 
-   ```properties
-   NEWS_API_KEY=sua_chave_aqui
+   ```bash
+   cp .env.example .env
    ```
 
 3. Instale as dependências e execute os testes:
@@ -93,7 +93,7 @@ Proxy para a API de notícias globais, protegendo a API Key no servidor (evitand
 
 ```bash
 docker build -t economize-api .
-docker run -p 8080:8080 -e NEWS_API_KEY=sua_chave economize-api
+docker run -p 8080:8080 --env-file .env economize-api
 ```
 
 ---
