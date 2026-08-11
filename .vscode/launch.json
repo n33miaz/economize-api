@@ -5,8 +5,8 @@
             "type": "java",
             "name": "Debug",
             "request": "launch",
-            "mainClass": "br.com.painel_economico.PainelEconomicoBffApplication",
-            "projectName": "painel_economico",
+            "mainClass": "br.com.economize.EconomizeApiApplication",
+            "projectName": "economize-api",
             "args": "",
             "env": {
                 "SPRING_PROFILES_ACTIVE": "dev"
@@ -17,8 +17,8 @@
             "type": "java",
             "name": "Produção (Simulação)",
             "request": "launch",
-            "mainClass": "br.com.painel_economico.PainelEconomicoBffApplication",
-            "projectName": "painel_economico",
+            "mainClass": "br.com.economize.EconomizeApiApplication",
+            "projectName": "economize-api",
             "vmArgs": "-Dspring.profiles.active=prod -Xmx512m",
             "encoding": "UTF-8"
         }
