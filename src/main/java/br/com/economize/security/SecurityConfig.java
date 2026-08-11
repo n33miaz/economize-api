@@ -2,6 +2,7 @@ package br.com.economize.security;
 
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.web.reactive.EnableWebFluxSecurity;
 import org.springframework.security.config.web.server.SecurityWebFiltersOrder;
 import org.springframework.security.config.web.server.ServerHttpSecurity;
@@ -22,7 +23,9 @@ public class SecurityConfig {
     public SecurityWebFilterChain securityWebFilterChain(ServerHttpSecurity http, JwtAuthenticationFilter jwtFilter) {
         return http
                 .csrf(ServerHttpSecurity.CsrfSpec::disable)
-                .cors(ServerHttpSecurity.CorsSpec::disable)
+                // Usa o CorsConfigurationSource do CorsConfig para liberar o
+                // preflight OPTIONS antes da checagem de autenticação
+                .cors(Customizer.withDefaults())
                 .authorizeExchange(exchanges -> exchanges
                         // Rotas públicas
                         .pathMatchers("/api/v1/auth/**").permitAll()
