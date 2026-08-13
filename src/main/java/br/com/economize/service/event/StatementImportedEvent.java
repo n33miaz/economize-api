@@ -10,6 +10,8 @@ public class StatementImportedEvent implements DomainEvent {
     UUID userId;
     StatementFormat format;
     int transactionsImported;
+    // permite a um consumidor assíncrono localizar as transações da importação
+    UUID uploadId;
 
     @Override
     public String type() {

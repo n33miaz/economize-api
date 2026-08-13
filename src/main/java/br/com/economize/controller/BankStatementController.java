@@ -1,6 +1,6 @@
 package br.com.economize.controller;
 
-import br.com.economize.model.BankTransaction;
+import br.com.economize.dto.statement.BankTransactionResponse;
 import br.com.economize.service.BankStatementService;
 import br.com.economize.service.statement.parser.StatementFormat;
 import io.swagger.v3.oas.annotations.Operation;
@@ -45,16 +45,21 @@ public class BankStatementController {
                         "message", result.duplicated()
                                 ? "Arquivo já importado anteriormente."
                                 : "Arquivo processado com sucesso.",
+                        "uploadId", result.uploadId(),
                         "transactionsImported", result.transactionsImported(),
+                        "suggested", result.suggested(),
+                        "uncategorized", result.uncategorized(),
+                        "reconciled", result.reconciled(),
                         "format", result.format(),
                         "duplicated", result.duplicated())));
     }
 
     @Operation(summary = "Listar transações bancárias")
     @GetMapping
-    public Flux<BankTransaction> list(@AuthenticationPrincipal String email) {
+    public Flux<BankTransactionResponse> list(@AuthenticationPrincipal String email) {
         return Mono.fromCallable(() -> bankStatementService.listTransactions(email))
                 .subscribeOn(Schedulers.boundedElastic())
-                .flatMapIterable(list -> list);
+                .flatMapIterable(list -> list)
+                .map(BankTransactionResponse::from);
     }
 }
