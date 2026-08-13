@@ -36,6 +36,9 @@ public class User implements UserDetails {
     @Column(name = "created_at", updatable = false)
     private OffsetDateTime createdAt;
 
+    @Column(name = "last_login_at")
+    private OffsetDateTime lastLoginAt;
+
     @PrePersist
     protected void onCreate() {
         this.createdAt = OffsetDateTime.now();

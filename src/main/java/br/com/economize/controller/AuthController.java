@@ -60,6 +60,10 @@ public class AuthController {
                 throw new IllegalArgumentException("Credenciais inválidas");
             }
 
+            // alimenta o "último acesso" da tela de informações do usuário
+            user.setLastLoginAt(java.time.OffsetDateTime.now());
+            userRepository.save(user);
+
             String token = jwtUtil.generateToken(user.getEmail());
             return ResponseEntity.ok(new AuthResponse(token, user.getName()));
 
