@@ -1,0 +1,38 @@
+# Blueprint do Render — a infra da API descrita no próprio repo.
+# Ao conectar este repositório em "New > Blueprint", o Render cria o serviço com
+# tudo daqui e passa a redeployar a cada push na main.
+#
+# Os segredos NÃO ficam neste arquivo: `sync: false` faz o Render pedir o valor
+# na criação e guardá-lo no painel. Só o JWT_SECRET é gerado por lá — de
+# propósito, porque ele precisa de 256 bits e um segredo curto derruba o login.
+services:
+  - type: web
+    name: economize-api
+    runtime: docker
+    plan: free
+    # Virginia é a região gratuita mais próxima do Brasil
+    region: virginia
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /actuator/health
+    autoDeploy: true
+    envVars:
+      # Postgres do Supabase
+      - key: DB_URL
+        sync: false
+      - key: DB_USER
+        sync: false
+      - key: DB_PASSWORD
+        sync: false
+      # 256 bits gerados pelo Render; trocar invalida os tokens já emitidos
+      - key: JWT_SECRET
+        generateValue: true
+      # Origens do app web (Vercel) separadas por vírgula
+      - key: CORS_ALLOWED_ORIGINS
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: BRAPI_TOKEN
+        sync: false
+      # O plano free tem 512 MB; sobra espaço para metaspace e threads fora da heap
+      - key: JAVA_OPTS
+        value: -Xms128m -Xmx360m
