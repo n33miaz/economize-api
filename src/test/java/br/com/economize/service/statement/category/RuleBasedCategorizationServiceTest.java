@@ -2,11 +2,20 @@ package br.com.economize.service.statement.category;
 
 import org.junit.jupiter.api.Test;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.util.List;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 class RuleBasedCategorizationServiceTest {
 
     private final RuleBasedCategorizationService service = new RuleBasedCategorizationService();
+
+    private String keyOf(String description) {
+        return service.match(description).map(RuleBasedCategorizationService.Hit::systemKey).orElse(null);
+    }
 
     @Test
     void mapsFoodKeywords() {
@@ -28,5 +37,100 @@ class RuleBasedCategorizationServiceTest {
     @Test
     void fallsBackToOther() {
         assertThat(service.categorize("Compra qualquer obscura", "DEBIT")).isEqualTo(TransactionCategory.OTHER);
+    }
+
+    @Test
+    void resolvesToTheSubcategoryNotJustTheParent() {
+        assertThat(keyOf("IFOOD *PEDIDO 8812")).isEqualTo("FOOD_DELIVERY");
+        assertThat(keyOf("AUTOPASS RECARGA")).isEqualTo("TRANSPORT_PUBLIC");
+        assertThat(keyOf("APLICACAO CDB INTER")).isEqualTo("INVESTMENT_FIXED");
+        assertThat(keyOf("SABESP AGOSTO")).isEqualTo("UTILITIES_WATER");
+        assertThat(keyOf("Pix enviado Claudia")).isEqualTo("TRANSFER_PIX");
+    }
+
+    @Test
+    void carriesTheParentKeyAsFallback() {
+        RuleBasedCategorizationService.Hit hit = service.match("NETFLIX.COM").orElseThrow();
+        assertThat(hit.systemKey()).isEqualTo("LEISURE_STREAMING");
+        assertThat(hit.parentKey()).isEqualTo("LEISURE");
+    }
+
+    @Test
+    void longestKeywordWinsOverDeclarationOrder() {
+        // "mercado" (Alimentação) vinha antes e sequestrava a compra no Mercado Livre
+        assertThat(keyOf("MERCADO LIVRE*COMPRA")).isEqualTo("SHOPPING_ONLINE");
+        // e "uber" sequestrava o pedido do Uber Eats
+        assertThat(keyOf("UBER EATS SP")).isEqualTo("FOOD_DELIVERY");
+        assertThat(keyOf("UBER *TRIP SP")).isEqualTo("TRANSPORT_RIDE");
+    }
+
+    @Test
+    void methodBeatsTheGenericWordItLivesInside() {
+        // achado no extrato real do Nubank: "transferencia" (13 letras) vencia
+        // "pix" (3) e mandava todo Pix do Nubank para TED e DOC
+        assertThat(keyOf("Transferência enviada pelo Pix - NEEMIAS C M - BANCO INTER"))
+                .isEqualTo("TRANSFER_PIX");
+        assertThat(keyOf("Transferência recebida pelo Pix - MARIA S"))
+                .isEqualTo("TRANSFER_PIX");
+        // e um TED de verdade continua sendo TED
+        assertThat(keyOf("TED RECEBIDA DE BANCO X")).isEqualTo("TRANSFER_TED");
+    }
+
+    @Test
+    void theEstablishmentBeatsTheMeansOfPayment() {
+        // achado no extrato real do Inter: "pix" estava acima de TODO o vocabulário
+        // de estabelecimento, então 44% do extrato (736 Pix) virava "Pix" e escondia
+        // o que a pessoa de fato comprou
+        assertThat(keyOf("Pix enviado: \"Cp :21018182-IFOOD.COM AGENCIA DE RESTAURANTES ONLINE\""))
+                .isEqualTo("FOOD_DELIVERY");
+        assertThat(keyOf("Pix enviado: \"MERCADINHO DO ZE\"")).isEqualTo("FOOD_GROCERIES");
+        assertThat(keyOf("Pix enviado: \"POSTO DEZ COMBUSTIVEIS\"")).isEqualTo("TRANSPORT_FUEL");
+        // e o Pix para uma pessoa, sem nada mais específico, continua sendo Pix
+        assertThat(keyOf("Pix enviado: \"Cp :00011122-MARIA DA SILVA\"")).isEqualTo("TRANSFER_PIX");
+    }
+
+    @Test
+    void pixKeywordDoesNotLeakIntoWordsThatMerelyStartWithIt() {
+        assertThat(keyOf("COMPRA PIXEL STORE ONLINE")).isNotEqualTo("TRANSFER_PIX");
+    }
+
+    @Test
+    void shortBrandsOnlyMatchAsWholeWords() {
+        // achados com extrato real: "amil" mora dentro de "CAMILA" e mandava um
+        // Pix recebido de uma pessoa para Plano de saúde
+        assertThat(keyOf("Pix recebido: \"Cp :31872495-CAMILA MARIANA SERAFIM PAZINI\""))
+                .isEqualTo("TRANSFER_PIX");
+        assertThat(keyOf("PAGAMENTO GOOGLE PAYMENT LIMITED")).isNotEqualTo("TRANSFER_TED");
+        assertThat(keyOf("COMPRA BIOFARMA MANIPULACAO")).isNotEqualTo("FEES_IOF");
+        // e o termo continua valendo quando é palavra de verdade
+        assertThat(keyOf("DOC RECEBIDO DE BANCO X")).isEqualTo("TRANSFER_TED");
+        assertThat(keyOf("MENSALIDADE AMIL SAUDE")).isEqualTo("HEALTH_INSURANCE");
+    }
+
+    /**
+     * Um system_key com typo no vocabulário não quebra nada visivelmente — só manda
+     * a transação calada para a fila de revisão. Este teste amarra o vocabulário
+     * ao catálogo semeado.
+     */
+    @Test
+    void everyTargetKeyExistsInTheSeedMigrations() throws IOException {
+        String seeds = read("/db/migration/V6__categories_rules_and_review.sql")
+                + read("/db/migration/V8__investment_seed_category.sql")
+                + read("/db/migration/V9__category_hierarchy.sql")
+                + read("/db/migration/V10__insurance_category.sql");
+
+        List<String> missing = service.allTargetKeys().stream()
+                .distinct()
+                .filter(key -> !seeds.contains("'" + key + "'"))
+                .toList();
+
+        assertThat(missing).as("system_keys do vocabulário que não existem no catálogo").isEmpty();
+    }
+
+    private String read(String resource) throws IOException {
+        try (InputStream in = getClass().getResourceAsStream(resource)) {
+            assertThat(in).as("migration %s", resource).isNotNull();
+            return new String(in.readAllBytes(), StandardCharsets.UTF_8);
+        }
     }
 }

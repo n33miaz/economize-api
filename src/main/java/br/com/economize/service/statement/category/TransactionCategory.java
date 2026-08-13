@@ -9,7 +9,11 @@ public enum TransactionCategory {
     HOUSING,
     SHOPPING,
     UTILITIES,
+    PERSONAL_CARE,
+    FEES_TAXES,
+    INSURANCE,
     INCOME,
+    INVESTMENT,
     TRANSFER,
     OTHER
 }
