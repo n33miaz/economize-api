@@ -16,6 +16,12 @@ import java.util.UUID;
 @Builder
 public class BankTransaction {
 
+    // Ciclo de revisão: o motor sugere ou pede ajuda; só o usuário confirma
+    public enum ReviewStatus {SUGGESTED, UNCATEGORIZED, CONFIRMED}
+
+    // Quem decidiu a categoria — pesa na confiança e alimenta métricas do motor
+    public enum CategorizedBy {USER_RULE, LEARNED_RULE, KEYWORD, FALLBACK, AI, USER}
+
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
     private UUID id;
@@ -36,8 +42,31 @@ public class BankTransaction {
     @Column(length = 255)
     private String description;
 
+    // Legado (enum como string) — mantido para os relatórios até migrarem ao category_id
     @Column(length = 32)
     private String category;
+
+    @Column(name = "category_id")
+    private UUID categoryId;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "review_status", nullable = false, length = 14)
+    private ReviewStatus reviewStatus;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "categorized_by", length = 12)
+    private CategorizedBy categorizedBy;
+
+    // 0.00–1.00 — confiança da atribuição automática; NULL quando decidida pelo usuário
+    @Column(precision = 3, scale = 2)
+    private BigDecimal confidence;
+
+    // Chave de matching cacheada — agrupa "o mesmo estabelecimento" na revisão
+    @Column(name = "normalized_description", length = 160)
+    private String normalizedDescription;
+
+    @Column(name = "upload_id")
+    private UUID uploadId;
 
     @Column(nullable = false)
     private OffsetDateTime date;
@@ -48,5 +77,7 @@ public class BankTransaction {
     @PrePersist
     protected void onCreate() {
         this.createdAt = OffsetDateTime.now();
+        // histórico pré-feature e caminhos sem motor entram como confirmados
+        if (this.reviewStatus == null) this.reviewStatus = ReviewStatus.CONFIRMED;
     }
 }
