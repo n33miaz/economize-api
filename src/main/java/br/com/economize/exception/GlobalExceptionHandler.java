@@ -5,11 +5,13 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.bind.support.WebExchangeBindException;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 
 import java.net.URI;
 import java.time.Instant;
 import java.util.Objects;
+import java.util.stream.Collectors;
 
 @Slf4j
 @RestControllerAdvice
@@ -19,6 +21,22 @@ public class GlobalExceptionHandler {
         public ProblemDetail handleIllegalArgumentException(IllegalArgumentException ex) {
                 log.warn("Erro de validação: {}", ex.getMessage());
                 ProblemDetail problemDetail = ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST, ex.getMessage());
+                problemDetail.setTitle("Requisição Inválida");
+                problemDetail.setType(Objects
+                                .requireNonNull(URI.create("https://economize.app/erros/requisicao-invalida")));
+                problemDetail.setProperty("timestamp", Instant.now());
+                return problemDetail;
+        }
+
+        // Falha de @Valid no WebFlux — sem este handler cairia no genérico como 500
+        @ExceptionHandler(WebExchangeBindException.class)
+        public ProblemDetail handleValidationException(WebExchangeBindException ex) {
+                String detail = ex.getFieldErrors().stream()
+                                .map(error -> error.getField() + ": " + error.getDefaultMessage())
+                                .collect(Collectors.joining("; "));
+                log.warn("Erro de validação de payload: {}", detail);
+                ProblemDetail problemDetail = ProblemDetail.forStatusAndDetail(HttpStatus.BAD_REQUEST,
+                                detail.isBlank() ? "Payload inválido" : detail);
                 problemDetail.setTitle("Requisição Inválida");
                 problemDetail.setType(Objects
                                 .requireNonNull(URI.create("https://economize.app/erros/requisicao-invalida")));
