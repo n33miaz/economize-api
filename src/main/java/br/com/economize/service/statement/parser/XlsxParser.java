@@ -12,8 +12,10 @@ import org.springframework.stereotype.Component;
 import java.io.IOException;
 import java.io.InputStream;
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -56,6 +58,10 @@ public class XlsxParser implements StatementParserStrategy {
                         .date(date)
                         .build());
             }
+        } catch (org.apache.poi.UnsupportedFileFormatException e) {
+            // .xls (formato OLE2 antigo) cai aqui — a mensagem crua do POI é indecifrável
+            throw new IllegalArgumentException(
+                    "Planilhas .xls antigas não são suportadas — exporte o extrato como .xlsx");
         } catch (IOException e) {
             throw new IllegalStateException("Falha ao ler XLSX", e);
         }
@@ -81,11 +87,30 @@ public class XlsxParser implements StatementParserStrategy {
         return -1;
     }
 
+    // bancos exportam a coluna de data ora como célula de data, ora como texto
+    private static final List<DateTimeFormatter> TEXT_DATE_FORMATS = List.of(
+            DateTimeFormatter.ofPattern("dd/MM/yyyy"),
+            DateTimeFormatter.ofPattern("yyyy-MM-dd"),
+            DateTimeFormatter.ofPattern("dd-MM-yyyy"));
+
     private OffsetDateTime readDate(Cell cell) {
         if (cell == null) return null;
         if (cell.getCellType() == org.apache.poi.ss.usermodel.CellType.NUMERIC
                 && DateUtil.isCellDateFormatted(cell)) {
-            return cell.getDateCellValue().toInstant().atOffset(ZoneOffset.UTC);
+            // getDateCellValue() interpreta o serial do Excel no fuso da JVM: num
+            // container fora de UTC o dia 01 viraria o último dia do mês anterior
+            // e a transação cairia no mês errado da análise
+            return cell.getLocalDateTimeCellValue().toLocalDate().atStartOfDay().atOffset(ZoneOffset.UTC);
+        }
+        if (cell.getCellType() == org.apache.poi.ss.usermodel.CellType.STRING) {
+            String raw = cell.getStringCellValue().trim();
+            for (DateTimeFormatter format : TEXT_DATE_FORMATS) {
+                try {
+                    return LocalDate.parse(raw, format).atStartOfDay().atOffset(ZoneOffset.UTC);
+                } catch (Exception ignored) {
+                    // tenta o próximo formato
+                }
+            }
         }
         return null;
     }

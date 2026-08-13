@@ -3,11 +3,10 @@ package br.com.economize.service.statement.parser;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
-import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.InputStreamReader;
 import java.math.BigDecimal;
+import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
@@ -15,6 +14,7 @@ import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -28,6 +28,8 @@ public class OfxParser implements StatementParserStrategy {
     private static final Pattern TRNAMT = Pattern.compile("<TRNAMT>([^<\\r\\n]+)");
     private static final Pattern FITID = Pattern.compile("<FITID>([^<\\r\\n]+)");
     private static final Pattern MEMO = Pattern.compile("<MEMO>([^<\\r\\n]+)");
+    private static final Pattern NAME = Pattern.compile("<NAME>([^<\\r\\n]+)");
+    private static final Pattern SPACES = Pattern.compile("\\s+");
 
     @Override
     public StatementFormat format() {
@@ -42,37 +44,66 @@ public class OfxParser implements StatementParserStrategy {
         while (matcher.find()) {
             String block = matcher.group(1);
             String fitId = extract(FITID, block);
-            String amount = extract(TRNAMT, block);
-            if (fitId == null || amount == null) continue;
+            String amountRaw = extract(TRNAMT, block);
+            if (fitId == null || amountRaw == null) continue;
+            BigDecimal amount = new BigDecimal(amountRaw.trim());
             result.add(ParsedTransaction.builder()
                     .externalId(fitId.trim())
-                    .type(safeTrim(extract(TRNTYPE, block), "UNKNOWN"))
-                    .amount(new BigDecimal(amount.trim()))
-                    .description(safeTrim(extract(MEMO, block), ""))
+                    .type(resolveType(extract(TRNTYPE, block), amount))
+                    .amount(amount)
+                    .description(buildDescription(extract(MEMO, block), extract(NAME, block)))
                     .date(parseDate(extract(DTPOSTED, block)))
                     .build());
         }
         return result;
     }
 
+    /**
+     * Bancos usam TRNTYPE fora do par CREDIT/DEBIT (o Inter marca débitos como
+     * PAYMENT) — o sinal do valor é a fonte confiável; o TRNTYPE só desempata
+     * o caso raro de valor zero.
+     */
+    private String resolveType(String trnType, BigDecimal amount) {
+        if (amount.signum() < 0) return "DEBIT";
+        if (amount.signum() > 0) return "CREDIT";
+        String type = trnType != null ? trnType.trim().toUpperCase(Locale.ROOT) : "";
+        return "DEBIT".equals(type) || "PAYMENT".equals(type) ? "DEBIT" : "CREDIT";
+    }
+
+    /**
+     * MEMO carrega a operação e NAME o estabelecimento/contraparte (Inter);
+     * juntos formam a mesma identidade que o CSV do banco produz. NAME só é
+     * anexado quando o MEMO ainda não o contém (comparação com espaços
+     * colapsados — o Inter alinha o NAME com colunas de espaços).
+     */
+    private String buildDescription(String memo, String name) {
+        String memoTrim = memo != null ? memo.trim() : "";
+        String nameTrim = name != null ? SPACES.matcher(name.trim()).replaceAll(" ") : "";
+        if (nameTrim.isEmpty()) return memoTrim;
+        if (memoTrim.isEmpty()) return nameTrim;
+        String memoFlat = SPACES.matcher(memoTrim).replaceAll(" ").toLowerCase(Locale.ROOT);
+        if (memoFlat.contains(nameTrim.toLowerCase(Locale.ROOT))) return memoTrim;
+        return memoTrim + " " + nameTrim;
+    }
+
     private String readAll(InputStream input) {
-        StringBuilder sb = new StringBuilder();
-        try (BufferedReader reader = new BufferedReader(new InputStreamReader(input, StandardCharsets.UTF_8))) {
-            String line;
-            while ((line = reader.readLine()) != null) sb.append(line).append('\n');
+        try {
+            byte[] bytes = input.readAllBytes();
+            // o cabeçalho OFX declara o charset em ASCII puro — dá para sniffar
+            // nele mesmo; Inter exporta CHARSET:1252, Nubank UTF-8
+            String header = new String(bytes, 0, Math.min(bytes.length, 512), StandardCharsets.US_ASCII);
+            Charset charset = header.contains("CHARSET:1252")
+                    ? Charset.forName("windows-1252")
+                    : StandardCharsets.UTF_8;
+            return new String(bytes, charset);
         } catch (IOException e) {
             throw new IllegalStateException("Falha ao ler OFX", e);
         }
-        return sb.toString();
     }
 
     private String extract(Pattern pattern, String text) {
         Matcher m = pattern.matcher(text);
         return m.find() ? m.group(1) : null;
-    }
-
-    private String safeTrim(String value, String fallback) {
-        return value != null ? value.trim() : fallback;
     }
 
     private OffsetDateTime parseDate(String dateStr) {

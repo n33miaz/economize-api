@@ -1,6 +1,8 @@
 package br.com.economize.service.statement.parser;
 
 public enum StatementFormat {
+    // fonte de conector (Meu Pluggy) — não tem parser de arquivo associado
+    PLUGGY,
     OFX,
     CSV,
     XLSX,
