@@ -27,10 +27,11 @@ services:
       # 256 bits gerados pelo Render; trocar invalida os tokens já emitidos
       - key: JWT_SECRET
         generateValue: true
-      # Origem do site estático (blueprint do repo economize-app). Se um dia houver
-      # domínio próprio, ele entra aqui separado por vírgula.
+      # Origem do site estático (serviço `economize-web`, blueprint do repo
+      # economize-app). Precisa ser o domínio exato: o navegador compara string,
+      # não "parece o mesmo site". Domínio próprio entraria aqui após uma vírgula.
       - key: CORS_ALLOWED_ORIGINS
-        value: https://economize.onrender.com
+        value: https://economize-web.onrender.com
       - key: GEMINI_API_KEY
         sync: false
       - key: BRAPI_TOKEN
