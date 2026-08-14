@@ -3,14 +3,15 @@
 # tudo daqui e passa a redeployar a cada push na main.
 #
 # Os segredos NÃO ficam neste arquivo: `sync: false` faz o Render pedir o valor
-# na criação e guardá-lo no painel. Só o JWT_SECRET é gerado por lá — de
-# propósito, porque ele precisa de 256 bits e um segredo curto derruba o login.
+# na criação e guardá-lo no painel. O JWT_SECRET é gerado lá — assim ele nasce
+# com os 256 bits que o HMAC exige e nunca passa por lugar nenhum.
 services:
   - type: web
     name: economize-api
     runtime: docker
     plan: free
-    # Virginia é a região gratuita mais próxima do Brasil
+    # O banco está no Supabase de São Paulo (sa-east-1) e Virginia é a região
+    # gratuita mais próxima dele — cada query paga essa distância
     region: virginia
     dockerfilePath: ./Dockerfile
     healthCheckPath: /actuator/health
@@ -26,9 +27,10 @@ services:
       # 256 bits gerados pelo Render; trocar invalida os tokens já emitidos
       - key: JWT_SECRET
         generateValue: true
-      # Origens do app web (Vercel) separadas por vírgula
+      # Origem do site estático (blueprint do repo economize-app). Se um dia houver
+      # domínio próprio, ele entra aqui separado por vírgula.
       - key: CORS_ALLOWED_ORIGINS
-        sync: false
+        value: https://economize.onrender.com
       - key: GEMINI_API_KEY
         sync: false
       - key: BRAPI_TOKEN
