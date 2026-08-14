@@ -6,7 +6,6 @@ import br.com.economize.model.StatementUpload;
 import br.com.economize.model.User;
 import br.com.economize.repository.BankTransactionRepository;
 import br.com.economize.repository.CategoryRepository;
-import br.com.economize.repository.CategoryRuleRepository;
 import br.com.economize.repository.StatementUploadRepository;
 import br.com.economize.repository.UserRepository;
 import br.com.economize.service.event.DomainEventPublisher;
@@ -57,7 +56,7 @@ public class BankStatementService {
     private final StatementParserFactory parserFactory;
     private final CategorizationEngine categorizationEngine;
     private final CategoryRepository categoryRepository;
-    private final CategoryRuleRepository categoryRuleRepository;
+    private final StatementImportWriter importWriter;
     private final DomainEventPublisher eventPublisher;
     // presente só com a feature flag AI_CATEGORIZATION_ENABLED ligada
     private final ObjectProvider<AiCategorySuggester> aiSuggester;
@@ -204,37 +203,25 @@ public class BankStatementService {
 
         applyAiSuggestions(user, toSave);
 
-        // o upload é salvo antes para carimbar o uploadId nas transações —
-        // é essa amarração que permite "revisar esta importação" no app
-        StatementUpload upload = statementUploadRepository.save(StatementUpload.builder()
-                .user(user)
-                .fileHash(hash)
-                .fileName(fileName)
-                .format(format.name())
-                .transactionsImported(toSave.size())
-                .build());
-
         int suggested = 0;
         int uncategorized = 0;
         for (BankTransaction tx : toSave) {
-            tx.setUploadId(upload.getId());
             if (tx.getReviewStatus() == BankTransaction.ReviewStatus.SUGGESTED) suggested++;
             if (tx.getReviewStatus() == BankTransaction.ReviewStatus.UNCATEGORIZED) uncategorized++;
         }
-        if (!toSave.isEmpty()) {
-            try {
-                bankTransactionRepository.saveAll(toSave);
-            } catch (RuntimeException e) {
-                // cada save é sua própria transação: com o hash já gravado, o
-                // usuário ficaria impedido para sempre de reenviar este arquivo
-                // ("já importado") sem que nenhuma transação tivesse entrado
-                statementUploadRepository.delete(upload);
-                throw e;
-            }
-        }
-        if (!ctx.getDirtyRules().isEmpty()) {
-            categoryRuleRepository.saveAll(ctx.getDirtyRules());
-        }
+
+        // upload + transações + hits das regras num único commit (EC-075):
+        // qualquer falha desfaz o conjunto e o arquivo continua reenviável
+        StatementUpload upload = importWriter.write(
+                StatementUpload.builder()
+                        .user(user)
+                        .fileHash(hash)
+                        .fileName(fileName)
+                        .format(format.name())
+                        .transactionsImported(toSave.size())
+                        .build(),
+                toSave,
+                ctx.getDirtyRules());
 
         eventPublisher.publish(new StatementImportedEvent(user.getId(), format, toSave.size(), upload.getId()));
         log.info("Importadas {} novas transações ({}): {} sugeridas, {} sem categoria, {} reconciliadas, user={}",
