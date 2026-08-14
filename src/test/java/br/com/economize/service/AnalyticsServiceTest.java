@@ -193,6 +193,71 @@ class AnalyticsServiceTest {
     }
 
     @Test
+    void categoryThatZeroedThisMonthStillShowsUpWithMinusOneHundred() {
+        Category food = systemCategory("Alimentação");
+        Category health = systemCategory("Saúde");
+        stubMonthly(
+                List.of(new Row(food.getId(), "DEBIT", new BigDecimal("-250.00"), 3)),
+                // Saúde teve gasto no mês passado e nada neste
+                List.of(new Row(food.getId(), "DEBIT", new BigDecimal("-200.00"), 2),
+                        new Row(health.getId(), "DEBIT", new BigDecimal("-500.00"), 4)),
+                List.of(food, health), 0L);
+
+        MonthlyAnalyticsResponse response = service.monthly(EMAIL, month);
+
+        // a fatia zerada vai para o fim da lista, ordenada por gasto do mês
+        assertThat(response.categories())
+                .extracting(MonthlyAnalyticsResponse.CategorySlice::categoryId)
+                .containsExactly(food.getId(), health.getId());
+
+        MonthlyAnalyticsResponse.CategorySlice healthSlice = response.categories().get(1);
+        assertThat(healthSlice.name()).isEqualTo("Saúde");
+        assertThat(healthSlice.expenseTotal()).isEqualByComparingTo("0");
+        assertThat(healthSlice.txCount()).isZero();
+        assertThat(healthSlice.previousExpenseTotal()).isEqualByComparingTo("500.00");
+        assertThat(healthSlice.expenseDeltaPct()).isEqualByComparingTo("-100.0");
+    }
+
+    @Test
+    void subcategoryThatZeroedKeepsItsLineInsideTheParent() {
+        Category food = systemCategory("Alimentação");
+        Category delivery = subcategoryOf(food, "Delivery");
+        Category market = subcategoryOf(food, "Mercado");
+        stubMonthly(
+                List.of(new Row(market.getId(), "DEBIT", new BigDecimal("-420.00"), 4)),
+                List.of(new Row(market.getId(), "DEBIT", new BigDecimal("-400.00"), 4),
+                        new Row(delivery.getId(), "DEBIT", new BigDecimal("-180.00"), 6)),
+                List.of(food, delivery, market), 0L);
+
+        MonthlyAnalyticsResponse response = service.monthly(EMAIL, month);
+
+        MonthlyAnalyticsResponse.CategorySlice parent = response.categories().get(0);
+        assertThat(parent.children())
+                .extracting(MonthlyAnalyticsResponse.CategorySlice::name)
+                .containsExactly("Mercado", "Delivery");
+        MonthlyAnalyticsResponse.CategorySlice deliverySlice = parent.children().get(1);
+        assertThat(deliverySlice.expenseTotal()).isEqualByComparingTo("0");
+        assertThat(deliverySlice.expenseDeltaPct()).isEqualByComparingTo("-100.0");
+    }
+
+    @Test
+    void categoryWithoutExpenseInEitherMonthDoesNotCreateAnEmptySlice() {
+        Category food = systemCategory("Alimentação");
+        Category salary = systemCategory("Salário");
+        stubMonthly(
+                List.of(new Row(food.getId(), "DEBIT", new BigDecimal("-250.00"), 3)),
+                // só receita no mês anterior: não vira fatia de gasto zerada
+                List.of(new Row(salary.getId(), "CREDIT", new BigDecimal("5000.00"), 1)),
+                List.of(food, salary), 0L);
+
+        MonthlyAnalyticsResponse response = service.monthly(EMAIL, month);
+
+        assertThat(response.categories())
+                .extracting(MonthlyAnalyticsResponse.CategorySlice::categoryId)
+                .containsExactly(food.getId());
+    }
+
+    @Test
     void monthsWithDataEnumeratesMonthsBetweenBoundsDesc() {
         when(userRepository.findByEmail(EMAIL)).thenReturn(Optional.of(user));
         OffsetDateTime min = OffsetDateTime.of(2026, 5, 10, 0, 0, 0, 0, ZoneOffset.UTC);

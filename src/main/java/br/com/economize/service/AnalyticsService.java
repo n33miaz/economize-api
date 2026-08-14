@@ -103,6 +103,19 @@ public class AnalyticsService {
             }
         }
 
+        // Quem gastou no mês passado e nada neste precisa aparecer zerado, com
+        // o delta de -100%. Nascendo só do mês corrente, a categoria sumia da
+        // tela sem deixar rastro e a queda passava por engano de importação.
+        for (Map.Entry<UUID, CategoryAgg> entry : previous.byCategory.entrySet()) {
+            if (entry.getValue().expense.signum() == 0) continue;
+            UUID rootId = rootIdOf(entry.getKey(), catalog);
+            rootAgg.computeIfAbsent(rootId, id -> new CategoryAgg());
+            if (!java.util.Objects.equals(rootId, entry.getKey())) {
+                List<UUID> siblings = childrenOf.computeIfAbsent(rootId, id -> new ArrayList<>());
+                if (!siblings.contains(entry.getKey())) siblings.add(entry.getKey());
+            }
+        }
+
         List<MonthlyAnalyticsResponse.CategorySlice> roots = new ArrayList<>();
         for (Map.Entry<UUID, CategoryAgg> entry : rootAgg.entrySet()) {
             UUID rootId = entry.getKey();
