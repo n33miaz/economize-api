@@ -7,6 +7,7 @@ import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
 
+import java.net.URI;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
@@ -23,7 +24,9 @@ import java.util.Map;
 @ConditionalOnProperty(name = "economize.pluggy.enabled", havingValue = "true")
 public class PluggyClient {
 
-    private static final int PAGE_SIZE = 500;
+    // A v2 fixa a página em 500 e não aceita pageSize; o teto abaixo é só a
+    // trava contra cursor que não termina
+    private static final int MAX_PAGES = 200;
 
     private final WebClient webClient;
     private final String baseUrl;
@@ -73,16 +76,27 @@ public class PluggyClient {
         return results instanceof List<?> list ? (List<Map<String, Object>>) list : List.of();
     }
 
-    /** GET /transactions — paginado; devolve todas as páginas da janela. */
+    /**
+     * GET /v2/transactions — devolve todas as páginas da janela.
+     *
+     * <p>A v1 (`/transactions` com `page`/`pageSize`/`from`/`to`) foi
+     * descontinuada e responde <b>410 ENDPOINT_DEPRECATED</b>. A v2 pagina por
+     * cursor: o campo {@code next} da resposta já vem como a query string
+     * pronta da próxima página, e vem vazio quando acabou. Os filtros de data
+     * também mudaram de nome, para {@code dateFrom}/{@code dateTo}.
+     */
     @SuppressWarnings("unchecked")
     public List<Map<String, Object>> transactions(String apiKey, String accountId, LocalDate from, LocalDate to) {
         List<Map<String, Object>> all = new ArrayList<>();
-        int page = 1;
-        int totalPages = 1;
-        while (page <= totalPages) {
+        String query = "?accountId=" + accountId + "&dateFrom=" + from + "&dateTo=" + to;
+
+        // Trava de segurança: `next` é dado de terceiro e um cursor que se
+        // repetisse deixaria o sync girando para sempre
+        for (int page = 0; page < MAX_PAGES && query != null && !query.isBlank(); page++) {
             Map<String, Object> body = webClient.get()
-                    .uri(baseUrl + "/transactions?accountId={accountId}&from={from}&to={to}&pageSize={size}&page={page}",
-                            accountId, from, to, PAGE_SIZE, page)
+                    // URI pronta, e não template: o cursor do `after` já vem
+                    // percent-encoded e o uriBuilder escaparia o '%' de novo
+                    .uri(URI.create(baseUrl + "/v2/transactions" + query))
                     .header("X-API-KEY", apiKey)
                     .retrieve()
                     .bodyToMono(new ParameterizedTypeReference<Map<String, Object>>() {
@@ -93,9 +107,9 @@ public class PluggyClient {
             if (results instanceof List<?> list) {
                 all.addAll((List<Map<String, Object>>) list);
             }
-            Object total = body.get("totalPages");
-            totalPages = total instanceof Number n ? n.intValue() : 1;
-            page++;
+            Object next = body.get("next");
+            query = next == null ? null : String.valueOf(next);
+            if ("null".equals(query)) query = null;
         }
         return all;
     }
