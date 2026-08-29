@@ -30,8 +30,13 @@ services:
       # Origem do site estático (serviço `economize-web`, blueprint do repo
       # economize-app). Precisa ser o domínio exato: o navegador compara string,
       # não "parece o mesmo site". Domínio próprio entraria aqui após uma vírgula.
+      # A lista mora AQUI, e não no painel: chave declarada com `value` é
+      # gerenciada pelo arquivo, então origem adicionada a mão no Render some na
+      # proxima sincronizacao do blueprint — ja aconteceu neste projeto em 15/08.
+      # O localhost esta na lista porque o app roda local contra esta API durante
+      # os testes; TIRAR antes do lancamento publico.
       - key: CORS_ALLOWED_ORIGINS
-        value: https://economize-web.onrender.com
+        value: https://economize-web.onrender.com,http://localhost:8081,http://localhost:19006
       - key: GEMINI_API_KEY
         sync: false
       - key: BRAPI_TOKEN
@@ -66,6 +71,22 @@ services:
       # torna ilegíveis as linhas que ainda estavam nela.
       - key: SECRET_ENCRYPTION_PREVIOUS_KEYS
         sync: false
+      # ----------------------------------------------------------------------
+      # Variaveis que vivem SO no painel do Render, de proposito
+      #
+      # Nao entram aqui como `sync: false` porque adicionar chave nova nessa forma
+      # a um servico que ja existe faz o Render exigir valor antes de deployar, e
+      # um valor vazio em MAIL_PORT (int) ou MAIL_ENABLED (boolean) derruba o boot.
+      # Todas tem default seguro em application.properties: ausentes, a API sobe.
+      #
+      #   MAIL_ENABLED / MAIL_HOST / MAIL_PORT / MAIL_USERNAME / MAIL_PASSWORD
+      #     Sem elas, "esqueci minha senha" responde 202 e NAO envia e-mail —
+      #     o LogEmailSender so registra o link no log. Para valer, MAIL_ENABLED=true.
+      #   RESET_URL_BASE   default ja aponta para o site publicado.
+      #   PLUGGY_ENABLED / PLUGGY_CLIENT_ID / PLUGGY_CLIENT_SECRET /
+      #   PLUGGY_ITEM_IDS / PLUGGY_OWNER_EMAIL
+      #     Cadastradas a mao em 15/08; conferir depois de cada sync do blueprint.
+      # ----------------------------------------------------------------------
       # O plano free tem 512 MB; sobra espaço para metaspace e threads fora da heap
       - key: JAVA_OPTS
         value: -Xms128m -Xmx360m
