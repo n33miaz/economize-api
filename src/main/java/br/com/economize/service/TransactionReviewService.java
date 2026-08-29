@@ -1,5 +1,6 @@
 package br.com.economize.service;
 
+import br.com.economize.dto.analytics.AnalysisWindow;
 import br.com.economize.dto.statement.ReviewApplyRequest;
 import br.com.economize.model.BankTransaction;
 import br.com.economize.model.Category;
@@ -14,8 +15,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.time.OffsetDateTime;
-import java.time.YearMonth;
-import java.time.ZoneOffset;
 import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.List;
@@ -41,15 +40,39 @@ public class TransactionReviewService {
     private final CategoryRuleRepository categoryRuleRepository;
     private final UserRepository userRepository;
 
-    public List<BankTransaction> listTransactions(String email, YearMonth month,
+    /**
+     * Extrato filtrado. A janela (EC-092) pode ser um mês do calendário ou o
+     * ciclo ancorado no dia do salário — a listagem não distingue os dois, e é
+     * isso que permite ao app abrir "as transações deste período" a partir da
+     * mesma janela que pediu à análise. Janela nula devolve o histórico inteiro.
+     */
+    public List<BankTransaction> listTransactions(String email, AnalysisWindow window,
                                                   BankTransaction.ReviewStatus status, UUID categoryId) {
+        return listTransactions(email, window, status, categoryId, null);
+    }
+
+    /**
+     * Mesma listagem, podendo recortar por ORIGEM (EC-113) — é ela que responde
+     * "o que eu gastei NO CARTÃO neste mês" sem que o app precise somar nada.
+     * {@code accountId} nulo devolve tudo, inclusive os lançamentos sem origem
+     * (histórico e upload manual de arquivo).
+     *
+     * <p>O recorte por origem é feito em MEMÓRIA, como os de status e categoria,
+     * e não desce para a consulta: a janela já é lida inteira de qualquer forma,
+     * o volume mensal de finanças pessoais é pequeno, e "sem filtro" aqui
+     * significa devolver também os lançamentos de origem nula — o que uma
+     * consulta derivada por accountId não expressa sem um segundo caminho. Por
+     * isso o índice parcial da V16 declara um leitor só: a fatura.
+     */
+    public List<BankTransaction> listTransactions(String email, AnalysisWindow window,
+                                                  BankTransaction.ReviewStatus status, UUID categoryId,
+                                                  UUID accountId) {
         User user = requireUser(email);
         List<BankTransaction> base;
-        if (month != null) {
-            OffsetDateTime start = month.atDay(1).atStartOfDay().atOffset(ZoneOffset.UTC);
+        if (window != null) {
             base = bankTransactionRepository
                     .findAllByUserIdAndDateGreaterThanEqualAndDateLessThanOrderByDateDesc(
-                            user.getId(), start, start.plusMonths(1));
+                            user.getId(), window.startInstant(), window.endExclusiveInstant());
         } else {
             base = bankTransactionRepository.findAllByUserIdOrderByDateDesc(user.getId());
         }
@@ -57,6 +80,7 @@ public class TransactionReviewService {
         return base.stream()
                 .filter(t -> status == null || t.getReviewStatus() == status)
                 .filter(t -> categoryId == null || categoryId.equals(t.getCategoryId()))
+                .filter(t -> accountId == null || accountId.equals(t.getAccountId()))
                 .toList();
     }
 
@@ -95,8 +119,7 @@ public class TransactionReviewService {
             Map<String, Category> toLearn = new HashMap<>();
             for (BankTransaction tx : txs) {
                 assign(tx, category, BankTransaction.CategorizedBy.USER);
-                if (!Boolean.FALSE.equals(item.learnPattern())
-                        && tx.getNormalizedDescription() != null && !tx.getNormalizedDescription().isBlank()) {
+                if (!Boolean.FALSE.equals(item.learnPattern()) && learnable(tx)) {
                     toLearn.put(tx.getNormalizedDescription(), category);
                 }
             }
@@ -131,7 +154,7 @@ public class TransactionReviewService {
                     id -> categoryRepository.findAccessible(id, user.getId()).orElse(null));
             if (category == null) continue;
             tx.setReviewStatus(BankTransaction.ReviewStatus.CONFIRMED);
-            if (tx.getNormalizedDescription() != null && !tx.getNormalizedDescription().isBlank()) {
+            if (learnable(tx)) {
                 toLearn.put(tx.getNormalizedDescription(), category);
             }
         }
@@ -143,6 +166,25 @@ public class TransactionReviewService {
         }
         log.info("Confirmação em lote: {} transações, {} padrões, user={}", pending.size(), rulesSaved, email);
         return new ReviewOutcome(pending.size(), rulesSaved);
+    }
+
+    /**
+     * A decisão do usuário sobre ESTA linha pode virar regra para as próximas?
+     *
+     * <p>Precisa de descrição normalizada — é ela a chave do padrão — e a linha
+     * NÃO pode ser perna de movimentação entre contas do titular (EC-106). O
+     * motivo é o ciclo de contaminação: o descritivo de um pagamento de fatura
+     * ou de um estorno ("PAGAMENTO EFETUADO", "ESTORNO DE COMPRA") é genérico e
+     * se repete em linhas que NÃO são perna interna. Aprender a categoria que o
+     * usuário escolheu para a perna carimbaria todas elas, e a regra aprendida
+     * roda antes de qualquer keyword. A perna interna já é resolvida por fato
+     * estrutural no motor, então não há nada a aprender aqui: a categoria dela
+     * não depende do texto.
+     */
+    private boolean learnable(BankTransaction tx) {
+        return !tx.isInternalTransfer()
+                && tx.getNormalizedDescription() != null
+                && !tx.getNormalizedDescription().isBlank();
     }
 
     private void assign(BankTransaction tx, Category category, BankTransaction.CategorizedBy by) {

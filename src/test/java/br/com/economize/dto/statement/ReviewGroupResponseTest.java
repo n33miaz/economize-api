@@ -43,6 +43,27 @@ class ReviewGroupResponseTest {
                         tuple("uber", transportId));
     }
 
+    @Test
+    void aliasShowsUpInTheSampleWithoutSplittingTheGroup() {
+        UUID foodId = UUID.randomUUID();
+        BankTransaction renamed = tx("ifood rest", foodId, "-30.00");
+        renamed.setDisplayAlias("Janta da sexta");
+        BankTransaction plain = tx("ifood rest", foodId, "-45.50");
+
+        List<ReviewGroupResponse> groups = ReviewGroupResponse.groupsFrom(List.of(renamed, plain));
+
+        // uma decisão só: o agrupamento é pela chave do motor, que o apelido não toca
+        assertThat(groups).hasSize(1);
+        assertThat(groups.get(0).normalizedDescription()).isEqualTo("ifood rest");
+        // mas a amostra que o usuário lê já vem renomeada — é onde ele reconhece o gasto
+        assertThat(groups.get(0).sampleDescription()).isEqualTo("Janta da sexta");
+        assertThat(groups.get(0).transactions())
+                .extracting(BankTransactionResponse::description, BankTransactionResponse::originalDescription)
+                .containsExactly(
+                        tuple("Janta da sexta", "IFOOD REST"),
+                        tuple("IFOOD REST", "IFOOD REST"));
+    }
+
     private BankTransaction tx(String normalized, UUID categoryId, String amount) {
         return BankTransaction.builder()
                 .id(UUID.randomUUID())

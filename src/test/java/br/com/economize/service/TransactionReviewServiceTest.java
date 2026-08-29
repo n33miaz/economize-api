@@ -9,6 +9,7 @@ import br.com.economize.repository.BankTransactionRepository;
 import br.com.economize.repository.CategoryRepository;
 import br.com.economize.repository.CategoryRuleRepository;
 import br.com.economize.repository.UserRepository;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
@@ -180,6 +181,47 @@ class TransactionReviewServiceTest {
         verify(categoryRuleRepository).save(captor.capture());
         assertThat(captor.getValue().getPattern()).isEqualTo("ifood rest");
         assertThat(captor.getValue().getOrigin()).isEqualTo(CategoryRule.Origin.LEARNED);
+    }
+
+    @Test
+    @DisplayName("EC-113: aprovar uma PERNA INTERNA confirma a linha mas NÃO grava regra aprendida")
+    void applyDoesNotLearnFromInternalTransferLeg() {
+        BankTransaction perna = pendingTx("pagamento efetuado");
+        perna.setInternalTransfer(true);
+        when(userRepository.findByEmail(EMAIL)).thenReturn(Optional.of(user));
+        when(categoryRepository.findAccessible(food.getId(), user.getId())).thenReturn(Optional.of(food));
+        when(bankTransactionRepository.findAllByUserIdAndIdIn(user.getId(), List.of(perna.getId())))
+                .thenReturn(List.of(perna));
+
+        TransactionReviewService.ReviewOutcome outcome =
+                service.apply(EMAIL, request(List.of(perna.getId()), food.getId(), null));
+
+        // a decisão do usuário sobre a linha vale; o que não pode é virar regra
+        // — "pagamento efetuado" se repete em linhas que não são perna interna,
+        // e a regra aprendida roda antes de qualquer keyword
+        assertThat(outcome.confirmed()).isEqualTo(1);
+        assertThat(outcome.rulesSaved()).isZero();
+        assertThat(perna.getReviewStatus()).isEqualTo(BankTransaction.ReviewStatus.CONFIRMED);
+        verifyNoInteractions(categoryRuleRepository);
+    }
+
+    @Test
+    @DisplayName("EC-113: a confirmação em lote também não aprende com perna interna")
+    void confirmAllDoesNotLearnFromInternalTransferLeg() {
+        BankTransaction perna = pendingTx("estorno de compra");
+        perna.setInternalTransfer(true);
+        perna.setCategoryId(food.getId());
+        when(userRepository.findByEmail(EMAIL)).thenReturn(Optional.of(user));
+        when(bankTransactionRepository.findAllByUserIdAndReviewStatusInOrderByDateDesc(eq(user.getId()), anyCollection()))
+                .thenReturn(List.of(perna));
+        when(categoryRepository.findAccessible(food.getId(), user.getId())).thenReturn(Optional.of(food));
+
+        TransactionReviewService.ReviewOutcome outcome = service.confirmAll(EMAIL, null);
+
+        assertThat(outcome.confirmed()).isEqualTo(1);
+        assertThat(outcome.rulesSaved()).isZero();
+        assertThat(perna.getReviewStatus()).isEqualTo(BankTransaction.ReviewStatus.CONFIRMED);
+        verifyNoInteractions(categoryRuleRepository);
     }
 
     @Test

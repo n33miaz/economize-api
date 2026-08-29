@@ -15,7 +15,11 @@ import java.util.UUID;
  * o usuário decide uma vez ("isso é Alimentação") e o app aplica ao grupo inteiro.
  */
 public record ReviewGroupResponse(
+        // chave do MOTOR: sai da descrição do banco e é ela que o agrupamento
+        // usa — apelido não muda grupo nenhum (EC-094)
         String normalizedDescription,
+        // amostra que o usuário lê para decidir: respeita o apelido, porque é
+        // exatamente aqui que ele precisa reconhecer o gasto
         String sampleDescription,
         UUID suggestedCategoryId,
         BankTransaction.CategorizedBy categorizedBy,
@@ -39,7 +43,7 @@ public record ReviewGroupResponse(
                     .reduce(BigDecimal.ZERO, BigDecimal::add);
             groups.add(new ReviewGroupResponse(
                     first.getNormalizedDescription(),
-                    first.getDescription(),
+                    first.displayDescription(),
                     first.getCategoryId(),
                     first.getCategorizedBy(),
                     first.getConfidence(),
