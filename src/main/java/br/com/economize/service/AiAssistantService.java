@@ -6,11 +6,9 @@ import br.com.economize.model.User;
 import br.com.economize.repository.BankTransactionRepository;
 import br.com.economize.repository.TransactionRepository;
 import br.com.economize.repository.UserRepository;
+import br.com.economize.service.ai.AiChatCaller;
+import br.com.economize.service.ai.AiChatCallerFactory;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.ai.chat.client.ChatClient;
-import org.springframework.ai.chat.messages.Message;
-import org.springframework.ai.chat.messages.UserMessage;
-import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.chat.prompt.SystemPromptTemplate;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
@@ -24,16 +22,20 @@ import java.util.Map;
 @Service
 public class AiAssistantService {
 
-    private final ChatClient chatClient;
+    // EC-107: quem escolhe a chave e o provedor da chamada. Sem configuração
+    // própria, o factory devolve exatamente o ChatClient do servidor que este
+    // serviço construía sozinho antes — o comportamento de quem não mexeu em
+    // nada é o mesmo, linha por linha do prompt.
+    private final AiChatCallerFactory chatCallerFactory;
     private final UserRepository userRepository;
     private final BankTransactionRepository bankTransactionRepository;
     private final TransactionRepository transactionRepository;
 
-    public AiAssistantService(ChatClient.Builder chatClientBuilder,
+    public AiAssistantService(AiChatCallerFactory chatCallerFactory,
                               UserRepository userRepository,
                               BankTransactionRepository bankTransactionRepository,
                               TransactionRepository transactionRepository) {
-        this.chatClient = chatClientBuilder.build();
+        this.chatCallerFactory = chatCallerFactory;
         this.userRepository = userRepository;
         this.bankTransactionRepository = bankTransactionRepository;
         this.transactionRepository = transactionRepository;
@@ -64,14 +66,20 @@ public class AiAssistantService {
                     - Não recomende compra/venda direta de ativos específicos, apenas dê orientações gerais.
                     """;
 
-            SystemPromptTemplate systemPromptTemplate = new SystemPromptTemplate(systemPromptText);
-            Message systemMessage = systemPromptTemplate.createMessage(Map.of("context", context));
-            UserMessage userMessage = new UserMessage(userQuestion);
+            // render() em vez de createMessage(): produz o MESMO texto de sistema
+            // que o SystemPromptTemplate montava, só que como String — é o que o
+            // AiChatCaller consome, seja ele o do servidor ou o do usuário
+            String systemPrompt = new SystemPromptTemplate(systemPromptText)
+                    .render(Map.of("context", context));
 
-            Prompt prompt = new Prompt(List.of(systemMessage, userMessage));
+            // O assistente ACEITA cair na chave do servidor: é o comportamento
+            // que o APK publicado conhece e não pode mudar para quem não
+            // configurou nada. Por isso resolve(..., true) sempre traz um caller.
+            AiChatCaller caller = chatCallerFactory.resolve(user, true)
+                    .orElseThrow(() -> new IllegalStateException("Nenhum caminho de IA disponível"));
 
-            log.info("Enviando prompt para a IA para o usuário: {}", email);
-            return chatClient.prompt(prompt).call().content();
+            log.info("Enviando prompt para a IA para o usuário: {} ({})", email, caller.describe());
+            return caller.complete(systemPrompt, userQuestion);
 
         }).subscribeOn(Schedulers.boundedElastic());
     }
