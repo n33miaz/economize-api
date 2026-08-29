@@ -5,9 +5,15 @@ import io.github.bucket4j.Bucket;
 import io.github.bucket4j.ConsumptionProbe;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.server.reactive.ServerHttpRequest;
+import org.springframework.http.server.reactive.ServerHttpResponse;
 import org.springframework.lang.NonNull;
 import org.springframework.stereotype.Component;
+import org.springframework.web.cors.CorsConfiguration;
+import org.springframework.web.cors.reactive.CorsConfigurationSource;
+import org.springframework.web.cors.reactive.CorsUtils;
 import org.springframework.web.server.ServerWebExchange;
 import org.springframework.web.server.WebFilter;
 import org.springframework.web.server.WebFilterChain;
@@ -18,18 +24,57 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
+/**
+ * Limite de requisições por cliente.
+ *
+ * <p><b>Por que este filtro cuida de CORS sozinho.</b> Ele roda em
+ * {@code HIGHEST_PRECEDENCE + 10}, MUITO antes do {@code WebFilterChainProxy} do
+ * Spring Security (ordem -100) — que é quem aplica o
+ * {@link CorsConfigurationSource}. Quando o limite estoura e a resposta é
+ * curto-circuitada aqui com {@code setComplete()}, a cadeia do Security nunca
+ * roda e o 429 sai <b>sem cabeçalho CORS</b>. Para o navegador, resposta sem
+ * {@code Access-Control-Allow-Origin} é resposta bloqueada: o axios do app web
+ * recebe {@code error.response === undefined}, o mesmo sintoma de servidor
+ * dormindo. O cliente então reage exatamente ao contrário do necessário —
+ * reenvia a requisição, tenta de novo com backoff e mostra "Sem conexão com o
+ * servidor" — o que aprofunda o próprio rate limit numa tempestade
+ * auto-alimentada. Por isso o 429 daqui repete o cabeçalho de origem em vez de
+ * depender do filtro de CORS que vem depois. Não "simplifique" removendo:
+ * enquanto este filtro estiver na frente do Security, quem corta a resposta
+ * responde também pelo CORS dela.
+ *
+ * <p><b>Preflight não consome token.</b> O {@code OPTIONS} de preflight é aperto
+ * de mão do navegador, não trabalho da API — e, por não levar
+ * {@code Authorization}, cairia no balde POR IP, fazendo cada chamada
+ * autenticada da web custar dois tokens em baldes diferentes. Pior: preflight
+ * barrado mata a requisição real que viria atrás. Ele passa direto.
+ */
 @Component
 @Order(Ordered.HIGHEST_PRECEDENCE + 10)
 public class RateLimitFilter implements WebFilter {
 
-    private static final Set<String> EXPENSIVE_PREFIXES = Set.of("/api/v1/chat", "/api/v1/reports");
+    // O teste de chave do EC-107 entra no balde caro porque cada chamada vira
+    // uma requisição paga ao provedor do usuário. O prefixo é o da rota exata:
+    // ler o catálogo e a configuração são leituras locais e continuam baratas.
+    private static final Set<String> EXPENSIVE_PREFIXES = Set.of(
+            "/api/v1/chat", "/api/v1/reports", "/api/v1/ai/settings/test");
 
     private final ConcurrentMap<String, Bucket> standardBuckets = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, Bucket> expensiveBuckets = new ConcurrentHashMap<>();
 
+    private final CorsConfigurationSource corsConfigurationSource;
+
+    public RateLimitFilter(CorsConfigurationSource corsConfigurationSource) {
+        this.corsConfigurationSource = corsConfigurationSource;
+    }
+
     @Override
     @NonNull
     public Mono<Void> filter(@NonNull ServerWebExchange exchange, @NonNull WebFilterChain chain) {
+        if (CorsUtils.isPreFlightRequest(exchange.getRequest())) {
+            return chain.filter(exchange);
+        }
+
         String path = exchange.getRequest().getPath().value();
         String key = clientKey(exchange);
         boolean expensive = EXPENSIVE_PREFIXES.stream().anyMatch(path::startsWith);
@@ -46,9 +91,41 @@ public class RateLimitFilter implements WebFilter {
         }
 
         long retrySeconds = probe.getNanosToWaitForRefill() / 1_000_000_000L;
-        exchange.getResponse().setStatusCode(HttpStatus.TOO_MANY_REQUESTS);
-        exchange.getResponse().getHeaders().set("Retry-After", String.valueOf(Math.max(retrySeconds, 1)));
-        return exchange.getResponse().setComplete();
+        ServerHttpResponse response = exchange.getResponse();
+        response.setStatusCode(HttpStatus.TOO_MANY_REQUESTS);
+        response.getHeaders().set(HttpHeaders.RETRY_AFTER, String.valueOf(Math.max(retrySeconds, 1)));
+        applyCorsHeaders(exchange);
+        return response.setComplete();
+    }
+
+    /**
+     * Repete na resposta cortada o mesmo julgamento de origem que o Security
+     * faria: origem não declarada em {@code CORS_ALLOWED_ORIGINS} continua sem
+     * cabeçalho nenhum (não é papel do rate limit afrouxar a política), e origem
+     * permitida recebe o {@code Access-Control-Allow-Origin} que faz o navegador
+     * entregar o 429 ao app — que aí trata "muitas requisições" em vez de achar
+     * que está offline. O {@code Vary: Origin} evita que um proxy sirva a mesma
+     * resposta 429 para outra origem.
+     */
+    private void applyCorsHeaders(ServerWebExchange exchange) {
+        String origin = exchange.getRequest().getHeaders().getOrigin();
+        if (origin == null) {
+            return;
+        }
+        CorsConfiguration configuration = corsConfigurationSource.getCorsConfiguration(exchange);
+        if (configuration == null) {
+            return;
+        }
+        String allowedOrigin = configuration.checkOrigin(origin);
+        if (allowedOrigin == null) {
+            return;
+        }
+        HttpHeaders headers = exchange.getResponse().getHeaders();
+        headers.set(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN, allowedOrigin);
+        headers.add(HttpHeaders.VARY, HttpHeaders.ORIGIN);
+        if (Boolean.TRUE.equals(configuration.getAllowCredentials())) {
+            headers.set(HttpHeaders.ACCESS_CONTROL_ALLOW_CREDENTIALS, "true");
+        }
     }
 
     private Bucket createBucket(long capacity, Duration window) {
@@ -58,9 +135,10 @@ public class RateLimitFilter implements WebFilter {
     }
 
     private String clientKey(ServerWebExchange exchange) {
-        String auth = exchange.getRequest().getHeaders().getFirst("Authorization");
+        ServerHttpRequest request = exchange.getRequest();
+        String auth = request.getHeaders().getFirst(HttpHeaders.AUTHORIZATION);
         if (auth != null && auth.startsWith("Bearer ")) return "u:" + auth.substring(7);
-        var remoteAddress = exchange.getRequest().getRemoteAddress();
+        var remoteAddress = request.getRemoteAddress();
         return remoteAddress != null ? "ip:" + remoteAddress.getAddress().getHostAddress() : "anon";
     }
 }
