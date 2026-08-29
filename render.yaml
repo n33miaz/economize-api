@@ -36,6 +36,36 @@ services:
         sync: false
       - key: BRAPI_TOKEN
         sync: false
+      # EC-107: cifra, no banco, a chave de IA que cada usuário cadastra.
+      # `sync: false` e não `generateValue: true` como o JWT_SECRET, por um
+      # motivo concreto: aqui o formato é rígido — exatamente 32 bytes em Base64,
+      # que é o que AES-256 exige — e a API se RECUSA a subir com uma chave-mestra
+      # de outro tamanho (chave torta cifra segredo que ninguém abre depois).
+      # Um gerador que produzisse qualquer outro tamanho derrubaria o deploy.
+      # Gere e cole:  openssl rand -base64 32
+      # Deixar em branco é uma resposta válida: a API sobe igual, a opção de
+      # chave própria some do app e todo mundo segue na chave do servidor.
+      # TROCAR ESTE VALOR TORNA AS CHAVES JÁ CADASTRADAS ILEGÍVEIS — a API avisa
+      # (keyStatus=UNREADABLE) e pede recadastro, mas nada é recuperável.
+      - key: SECRET_ENCRYPTION_KEY
+        sync: false
+      # As duas abaixo existem para a ROTAÇÃO ser possível sem downtime, e estão
+      # declaradas aqui já com o valor de repouso justamente para ninguém ter de
+      # descobrir, no dia da troca, que precisa criá-las.
+      #
+      # Nome da chave ativa. Fica gravado dentro de cada segredo, então é ele que
+      # diz qual chave-mestra abre qual linha. Ao rotacionar, escolha um nome
+      # novo (k2, producao-2027...) junto com o valor novo de SECRET_ENCRYPTION_KEY.
+      - key: SECRET_ENCRYPTION_KEY_ID
+        value: k1
+      # Chaves ANTIGAS, só para leitura, no formato id:base64,id:base64. Durante
+      # uma rotação a chave que saiu de cena vive aqui até o último segredo ter
+      # sido reescrito com a nova; acompanhe o saldo no SQL do Supabase com
+      #   SELECT master_key_id, count(*) FROM user_ai_settings GROUP BY 1;
+      # e só então esvazie esta variável. Tirar a chave antiga antes da hora
+      # torna ilegíveis as linhas que ainda estavam nela.
+      - key: SECRET_ENCRYPTION_PREVIOUS_KEYS
+        sync: false
       # O plano free tem 512 MB; sobra espaço para metaspace e threads fora da heap
       - key: JAVA_OPTS
         value: -Xms128m -Xmx360m
