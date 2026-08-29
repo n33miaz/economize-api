@@ -22,10 +22,15 @@ public class AwesomeApiProvider implements MarketDataProvider {
 
     private final WebClient webClient;
     private final String awesomeApiUrl;
+    private final MarketSnapshotStore snapshotStore;
 
-    public AwesomeApiProvider(WebClient webClient, @Value("${awesome.api.url}") String awesomeApiUrl) {
+    private static final String SNAPSHOT_KEY = "awesome:all";
+
+    public AwesomeApiProvider(WebClient webClient, @Value("${awesome.api.url}") String awesomeApiUrl,
+            MarketSnapshotStore snapshotStore) {
         this.webClient = webClient;
         this.awesomeApiUrl = awesomeApiUrl;
+        this.snapshotStore = snapshotStore;
     }
 
     @Override
@@ -44,10 +49,20 @@ public class AwesomeApiProvider implements MarketDataProvider {
                 .map(responseMap -> responseMap.entrySet().stream()
                         .map(entry -> enrichIndicatorData(entry.getKey(), entry.getValue()))
                         .collect(Collectors.toList()))
-                .onErrorResume(e -> {
-                    log.error("Erro ao buscar moedas na AwesomeAPI: {}", e.getMessage());
-                    return Mono.just(Collections.emptyList());
-                });
+                .doOnNext(indicators -> snapshotStore.save(SNAPSHOT_KEY, indicators))
+                // stale-on-error: a AwesomeAPI responde 429 (QuotaExceeded) com
+                // frequência; nesse caso o último snapshot bom vale mais que nada
+                .onErrorResume(e -> snapshotStore.find(SNAPSHOT_KEY)
+                        .map(stale -> {
+                            log.warn("AwesomeAPI falhou ({}); servindo snapshot stale com {} indicadores",
+                                    e.getMessage(), stale.size());
+                            return Mono.just(stale);
+                        })
+                        .orElseGet(() -> {
+                            log.error("Erro ao buscar moedas na AwesomeAPI e sem snapshot stale: {}",
+                                    e.getMessage());
+                            return Mono.just(Collections.emptyList());
+                        }));
     }
 
     @Override

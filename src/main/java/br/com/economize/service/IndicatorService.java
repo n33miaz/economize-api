@@ -3,6 +3,7 @@ package br.com.economize.service;
 import br.com.economize.dto.HistoricalDataPoint;
 import br.com.economize.dto.Indicator;
 import br.com.economize.service.provider.MarketDataProvider;
+import br.com.economize.service.provider.MarketSnapshotStore;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -25,13 +26,16 @@ public class IndicatorService {
 
         private final List<MarketDataProvider> dataProviders;
         private final WebClient webClient;
+        private final MarketSnapshotStore snapshotStore;
 
         @Value("${awesome.api.url}")
         private String awesomeApiUrl;
 
-        public IndicatorService(List<MarketDataProvider> dataProviders, WebClient webClient) {
+        public IndicatorService(List<MarketDataProvider> dataProviders, WebClient webClient,
+                        MarketSnapshotStore snapshotStore) {
                 this.dataProviders = dataProviders;
                 this.webClient = webClient;
+                this.snapshotStore = snapshotStore;
         }
 
         @Cacheable("indicators")
@@ -48,11 +52,24 @@ public class IndicatorService {
         }
 
         public Mono<List<Indicator>> getAllIndicatorsFallback(Throwable t) {
-                log.error("Circuit Breaker aberto. Retornando lista vazia. Erro: {}", t.getMessage());
+                // Prefere o último snapshot bom (stale) a devolver lista vazia
+                List<Indicator> stale = snapshotStore.findAll();
+                if (!stale.isEmpty()) {
+                        log.warn("Circuit Breaker aberto ({}); servindo snapshot stale com {} indicadores",
+                                        t.getMessage(), stale.size());
+                        return Mono.just(stale);
+                }
+                log.error("Circuit Breaker aberto e sem snapshot stale. Retornando lista vazia. Erro: {}",
+                                t.getMessage());
                 return Mono.just(Collections.emptyList());
         }
 
-        // Busca dinâmica
+        // Busca dinâmica. O cache curto (5 min) existe por causa da cota da
+        // Brapi: repetir o mesmo termo — usuário digitando, voltando à tela, ou
+        // a mesma página do catálogo sendo pedida de novo — não pode custar
+        // requisição nova. Quem debita o orçamento é o provedor, então tudo que
+        // for atendido daqui sai de graça.
+        @Cacheable("indicatorSearch")
         public Mono<List<Indicator>> searchIndicators(String query) {
                 log.info("Buscando dinamicamente pelo ativo: {}", query);
                 return Flux.fromIterable(dataProviders)
@@ -91,12 +108,12 @@ public class IndicatorService {
                                 .switchIfEmpty(Mono.error(
                                                 new IllegalArgumentException("Moeda não encontrada: " + currencyCode)))
                                 .map(indicator -> {
-                                        BigDecimal sellPrice = indicator.getBuy();
-                                        if (sellPrice == null || sellPrice.compareTo(BigDecimal.ZERO) == 0) {
+                                        BigDecimal buyPrice = indicator.getBuy();
+                                        if (buyPrice == null || buyPrice.compareTo(BigDecimal.ZERO) == 0) {
                                                 throw new IllegalArgumentException(
                                                                 "Cotação indisponível para conversão.");
                                         }
-                                        return amountInBrl.divide(sellPrice, 2, RoundingMode.HALF_EVEN);
+                                        return amountInBrl.divide(buyPrice, 2, RoundingMode.HALF_EVEN);
                                 });
         }
 }

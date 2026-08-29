@@ -2,6 +2,7 @@ package br.com.economize.service;
 
 import br.com.economize.dto.Indicator;
 import br.com.economize.service.provider.MarketDataProvider;
+import br.com.economize.service.provider.MarketSnapshotStore;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -28,12 +29,15 @@ class IndicatorServiceTest {
     @Mock
     private WebClient webClient;
 
+    private MarketSnapshotStore snapshotStore;
+
     private IndicatorService indicatorService;
 
     @BeforeEach
     void setUp() {
+        snapshotStore = new MarketSnapshotStore();
         // Injetamos uma lista contendo o nosso provider mockado
-        indicatorService = new IndicatorService(List.of(mockProvider), webClient);
+        indicatorService = new IndicatorService(List.of(mockProvider), webClient, snapshotStore);
     }
 
     @Test
@@ -41,7 +45,7 @@ class IndicatorServiceTest {
     void shouldConvertCurrencyCorrectly() {
         Indicator usd = new Indicator();
         usd.setCode("USD");
-        usd.setBuy(new BigDecimal("5.00")); 
+        usd.setBuy(new BigDecimal("5.00"));
 
         when(mockProvider.fetchDefaultIndicators()).thenReturn(Mono.just(List.of(usd)));
 
@@ -64,5 +68,29 @@ class IndicatorServiceTest {
         StepVerifier.create(result)
                 .expectError(IllegalArgumentException.class)
                 .verify();
+    }
+
+    @Test
+    @DisplayName("Fallback do circuit breaker deve servir snapshot stale quando existir")
+    void fallbackShouldServeStaleSnapshot() {
+        Indicator usd = new Indicator();
+        usd.setCode("USD");
+        usd.setBuy(new BigDecimal("5.55"));
+        snapshotStore.save("awesome:all", List.of(usd));
+
+        StepVerifier.create(indicatorService.getAllIndicatorsFallback(new RuntimeException("circuito aberto")))
+                .assertNext(indicators -> {
+                    assertEquals(1, indicators.size());
+                    assertEquals("USD", indicators.get(0).getCode());
+                })
+                .verifyComplete();
+    }
+
+    @Test
+    @DisplayName("Fallback do circuit breaker deve retornar lista vazia sem snapshot stale")
+    void fallbackShouldReturnEmptyWithoutStaleSnapshot() {
+        StepVerifier.create(indicatorService.getAllIndicatorsFallback(new RuntimeException("circuito aberto")))
+                .assertNext(indicators -> assertEquals(0, indicators.size()))
+                .verifyComplete();
     }
 }
