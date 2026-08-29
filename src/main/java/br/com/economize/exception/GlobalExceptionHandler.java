@@ -7,6 +7,7 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.bind.support.WebExchangeBindException;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
+import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.server.ServerWebInputException;
 
 import java.net.URI;
@@ -134,6 +135,49 @@ public class GlobalExceptionHandler {
                 problemDetail.setTitle("Erro no Provedor de Dados");
                 problemDetail.setType(Objects
                                 .requireNonNull(URI.create("https://economize.app/erros/provedor-externo")));
+                problemDetail.setProperty("timestamp", Instant.now());
+                return problemDetail;
+        }
+
+        /**
+         * Rota que não existe e recurso estático que não foi encontrado. Sem
+         * este handler os dois caem no genérico abaixo e viram <b>500</b>: o
+         * cliente deixa de conseguir distinguir "errei a URL" de "o servidor
+         * quebrou", e todo 404 entra no log como erro. Foi essa conversão que
+         * manteve o {@code /swagger-ui} respondendo 500 em produção — a página
+         * pede recursos estáticos, cada ausência virava falha interna.
+         *
+         * <p>Preserva o status que a exceção já carrega em vez de inventar um.
+         * {@link ServerWebInputException} e {@link WebExchangeBindException} são
+         * subclasses e continuam ganhando por especificidade nos handlers acima,
+         * então corpo malformado segue como 400 com a mensagem por campo.
+         *
+         * <p>O detalhe do 404 é fixo de propósito: {@code getReason()} carrega o
+         * caminho pedido, e devolvê-lo seria refletir entrada do cliente na
+         * resposta.
+         */
+        @ExceptionHandler(ResponseStatusException.class)
+        public ProblemDetail handleResponseStatusException(ResponseStatusException ex) {
+                HttpStatus status = HttpStatus.resolve(ex.getStatusCode().value());
+                if (status == null) {
+                        status = HttpStatus.INTERNAL_SERVER_ERROR;
+                }
+
+                if (status.is5xxServerError()) {
+                        // 5xx é problema nosso: precisa da pilha no log
+                        log.error("Falha interna com status {}: ", status.value(), ex);
+                } else {
+                        // 4xx é o cliente pedindo o que não existe — não polui o log de erro
+                        log.warn("Requisição respondida com {}: {}", status.value(), ex.getReason());
+                }
+
+                boolean notFound = status == HttpStatus.NOT_FOUND;
+                ProblemDetail problemDetail = ProblemDetail.forStatusAndDetail(status,
+                                notFound ? "Recurso não encontrado." : status.getReasonPhrase());
+                problemDetail.setTitle(notFound ? "Não Encontrado" : status.getReasonPhrase());
+                problemDetail.setType(Objects.requireNonNull(URI.create(
+                                notFound ? "https://economize.app/erros/nao-encontrado"
+                                                : "https://economize.app/erros/erro-interno")));
                 problemDetail.setProperty("timestamp", Instant.now());
                 return problemDetail;
         }
