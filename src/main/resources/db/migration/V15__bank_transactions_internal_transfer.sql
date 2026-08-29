@@ -1,0 +1,26 @@
+-- EC-106: marca a transação que é PERNA DE MOVIMENTAÇÃO ENTRE CONTAS DO PRÓPRIO
+-- TITULAR — hoje o pagamento de fatura de cartão, nas suas duas pernas.
+--
+-- Por que uma coluna, e não uma dedução na leitura: o fato que precisa ser
+-- lembrado é "esta linha veio de uma conta CREDIT" (ou "saiu da conta corrente
+-- para quitar um cartão que o usuário tem conectado"). Isso só é conhecido na
+-- IMPORTAÇÃO, quando ainda se sabe o tipo da conta de origem no Pluggy e quais
+-- contas o usuário tem ligadas. Depois de gravada, a linha guarda só
+-- type/amount/description — e por elas o crédito de R$ 500 dentro do cartão é
+-- indistinguível de uma receita de R$ 500. Quem lê (análise mensal, detecção de
+-- recorrência, previsão de saldo) leria muito depois, sem esse contexto, e
+-- teria de re-adivinhar por texto: exatamente o palpite frágil que a coluna
+-- elimina.
+--
+-- Semântica: TRUE = não é receita nem despesa, é dinheiro do titular trocando
+-- de bolso. O sinal e o type continuam corretos e intocados (o saldo segue
+-- fechando); o que a marca faz é tirar a linha das SOMAS de receita/despesa.
+--
+-- NOT NULL DEFAULT FALSE: o histórico inteiro é, por definição, "não marcado" —
+-- nada a adivinhar em backfill. No Postgres 11+ (Supabase) adicionar coluna com
+-- default constante não reescreve a tabela.
+--
+-- Sem índice: o campo nunca é critério de busca, só filtro de agregação dentro
+-- de uma janela que já é recortada por (user_id, date).
+ALTER TABLE bank_transactions
+    ADD COLUMN internal_transfer BOOLEAN NOT NULL DEFAULT FALSE;
