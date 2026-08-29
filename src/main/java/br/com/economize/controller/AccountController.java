@@ -1,0 +1,67 @@
+package br.com.economize.controller;
+
+import br.com.economize.dto.account.AccountResponse;
+import br.com.economize.dto.account.CardInvoicesResponse;
+import br.com.economize.service.CardInvoiceService;
+import br.com.economize.service.ConnectorAccountService;
+import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.tags.Tag;
+import lombok.RequiredArgsConstructor;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
+
+import java.util.List;
+import java.util.UUID;
+
+@RestController
+@RequestMapping("/api/v1/accounts")
+@RequiredArgsConstructor
+@Tag(name = "Contas e cartões",
+        description = "Origem dos lançamentos (EC-113): de qual conta bancária ou cartão de crédito cada "
+                + "transação veio, e a fatura de um cartão agrupada por ciclo")
+public class AccountController {
+
+    private final ConnectorAccountService accountService;
+    private final CardInvoiceService cardInvoiceService;
+
+    @Operation(summary = "Listar contas e cartões do usuário",
+            description = "As origens conhecidas dos lançamentos: contas bancárias e cartões trazidos pelas "
+                    + "conexões do usuário. O extrato devolve apenas `accountId` em cada linha — é esta "
+                    + "listagem que dá nome, instituição e tipo, para o app carregar uma vez e casar em "
+                    + "memória. Lançamento de upload manual de arquivo não tem conta e vem com `accountId` "
+                    + "nulo (origem não informada). `linked=false` marca a origem cujo vínculo foi desfeito: "
+                    + "o histórico continua, mas nada novo entra por ela.")
+    @GetMapping
+    public Mono<List<AccountResponse>> list(@AuthenticationPrincipal String email) {
+        return Mono.fromCallable(() -> accountService.list(email))
+                .subscribeOn(Schedulers.boundedElastic());
+    }
+
+    @Operation(summary = "Faturas de um cartão, agrupadas por ciclo",
+            description = "Os lançamentos do cartão recortados por fatura, do ciclo mais recente para o mais "
+                    + "antigo. TODA fatura aqui é DERIVADA — o agregador "
+                    + "não entrega fatura fechada, só o extrato: `cycleSource=PROVIDER_CLOSING_DAY` quando o "
+                    + "ciclo foi recortado pelo dia de fechamento informado pelo provedor, "
+                    + "`CALENDAR_MONTH` quando não havia esse metadado e o recorte foi o mês do calendário. "
+                    + "`total` é o que o usuário DEVE naquele ciclo (compras menos estornos); `purchasesTotal` "
+                    + "e `refundsTotal` abrem essa conta, e `paymentsTotal` é o pagamento de fatura que entrou "
+                    + "no cartão — quitação, que não abate o total do ciclo. "
+                    + "Ciclo sem nenhum lançamento é omitido. `months` conta faturas FECHADAS e aceita de 1 a "
+                    + "24 (default 6); a fatura em aberto vem sempre por cima, sem consumir a janela. Fora da "
+                    + "faixa responde 400. Conta inexistente OU de outro usuário responde 404; conta que "
+                    + "existe mas não é cartão responde 400.")
+    @GetMapping("/{accountId}/invoices")
+    public Mono<CardInvoicesResponse> invoices(
+            @AuthenticationPrincipal String email,
+            @PathVariable UUID accountId,
+            @RequestParam(defaultValue = "6") int months) {
+        return Mono.fromCallable(() -> cardInvoiceService.invoices(email, accountId, months))
+                .subscribeOn(Schedulers.boundedElastic());
+    }
+}
