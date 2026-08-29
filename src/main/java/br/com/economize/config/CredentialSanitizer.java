@@ -28,7 +28,11 @@ public class CredentialSanitizer implements EnvironmentPostProcessor {
     private static final List<String> KEYS = List.of(
             "DB_URL", "DB_USER", "DB_PASSWORD",
             "JWT_SECRET", "CORS_ALLOWED_ORIGINS",
-            "GEMINI_API_KEY", "BRAPI_TOKEN");
+            "GEMINI_API_KEY", "BRAPI_TOKEN",
+            // EC-107: Base64 colado no painel com espaço ou quebra de linha no
+            // fim não decodifica, e a aplicação recusaria subir dizendo que a
+            // chave-mestra é inválida — pelo motivo errado
+            "SECRET_ENCRYPTION_KEY");
 
     @Override
     public void postProcessEnvironment(ConfigurableEnvironment environment, SpringApplication application) {
