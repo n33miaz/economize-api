@@ -1,15 +1,19 @@
 package br.com.economize.service.connector.pluggy;
 
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
 
+import org.springframework.web.reactive.function.client.WebClientResponseException;
+
 import java.net.URI;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -33,7 +37,7 @@ public class PluggyClient {
     private final String clientId;
     private final String clientSecret;
 
-    public PluggyClient(WebClient webClient,
+    public PluggyClient(@Qualifier("pluggyWebClient") WebClient webClient,
                         @Value("${economize.pluggy.base-url}") String baseUrl,
                         @Value("${economize.pluggy.client-id}") String clientId,
                         @Value("${economize.pluggy.client-secret}") String clientSecret) {
@@ -62,18 +66,130 @@ public class PluggyClient {
         return String.valueOf(body.get("apiKey"));
     }
 
-    /** GET /accounts?itemId= — contas de uma conexão (item) do usuário. */
-    @SuppressWarnings("unchecked")
-    public List<Map<String, Object>> accounts(String apiKey, String itemId) {
-        Map<String, Object> body = webClient.get()
-                .uri(baseUrl + "/accounts?itemId={itemId}", itemId)
+    /**
+     * POST /connect_token — token de curta duração que abre o widget Pluggy
+     * Connect no app. O clientUserId carimba o item criado com o dono (usamos o
+     * UUID interno do usuário, nunca o e-mail: nada de PII no agregador) e é o
+     * que permite recusar depois o registro de item alheio. Com itemId, o
+     * widget abre em modo atualização da conexão existente (MFA/credencial
+     * expirada) em vez de criar item novo.
+     */
+    public String connectToken(String apiKey, String clientUserId, String itemId) {
+        Map<String, Object> payload = new HashMap<>();
+        if (itemId != null && !itemId.isBlank()) payload.put("itemId", itemId);
+        payload.put("options", Map.of("clientUserId", clientUserId));
+        Map<String, Object> body = webClient.post()
+                .uri(baseUrl + "/connect_token")
                 .header("X-API-KEY", apiKey)
+                .bodyValue(payload)
                 .retrieve()
                 .bodyToMono(new ParameterizedTypeReference<Map<String, Object>>() {
                 })
                 .block();
-        Object results = body != null ? body.get("results") : null;
-        return results instanceof List<?> list ? (List<Map<String, Object>>) list : List.of();
+        if (body == null || body.get("accessToken") == null) {
+            throw new IllegalStateException("Pluggy não devolveu accessToken do Connect");
+        }
+        return String.valueOf(body.get("accessToken"));
+    }
+
+    /**
+     * GET /items/{id} — detalhes de uma conexão. Devolve null quando o item não
+     * existe (404 ITEM_NOT_FOUND): para o registro, "não existe no Pluggy" é um
+     * caso de negócio, não uma falha de provedor.
+     */
+    public Map<String, Object> item(String apiKey, String itemId) {
+        try {
+            return webClient.get()
+                    .uri(baseUrl + "/items/{itemId}", itemId)
+                    .header("X-API-KEY", apiKey)
+                    .retrieve()
+                    .bodyToMono(new ParameterizedTypeReference<Map<String, Object>>() {
+                    })
+                    .block();
+        } catch (WebClientResponseException.NotFound e) {
+            return null;
+        }
+    }
+
+    /**
+     * DELETE /items/{id} — apaga a conexão no Pluggy (revoga o consentimento no
+     * agregador). 404 conta como sucesso: o item já não existia lá.
+     */
+    public void deleteItem(String apiKey, String itemId) {
+        try {
+            webClient.delete()
+                    .uri(baseUrl + "/items/{itemId}", itemId)
+                    .header("X-API-KEY", apiKey)
+                    .retrieve()
+                    .toBodilessEntity()
+                    .block();
+        } catch (WebClientResponseException.NotFound e) {
+            // sem o itemId no texto: é identificador de terceiro e não tem por
+            // que ficar em log de aplicação
+            log.info("Item já não existia no Pluggy ao desvincular");
+        }
+    }
+
+    /**
+     * GET /accounts?itemId= — contas de uma conexão (item) do usuário, TODAS as
+     * páginas.
+     *
+     * <p>A resposta é paginada como a de transações. Ler só a primeira página
+     * era uma aposta silenciosa em "ninguém tem mais contas do que cabe numa
+     * página": quem tem conta corrente, poupança, investimento e três cartões
+     * no mesmo banco perderia contas inteiras do sync — e, pior, perderia
+     * justamente o cartão que autoriza reconhecer o pagamento de fatura. Mesma
+     * trava de páginas do {@code transactions}: {@code next} é dado de terceiro
+     * e um cursor que se repetisse deixaria o sync girando para sempre.
+     */
+    @SuppressWarnings("unchecked")
+    public List<Map<String, Object>> accounts(String apiKey, String itemId) {
+        List<Map<String, Object>> all = new ArrayList<>();
+        String query = "?itemId=" + itemId;
+
+        for (int page = 0; page < MAX_PAGES && query != null && !query.isBlank(); page++) {
+            Map<String, Object> body = webClient.get()
+                    .uri(URI.create(baseUrl + "/accounts" + query))
+                    .header("X-API-KEY", apiKey)
+                    .retrieve()
+                    .bodyToMono(new ParameterizedTypeReference<Map<String, Object>>() {
+                    })
+                    .block();
+            if (body == null) break;
+            Object results = body.get("results");
+            if (results instanceof List<?> list) {
+                all.addAll((List<Map<String, Object>>) list);
+            }
+            query = nextQuery(body.get("next"), baseUrl + "/accounts");
+        }
+        return all;
+    }
+
+    /**
+     * Normaliza o cursor da próxima página. A API já devolveu {@code next} como
+     * query string pronta ("?accountId=...&amp;after=...") e como URL absoluta,
+     * dependendo do recurso e da versão — e um dia pode devolver caminho
+     * relativo. Sem tratar os três, a URL montada viraria
+     * ".../v2/transactionshttps://api.pluggy.ai/..." e o sync morreria na
+     * segunda página, silenciosamente truncando o extrato do usuário.
+     */
+    private String nextQuery(Object next, String resourceUrl) {
+        if (next == null) return null;
+        String raw = String.valueOf(next).trim();
+        // Jackson entrega null de JSON como o texto "null" em String.valueOf
+        if (raw.isEmpty() || "null".equals(raw)) return null;
+        if (raw.startsWith("?")) return raw;
+
+        int queryStart = raw.indexOf('?');
+        if (queryStart >= 0) {
+            // URL absoluta ou caminho: só a query interessa, o recurso é o mesmo
+            return raw.substring(queryStart);
+        }
+        // sem "?" não há como reaproveitar: parar é melhor do que repetir a
+        // primeira página em laço
+        log.warn("Cursor de paginação do Pluggy em formato não reconhecido para {}; encerrando a leitura",
+                resourceUrl.substring(resourceUrl.lastIndexOf('/') + 1));
+        return null;
     }
 
     /**
@@ -107,9 +223,7 @@ public class PluggyClient {
             if (results instanceof List<?> list) {
                 all.addAll((List<Map<String, Object>>) list);
             }
-            Object next = body.get("next");
-            query = next == null ? null : String.valueOf(next);
-            if ("null".equals(query)) query = null;
+            query = nextQuery(body.get("next"), baseUrl + "/v2/transactions");
         }
         return all;
     }
