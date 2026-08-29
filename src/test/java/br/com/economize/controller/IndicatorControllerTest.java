@@ -1,7 +1,10 @@
 package br.com.economize.controller;
 
+import br.com.economize.config.CorsConfig;
+import br.com.economize.config.MarketCatalogProperties;
 import br.com.economize.dto.Indicator;
 import br.com.economize.service.IndicatorService;
+import br.com.economize.service.catalog.MarketCatalogService;
 import br.com.economize.security.JwtAuthenticationFilter;
 import br.com.economize.security.JwtUtil;
 import br.com.economize.security.SecurityConfig;
@@ -20,11 +23,14 @@ import java.math.BigDecimal;
 import java.util.List;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @WebFluxTest(IndicatorController.class)
-@Import({ SecurityConfig.class, JwtUtil.class, JwtAuthenticationFilter.class })
+@Import({ CorsConfig.class, SecurityConfig.class, JwtUtil.class, JwtAuthenticationFilter.class, MarketCatalogProperties.class })
 class IndicatorControllerTest {
 
         @Autowired
@@ -35,6 +41,9 @@ class IndicatorControllerTest {
 
         @MockitoBean
         private IndicatorService indicatorService;
+
+        @MockitoBean
+        private MarketCatalogService catalogService;
 
         @Test
         @DisplayName("GET /all - Deve retornar lista de indicadores com sucesso")
@@ -54,7 +63,71 @@ class IndicatorControllerTest {
                                 .expectStatus().isOk()
                                 .expectBody()
                                 .jsonPath("$[0].code").isEqualTo("USD")
-                                .jsonPath("$[0].buy").isEqualTo(5.00);
+                                .jsonPath("$[0].buy").isEqualTo(5.00)
+                                // a marca interna de procedência do preço não
+                                // pode vazar para o contrato do APK publicado
+                                .jsonPath("$[0].stale").doesNotExist();
+        }
+
+        @Test
+        @DisplayName("GET /search - Ticker único (uso do APK publicado) continua igual")
+        void shouldSearchSingleTicker() {
+                Indicator ind = new Indicator();
+                ind.setCode("PETR4");
+                when(indicatorService.searchIndicators("PETR4")).thenReturn(Mono.just(List.of(ind)));
+
+                webTestClient.get()
+                                .uri("/api/v1/indicators/search?query=PETR4")
+                                .header(HttpHeaders.AUTHORIZATION, bearerToken())
+                                .exchange()
+                                .expectStatus().isOk()
+                                .expectBody()
+                                .jsonPath("$[0].code").isEqualTo("PETR4");
+        }
+
+        @Test
+        @DisplayName("GET /search - Termo é normalizado antes de virar requisição ao provedor")
+        void shouldNormalizeSearchTerm() {
+                when(indicatorService.searchIndicators("PETR4,VALE3")).thenReturn(Mono.just(List.of()));
+
+                // caixa, espaço e repetição não podem virar cotação paga duas vezes
+                webTestClient.get()
+                                .uri("/api/v1/indicators/search?query=petr4, vale3 ,PETR4")
+                                .header(HttpHeaders.AUTHORIZATION, bearerToken())
+                                .exchange()
+                                .expectStatus().isOk();
+
+                verify(indicatorService).searchIndicators("PETR4,VALE3");
+        }
+
+        @Test
+        @DisplayName("GET /search - Acima do teto de tickers responde 400 em ProblemDetail")
+        void shouldRejectSearchAboveTickerCap() {
+                // uma chamada dessas custaria 11 requisições da cota diária da Brapi
+                webTestClient.get()
+                                .uri("/api/v1/indicators/search?query="
+                                                + "AAA3,BBB3,CCC3,DDD3,EEE3,FFF3,GGG3,HHH3,III3,JJJ3,KKK3")
+                                .header(HttpHeaders.AUTHORIZATION, bearerToken())
+                                .exchange()
+                                .expectStatus().isBadRequest()
+                                .expectBody()
+                                .jsonPath("$.title").isEqualTo("Requisição Inválida")
+                                .jsonPath("$.status").isEqualTo(400)
+                                .jsonPath("$.detail").value(org.hamcrest.Matchers.containsString("10 ativos"));
+
+                verify(indicatorService, never()).searchIndicators(anyString());
+        }
+
+        @Test
+        @DisplayName("GET /search - Busca vazia é erro do cliente, não chamada ao provedor")
+        void shouldRejectEmptySearch() {
+                webTestClient.get()
+                                .uri("/api/v1/indicators/search?query=,,")
+                                .header(HttpHeaders.AUTHORIZATION, bearerToken())
+                                .exchange()
+                                .expectStatus().isBadRequest();
+
+                verify(indicatorService, never()).searchIndicators(anyString());
         }
 
         @Test
