@@ -1,124 +1,102 @@
 package br.com.economize.service;
 
 import br.com.economize.dto.NewsArticle;
+import br.com.economize.dto.NewsQuery;
 import br.com.economize.dto.NewsResponse;
-import br.com.economize.dto.Source;
-import com.rometools.rome.feed.synd.SyndEntry;
-import com.rometools.rome.feed.synd.SyndFeed;
-import com.rometools.rome.io.SyndFeedInput;
+import br.com.economize.dto.NewsSourceInfo;
+import br.com.economize.dto.NewsSourcesResponse;
+import br.com.economize.service.news.NewsProvider;
+import br.com.economize.service.news.NewsProviderRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
-import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
-import reactor.core.scheduler.Schedulers;
 
-import java.io.StringReader;
-import java.time.ZoneId;
-import java.time.format.DateTimeFormatter;
+import java.time.Instant;
+import java.time.OffsetDateTime;
 import java.util.Comparator;
 import java.util.List;
-import java.util.Map;
 
 @Slf4j
 @Service
 public class NewsService {
 
-        private final WebClient webClient;
+    private final NewsProviderRegistry registry;
 
-        // Fontes de notícias financeiras via RSS
-        private static final Map<String, String> RSS_FEEDS = Map.of(
-                        "InfoMoney", "https://www.infomoney.com.br/feed/",
-                        "CoinTelegraph", "https://br.cointelegraph.com/rss_feed",
-                        "InvestNews", "https://investnews.com.br/feed/");
+    // publishedAt sem data (ou inválida) vai para o fim da lista, nunca para NPE
+    private static final Comparator<NewsArticle> BY_PUBLISHED_DESC = Comparator
+            .comparing(NewsService::publishedInstant, Comparator.reverseOrder());
 
-        public NewsService(WebClient webClient) {
-                this.webClient = webClient;
+    public NewsService(NewsProviderRegistry registry) {
+        this.registry = registry;
+    }
+
+    /**
+     * Agrega as manchetes das fontes selecionadas pelos filtros do
+     * {@link NewsQuery}. A chave do cache é o próprio query normalizado:
+     * requisições com filtros diferentes não compartilham entrada.
+     */
+    @Cacheable("news")
+    public Mono<NewsResponse> getTopHeadlines(NewsQuery query) {
+        List<NewsProvider> selected = registry.select(query.sourceIds(), query.region(), query.category());
+        log.info("Agregando noticias de {} fontes (filtros: {})", selected.size(), query);
+
+        return Flux.fromIterable(selected)
+                .flatMap(NewsProvider::fetch)
+                .filter(article -> matchesText(article, query.q()))
+                // fontes republicam umas às outras; o link identifica o artigo
+                .distinct(NewsService::dedupeKey)
+                .sort(BY_PUBLISHED_DESC)
+                .transform(flux -> query.limit() != null ? flux.take(query.limit()) : flux)
+                .collectList()
+                .map(NewsService::toResponse)
+                .onErrorResume(e -> {
+                    log.error("Falha catastrófica ao buscar notícias: {}", e.getMessage());
+                    return Mono.just(toResponse(List.of()));
+                });
+    }
+
+    /** Fontes disponíveis para o app montar a configuração de preferências. */
+    public NewsSourcesResponse getSources() {
+        List<NewsSourceInfo> sources = registry.getAll().stream()
+                .map(p -> new NewsSourceInfo(p.getId(), p.getName(), p.getRegion(), p.getCategory()))
+                .toList();
+        return new NewsSourcesResponse("ok", sources);
+    }
+
+    private static NewsResponse toResponse(List<NewsArticle> articles) {
+        NewsResponse response = new NewsResponse();
+        response.setStatus("ok");
+        response.setTotalResults(articles.size());
+        response.setArticles(articles);
+        return response;
+    }
+
+    private static boolean matchesText(NewsArticle article, String q) {
+        if (q == null) {
+            return true;
         }
+        return containsIgnoreCase(article.getTitle(), q) || containsIgnoreCase(article.getDescription(), q);
+    }
 
-        @Cacheable("news")
-        public Mono<NewsResponse> getTopHeadlines(String country, String category) {
-                log.info("Iniciando agregacao de noticias via RSS Feeds...");
+    private static boolean containsIgnoreCase(String text, String lowerCaseTerm) {
+        return text != null && text.toLowerCase().contains(lowerCaseTerm);
+    }
 
-                return Flux.fromIterable(RSS_FEEDS.entrySet())
-                                .flatMap(entry -> fetchAndParseRss(entry.getKey(), entry.getValue()))
-                                .sort(Comparator.comparing(NewsArticle::getPublishedAt).reversed())
-                                .collectList()
-                                .map(articles -> {
-                                        NewsResponse response = new NewsResponse();
-                                        response.setStatus("ok");
-                                        response.setTotalResults(articles.size());
-                                        response.setArticles(articles);
-                                        return response;
-                                })
-                                .onErrorResume(e -> {
-                                        log.error("Falha catastrófica ao buscar notícias: {}", e.getMessage());
-                                        return Mono.just(new NewsResponse()); // Retorna vazio em caso de falha total
-                                });
+    private static String dedupeKey(NewsArticle article) {
+        if (article.getUrl() != null && !article.getUrl().isBlank()) {
+            return article.getUrl();
         }
+        String sourceName = article.getSource() != null ? article.getSource().getName() : "";
+        return sourceName + "|" + article.getTitle();
+    }
 
-        @SuppressWarnings("null")
-        private Flux<NewsArticle> fetchAndParseRss(String sourceName, String url) {
-                return webClient.get()
-                                .uri(url)
-                                .retrieve()
-                                .bodyToMono(String.class)
-                                .publishOn(Schedulers.boundedElastic())
-                                .flatMapMany(xml -> {
-                                        try {
-                                                SyndFeedInput input = new SyndFeedInput();
-                                                SyndFeed feed = input.build(new StringReader(xml));
-
-                                                List<NewsArticle> articles = feed.getEntries().stream()
-                                                                .limit(10) // Pega as 10 últimas de cada fonte
-                                                                .map(entry -> mapToNewsArticle(sourceName, entry))
-                                                                .toList();
-
-                                                return Flux.fromIterable(articles);
-                                        } catch (Exception e) {
-                                                log.warn("Erro ao fazer parse do RSS da fonte {}: {}", sourceName,
-                                                                e.getMessage());
-                                                return Flux.empty();
-                                        }
-                                })
-                                .onErrorResume(e -> {
-                                        log.warn("Erro ao buscar RSS da fonte {}: {}", sourceName, e.getMessage());
-                                        return Flux.empty();
-                                });
+    private static Instant publishedInstant(NewsArticle article) {
+        try {
+            return OffsetDateTime.parse(article.getPublishedAt()).toInstant();
+        } catch (Exception e) {
+            return Instant.EPOCH;
         }
-
-        private NewsArticle mapToNewsArticle(String sourceName, SyndEntry entry) {
-                NewsArticle article = new NewsArticle();
-                article.setTitle(entry.getTitle());
-
-                // Limpa tags HTML da descrição
-                String description = entry.getDescription() != null
-                                ? entry.getDescription().getValue().replaceAll("<[^>]*>", "").trim()
-                                : "";
-                // Limita o tamanho da descrição
-                if (description.length() > 150) {
-                        description = description.substring(0, 147) + "...";
-                }
-                article.setDescription(description);
-
-                article.setUrl(entry.getLink());
-                article.setAuthor(entry.getAuthor());
-
-                if (entry.getPublishedDate() != null) {
-                        article.setPublishedAt(entry.getPublishedDate().toInstant()
-                                        .atZone(ZoneId.systemDefault())
-                                        .format(DateTimeFormatter.ISO_OFFSET_DATE_TIME));
-                }
-
-                Source source = new Source();
-                source.setName(sourceName);
-                article.setSource(source);
-
-                if (entry.getEnclosures() != null && !entry.getEnclosures().isEmpty()) {
-                        article.setUrlToImage(entry.getEnclosures().get(0).getUrl());
-                }
-
-                return article;
-        }
+    }
 }

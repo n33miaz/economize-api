@@ -1,6 +1,8 @@
 package br.com.economize.controller;
 
+import br.com.economize.dto.NewsQuery;
 import br.com.economize.dto.NewsResponse;
+import br.com.economize.dto.NewsSourcesResponse;
 import br.com.economize.service.NewsService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -24,14 +26,31 @@ public class NewsController {
         this.newsService = newsService;
     }
 
-    @Operation(summary = "Manchetes Principais", description = "Retorna as principais notícias baseadas no país e categoria.")
+    @Operation(summary = "Manchetes Principais", description = "Agrega as notícias mais recentes das fontes RSS configuradas. "
+            + "Todos os filtros são opcionais; sem filtros, retorna o agregado completo (comportamento original).")
     @GetMapping("/top-headlines")
     public Mono<ResponseEntity<NewsResponse>> getTopHeadlines(
-            @Parameter(description = "Sigla do país (ex: br, us)", example = "br") @RequestParam(defaultValue = "br") String country,
+            @Parameter(description = "Sigla do país (parâmetro legado, aceito e ignorado)", example = "br", deprecated = true) @RequestParam(required = false) String country,
 
-            @Parameter(description = "Categoria da notícia (ex: business, technology)", example = "business") @RequestParam(defaultValue = "business") String category) {
+            @Parameter(description = "Categoria das fontes (economia, mercados, cripto, geral). "
+                    + "Valores do contrato antigo (ex.: business) seguem aceitos e ignorados.", example = "economia") @RequestParam(required = false) String category,
 
-        return newsService.getTopHeadlines(country, category)
-                .map(response -> ResponseEntity.ok(response));
+            @Parameter(description = "IDs de fontes separados por vírgula (ver GET /news/sources)", example = "infomoney,g1-economia") @RequestParam(required = false) String sources,
+
+            @Parameter(description = "Região das fontes: br ou global", example = "br") @RequestParam(required = false) String region,
+
+            @Parameter(description = "Busca textual em título e descrição (ex.: nome de um ativo)", example = "petrobras") @RequestParam(required = false) String q,
+
+            @Parameter(description = "Máximo de artigos na resposta; sem valor, retorna tudo", example = "20") @RequestParam(required = false) Integer limit) {
+
+        return newsService.getTopHeadlines(NewsQuery.of(sources, region, category, q, limit))
+                .map(ResponseEntity::ok);
+    }
+
+    @Operation(summary = "Fontes de Notícias", description = "Lista as fontes disponíveis (id, nome, região, categoria) "
+            + "para o app montar a configuração de preferências.")
+    @GetMapping("/sources")
+    public ResponseEntity<NewsSourcesResponse> getSources() {
+        return ResponseEntity.ok(newsService.getSources());
     }
 }

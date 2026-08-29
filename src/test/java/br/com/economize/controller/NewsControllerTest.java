@@ -1,7 +1,11 @@
 package br.com.economize.controller;
 
+import br.com.economize.config.CorsConfig;
 import br.com.economize.dto.NewsArticle;
+import br.com.economize.dto.NewsQuery;
 import br.com.economize.dto.NewsResponse;
+import br.com.economize.dto.NewsSourceInfo;
+import br.com.economize.dto.NewsSourcesResponse;
 import br.com.economize.dto.Source;
 import br.com.economize.service.NewsService;
 import br.com.economize.security.JwtAuthenticationFilter;
@@ -9,6 +13,7 @@ import br.com.economize.security.JwtUtil;
 import br.com.economize.security.SecurityConfig;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.context.annotation.Import;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.reactive.WebFluxTest;
@@ -20,11 +25,13 @@ import reactor.core.publisher.Mono;
 
 import java.util.List;
 
-import static org.mockito.ArgumentMatchers.anyString;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @WebFluxTest(NewsController.class)
-@Import({SecurityConfig.class, JwtUtil.class, JwtAuthenticationFilter.class})
+@Import({ CorsConfig.class, SecurityConfig.class, JwtUtil.class, JwtAuthenticationFilter.class })
 class NewsControllerTest {
 
     @Autowired
@@ -36,23 +43,27 @@ class NewsControllerTest {
     @MockitoBean
     private NewsService newsService;
 
-    @Test
-    @DisplayName("GET /top-headlines - Deve retornar notícias com sucesso")
-    void shouldReturnTopHeadlines() {
+    private NewsResponse mockResponse() {
         NewsArticle article = new NewsArticle();
         article.setTitle("Mercado sobe hoje");
         article.setDescription("Bolsa de valores fecha em alta.");
         Source source = new Source();
+        source.setId("infomoney");
         source.setName("InfoMoney");
         article.setSource(source);
 
-        NewsResponse mockResponse = new NewsResponse();
-        mockResponse.setStatus("ok");
-        mockResponse.setTotalResults(1);
-        mockResponse.setArticles(List.of(article));
+        NewsResponse response = new NewsResponse();
+        response.setStatus("ok");
+        response.setTotalResults(1);
+        response.setArticles(List.of(article));
+        return response;
+    }
 
-        when(newsService.getTopHeadlines(anyString(), anyString()))
-                .thenReturn(Mono.just(mockResponse));
+    @Test
+    @DisplayName("GET /top-headlines - Contrato antigo (country/category) segue funcionando")
+    void shouldKeepLegacyContractWorking() {
+        when(newsService.getTopHeadlines(any(NewsQuery.class)))
+                .thenReturn(Mono.just(mockResponse()));
 
         webTestClient.get()
                 .uri(uriBuilder -> uriBuilder
@@ -68,19 +79,75 @@ class NewsControllerTest {
                 .jsonPath("$.status").isEqualTo("ok")
                 .jsonPath("$.articles[0].title").isEqualTo("Mercado sobe hoje")
                 .jsonPath("$.articles[0].source.name").isEqualTo("InfoMoney");
+
+        // categoria legada "business" não pode virar filtro real
+        ArgumentCaptor<NewsQuery> captor = ArgumentCaptor.forClass(NewsQuery.class);
+        verify(newsService).getTopHeadlines(captor.capture());
+        assertThat(captor.getValue().category()).isNull();
+        assertThat(captor.getValue().sources()).isNull();
     }
 
     @Test
-    @DisplayName("GET /top-headlines - Deve retornar erro 500 quando API Key não configurada")
+    @DisplayName("GET /top-headlines - Novos filtros são normalizados e repassados ao serviço")
+    void shouldForwardNewFiltersToService() {
+        when(newsService.getTopHeadlines(any(NewsQuery.class)))
+                .thenReturn(Mono.just(mockResponse()));
+
+        webTestClient.get()
+                .uri(uriBuilder -> uriBuilder
+                        .path("/api/v1/news/top-headlines")
+                        .queryParam("sources", "infomoney,g1-economia")
+                        .queryParam("region", "BR")
+                        .queryParam("category", "cripto")
+                        .queryParam("q", "Petrobras")
+                        .queryParam("limit", "5")
+                        .build())
+                .header(HttpHeaders.AUTHORIZATION, bearerToken())
+                .exchange()
+                .expectStatus().isOk();
+
+        ArgumentCaptor<NewsQuery> captor = ArgumentCaptor.forClass(NewsQuery.class);
+        verify(newsService).getTopHeadlines(captor.capture());
+        NewsQuery query = captor.getValue();
+        assertThat(query.sources()).isEqualTo("infomoney,g1-economia");
+        assertThat(query.region()).isEqualTo("br");
+        assertThat(query.category()).isEqualTo("cripto");
+        assertThat(query.q()).isEqualTo("petrobras");
+        assertThat(query.limit()).isEqualTo(5);
+    }
+
+    @Test
+    @DisplayName("GET /top-headlines - Deve retornar erro 500 quando o serviço falhar")
     void shouldReturnErrorWhenServiceFails() {
-        when(newsService.getTopHeadlines(anyString(), anyString()))
-                .thenReturn(Mono.error(new IllegalStateException("API Key missing")));
+        when(newsService.getTopHeadlines(any(NewsQuery.class)))
+                .thenReturn(Mono.error(new IllegalStateException("falha interna")));
 
         webTestClient.get()
                 .uri("/api/v1/news/top-headlines")
                 .header(HttpHeaders.AUTHORIZATION, bearerToken())
                 .exchange()
                 .expectStatus().is5xxServerError();
+    }
+
+    @Test
+    @DisplayName("GET /sources - Deve listar as fontes disponíveis")
+    void shouldListAvailableSources() {
+        when(newsService.getSources()).thenReturn(new NewsSourcesResponse("ok", List.of(
+                new NewsSourceInfo("infomoney", "InfoMoney", "br", "economia"),
+                new NewsSourceInfo("coindesk", "CoinDesk", "global", "cripto"))));
+
+        webTestClient.get()
+                .uri("/api/v1/news/sources")
+                .header(HttpHeaders.AUTHORIZATION, bearerToken())
+                .accept(MediaType.APPLICATION_JSON)
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.status").isEqualTo("ok")
+                .jsonPath("$.sources.length()").isEqualTo(2)
+                .jsonPath("$.sources[0].id").isEqualTo("infomoney")
+                .jsonPath("$.sources[0].region").isEqualTo("br")
+                .jsonPath("$.sources[1].category").isEqualTo("cripto");
     }
 
     private String bearerToken() {
