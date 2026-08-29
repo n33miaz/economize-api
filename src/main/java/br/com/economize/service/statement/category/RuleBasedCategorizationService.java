@@ -106,7 +106,21 @@ public class RuleBasedCategorizationService {
             // Seguros
             new Rule("INSURANCE_VEHICLE", "INSURANCE", List.of("seguro auto", "seguro do carro", "seguro veicular", "porto seguro auto")),
             new Rule("INSURANCE_HOME", "INSURANCE", List.of("seguro residencial", "seguro casa")),
-            new Rule("INSURANCE_LIFE", "INSURANCE", List.of("seguro", "protecao financeira", "proteção financeira", "prestamista")),
+            // Por PALAVRA INTEIRA, e sem o plural: achado medindo a fatura de
+            // cartão no EC-113 — "seguro" como pedaço vive dentro de "PAGSEGURO",
+            // e o PagSeguro é uma das maiores maquininhas do país. Toda linha
+            // "PAGSEGURO *MERCANTE" da fatura virava Seguro de vida, e o usuário
+            // aprovando na revisão ensinava a regra errada.
+            //
+            // O plural "seguros" foi tentado junto e teve que sair: o desempate é
+            // por COMPRIMENTO ESTRITO (ver match), então "seguros" (7) vence
+            // "unimed" (6) e mandava "SEGUROS UNIMED" — empresa real de PLANO DE
+            // SAÚDE — para Seguro de vida. Sem ele, "seguro" (6) empata com
+            // "unimed" e perde por chegar depois, que é o resultado certo. E o
+            // plural não faz falta: a palavra inteira "seguro" não casa dentro de
+            // "SEGUROS" mesmo, porque a próxima letra é uma letra.
+            new Rule("INSURANCE_LIFE", "INSURANCE", 0, true,
+                    List.of("seguro", "protecao financeira", "proteção financeira", "prestamista")),
             // Cuidado pessoal
             new Rule("PERSONAL_GYM", "PERSONAL_CARE", List.of("academia", "smart fit", "smartfit", "bluefit", "crossfit", "gympass", "totalpass", "wellhub", "pilates")),
             new Rule("PERSONAL_BEAUTY", "PERSONAL_CARE", List.of("barbearia", "salao de beleza", "salão de beleza", "cabeleireiro", "manicure", "estetica", "estética", "spa ")),

@@ -21,9 +21,11 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 
 /**
- * Ordem de resolução: regra do usuário (exata > contida, criada > aprendida) →
- * keyword do sistema → fallback por tipo → sem categoria (pede ajuda na revisão).
- * A confiança decresce nessa ordem e é exposta para a UI priorizar a conferência.
+ * Ordem de resolução: perna de movimentação entre contas do titular (fato
+ * conhecido na importação, curto-circuita tudo) → regra do usuário (exata >
+ * contida, criada > aprendida) → keyword do sistema → fallback por tipo → sem
+ * categoria (pede ajuda na revisão). A confiança decresce nessa ordem e é
+ * exposta para a UI priorizar a conferência.
  */
 @Service
 @RequiredArgsConstructor
@@ -53,7 +55,46 @@ public class CategorizationEngine {
     }
 
     public Result categorize(Context ctx, String description, String type) {
+        return categorize(ctx, description, type, false);
+    }
+
+    /**
+     * Mesma resolução, sabendo que a linha é PERNA DE MOVIMENTAÇÃO ENTRE CONTAS
+     * do titular (EC-106) — hoje: crédito dentro de um cartão de crédito e o
+     * débito que o quita na conta corrente.
+     *
+     * <p><b>Perna interna é FATO ESTRUTURAL, e por isso curto-circuita a cadeia
+     * inteira</b> — regra do usuário, keyword e fallback. Não é o último degrau
+     * da resolução: é a resposta. Quem sabe, na importação, que o dinheiro só
+     * trocou de bolso do titular sabe mais do que qualquer palpite por texto.
+     *
+     * <p>Por que não bastava proteger o fallback. Como último degrau, o
+     * parâmetro só socorria a linha que não casasse mais nada — e o vocabulário
+     * de INCOME está cheio de palavras que aparecem justamente em crédito de
+     * cartão: "ESTORNO DE COMPRA" casava {@code estorno} e virava Cashback,
+     * "CREDITO ESTORNO ANUIDADE" casava {@code anuidade} e virava Tarifa
+     * bancária. A linha nascia SUGGESTED em Receitas, o usuário aprovava na fila
+     * e o {@code TransactionReviewService} gravava a regra aprendida — o ciclo
+     * de contaminação que este parâmetro dizia ter fechado, reaberto um degrau
+     * acima. Pior: quem já aprovou isso antes tem uma regra EXACT/LEARNED que
+     * roda PRIMEIRO e continuaria vencendo para sempre.
+     *
+     * <p>O preço é assumido: uma regra que o usuário criou à mão não vale para
+     * perna interna. Ela é Transferências e ponto — e é a leitura certa, porque
+     * a marca vem do tipo da conta no agregador, não de adivinhação.
+     */
+    public Result categorize(Context ctx, String description, String type, boolean internalTransfer) {
         String normalized = DescriptionNormalizer.normalize(description);
+
+        if (internalTransfer) {
+            Category transfer = ctx.seedsByKey.get(TransactionCategory.TRANSFER.name());
+            if (transfer != null && !transfer.isArchived()) {
+                return new Result(transfer, BankTransaction.CategorizedBy.FALLBACK, CONF_FALLBACK, normalized);
+            }
+            // sem o seed de Transferências, a fila de revisão é melhor destino do
+            // que a Receita errada: o usuário decide, e nada errado é aprendido
+            return new Result(null, null, null, normalized);
+        }
 
         Match match = bestRuleMatch(ctx, normalized);
         if (match != null) {

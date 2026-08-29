@@ -108,6 +108,32 @@ class RuleBasedCategorizationServiceTest {
     }
 
     /**
+     * A palavra "seguro" desempata contra o vocabulário de saúde, e é o desempate
+     * por COMPRIMENTO que decide — não a ordem de declaração. "SEGUROS UNIMED" e
+     * "UNIMED SEGUROS SAUDE" são a mesma empresa real de PLANO DE SAÚDE, e
+     * qualquer termo do vocabulário de seguro com mais letras do que "unimed"
+     * (6) rouba as duas para Seguro de vida.
+     */
+    @Test
+    void insuranceVocabularyMustNotStealTheHealthPlan() {
+        assertThat(keyOf("SEGUROS UNIMED")).isEqualTo("HEALTH_INSURANCE");
+        assertThat(keyOf("UNIMED SEGUROS SAUDE")).isEqualTo("HEALTH_INSURANCE");
+        assertThat(keyOf("PAGTO MENSAL UNIMED")).isEqualTo("HEALTH_INSURANCE");
+    }
+
+    @Test
+    void wholeWordSeguroKillsThePagseguroFalsePositive() {
+        // "seguro" como PEDAÇO vive dentro de "PAGSEGURO", uma das maiores
+        // maquininhas do país: toda compra passada nela virava Seguro de vida, e o
+        // usuário aprovando na revisão ensinava a regra errada
+        assertThat(keyOf("PAGSEGURO *MERCANTE")).isNotEqualTo("INSURANCE_LIFE");
+        assertThat(keyOf("Pagseguro *Elc")).isNotEqualTo("INSURANCE_LIFE");
+        // e o seguro de verdade, como palavra inteira, continua casando
+        assertThat(keyOf("SEGURO DE VIDA PRESTAMISTA")).isEqualTo("INSURANCE_LIFE");
+        assertThat(keyOf("DEBITO SEGURO PROTECAO FINANCEIRA")).isEqualTo("INSURANCE_LIFE");
+    }
+
+    /**
      * Um system_key com typo no vocabulário não quebra nada visivelmente — só manda
      * a transação calada para a fila de revisão. Este teste amarra o vocabulário
      * ao catálogo semeado.

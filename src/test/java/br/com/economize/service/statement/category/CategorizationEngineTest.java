@@ -6,6 +6,7 @@ import br.com.economize.model.CategoryRule;
 import br.com.economize.repository.CategoryRepository;
 import br.com.economize.repository.CategoryRuleRepository;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
@@ -134,6 +135,110 @@ class CategorizationEngineTest {
         assertThat(result.by()).isNull();
         assertThat(result.confidence()).isNull();
         assertThat(result.normalizedDescription()).isEqualTo("saldo remanescente");
+    }
+
+    @Test
+    @DisplayName("EC-113: crédito que é PERNA INTERNA cai em Transferências, nunca em Receitas")
+    void internalTransferLegNeverFallsBackToIncome() {
+        Category income = seed("INCOME", "Receitas");
+        Category transfer = seed("TRANSFER", "Transferências");
+        CategorizationEngine.Context ctx = context(List.of(), income, transfer);
+
+        // crédito dentro de um cartão: quita fatura ou estorna compra, nunca é
+        // renda. Antes disto ele virava Receita, o usuário aprovava na revisão e
+        // o motor APRENDIA "isto é Receita" — contaminando as próximas importações
+        CategorizationEngine.Result result =
+                engine.categorize(ctx, "CREDITO EM CONTA", "CREDIT", true);
+
+        assertThat(result.category()).isSameAs(transfer);
+        assertThat(result.by()).isEqualTo(BankTransaction.CategorizedBy.FALLBACK);
+        assertThat(result.confidence()).isEqualByComparingTo("0.60");
+    }
+
+    @Test
+    @DisplayName("EC-113: sem o seed de Transferências, a perna interna vai para a revisão — não para Receitas")
+    void internalTransferLegPrefersReviewQueueOverWrongIncome() {
+        CategorizationEngine.Context ctx = context(List.of(), seed("INCOME", "Receitas"));
+
+        CategorizationEngine.Result result =
+                engine.categorize(ctx, "CREDITO EM CONTA", "CREDIT", true);
+
+        assertThat(result.resolved()).isFalse();
+        assertThat(result.normalizedDescription()).isEqualTo("credito em conta");
+    }
+
+    @Test
+    @DisplayName("EC-113: crédito interno COM keyword de receita ainda é Transferências — o caso que faltava")
+    void internalTransferLegBeatsIncomeKeyword() {
+        Category income = seed("INCOME", "Receitas");
+        Category cashback = seed("INCOME_CASHBACK", "Cashback");
+        Category fees = seed("FEES_BANK", "Tarifas bancárias");
+        Category transfer = seed("TRANSFER", "Transferências");
+        CategorizationEngine.Context ctx = context(List.of(), income, cashback, fees, transfer);
+
+        // "estorno", "reembolso", "cashback", "devolução" e "rendimento" são
+        // keywords de INCOME: como último degrau, a marca de perna interna nunca
+        // era alcançada por um crédito de cartão com qualquer uma delas
+        assertThat(engine.categorize(ctx, "ESTORNO DE COMPRA", "CREDIT", true).category())
+                .isSameAs(transfer);
+        assertThat(engine.categorize(ctx, "CREDITO ESTORNO ANUIDADE", "CREDIT", true).category())
+                .isSameAs(transfer);
+        assertThat(engine.categorize(ctx, "REEMBOLSO CASHBACK NUBANK", "CREDIT", true).category())
+                .isSameAs(transfer);
+
+        // e a MESMA descrição, quando não é perna interna, continua caindo onde
+        // sempre caiu: o curto-circuito é do fato, não do texto
+        assertThat(engine.categorize(ctx, "ESTORNO DE COMPRA", "CREDIT", false).category())
+                .isSameAs(cashback);
+        assertThat(engine.categorize(ctx, "CREDITO ESTORNO ANUIDADE", "CREDIT", false).category())
+                .isSameAs(fees);
+    }
+
+    @Test
+    @DisplayName("EC-113: regra APRENDIDA apontando para Receitas não vence a perna interna")
+    void internalTransferLegBeatsLearnedRulePointingToIncome() {
+        Category income = seed("INCOME", "Receitas");
+        Category transfer = seed("TRANSFER", "Transferências");
+        // exatamente a regra que a contaminação anterior gravava: o usuário
+        // aprovou "pagamento efetuado" como Receita antes desta correção existir
+        CategoryRule contaminada = rule("pagamento efetuado",
+                CategoryRule.MatchType.EXACT, CategoryRule.Origin.LEARNED, income);
+        CategorizationEngine.Context ctx = context(List.of(contaminada), income, transfer);
+
+        CategorizationEngine.Result result =
+                engine.categorize(ctx, "PAGAMENTO EFETUADO", "CREDIT", true);
+
+        // a regra aprendida roda PRIMEIRO na cadeia normal e venceria para
+        // sempre; com o curto-circuito ela nem é consultada
+        assertThat(result.category()).isSameAs(transfer);
+        assertThat(result.by()).isEqualTo(BankTransaction.CategorizedBy.FALLBACK);
+        assertThat(contaminada.getHits()).isZero();
+        assertThat(ctx.getDirtyRules()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("EC-113: nem regra CRIADA À MÃO vence a perna interna — a marca é fato, não palpite")
+    void internalTransferLegBeatsUserMadeRule() {
+        Category transfer = seed("TRANSFER", "Transferências");
+        Category minhaReceita = userCategory("Minha receita");
+        CategoryRule doUsuario = rule("estorno de compra",
+                CategoryRule.MatchType.EXACT, CategoryRule.Origin.USER, minhaReceita);
+        CategorizationEngine.Context ctx = context(List.of(doUsuario), transfer);
+
+        assertThat(engine.categorize(ctx, "ESTORNO DE COMPRA", "CREDIT", true).category())
+                .isSameAs(transfer);
+        // e a mesma regra continua mandando na linha que NÃO é perna interna
+        assertThat(engine.categorize(ctx, "ESTORNO DE COMPRA", "CREDIT", false).category())
+                .isSameAs(minhaReceita);
+    }
+
+    @Test
+    @DisplayName("a sobrecarga de 3 argumentos segue valendo: linha comum não é perna interna")
+    void threeArgOverloadKeepsTheIncomeFallback() {
+        Category income = seed("INCOME", "Receitas");
+        CategorizationEngine.Context ctx = context(List.of(), income, seed("TRANSFER", "Transferências"));
+
+        assertThat(engine.categorize(ctx, "SALDO REMANESCENTE", "CREDIT").category()).isSameAs(income);
     }
 
     private CategorizationEngine.Context context(List<CategoryRule> rules, Category... seeds) {
