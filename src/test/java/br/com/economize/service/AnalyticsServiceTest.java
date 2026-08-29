@@ -1,5 +1,6 @@
 package br.com.economize.service;
 
+import br.com.economize.dto.analytics.AnalysisWindow;
 import br.com.economize.dto.analytics.MonthlyAnalyticsResponse;
 import br.com.economize.model.Category;
 import br.com.economize.model.User;
@@ -13,6 +14,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.YearMonth;
 import java.time.ZoneOffset;
@@ -85,7 +87,7 @@ class AnalyticsServiceTest {
                         new Row(foodId, "PAYMENT", new BigDecimal("-80.00"), 1)),
                 List.of(), List.of(), 4L);
 
-        MonthlyAnalyticsResponse response = service.monthly(EMAIL, month);
+        MonthlyAnalyticsResponse response = service.analyze(EMAIL, AnalysisWindow.ofMonth(month));
 
         assertThat(response.month()).isEqualTo("2026-07");
         assertThat(response.totalIncome()).isEqualByComparingTo("5030.00");
@@ -109,7 +111,7 @@ class AnalyticsServiceTest {
                 List.of(new Row(food.getId(), "DEBIT", new BigDecimal("-200.00"), 2)),
                 List.of(food, health, salary), 0L);
 
-        MonthlyAnalyticsResponse response = service.monthly(EMAIL, month);
+        MonthlyAnalyticsResponse response = service.analyze(EMAIL, AnalysisWindow.ofMonth(month));
 
         assertThat(response.categories())
                 .extracting(MonthlyAnalyticsResponse.CategorySlice::categoryId)
@@ -134,7 +136,7 @@ class AnalyticsServiceTest {
                 List.of(new Row(null, "DEBIT", new BigDecimal("-45.00"), 1)),
                 List.of(), List.of(), 0L);
 
-        MonthlyAnalyticsResponse response = service.monthly(EMAIL, month);
+        MonthlyAnalyticsResponse response = service.analyze(EMAIL, AnalysisWindow.ofMonth(month));
 
         assertThat(response.categories()).hasSize(1);
         MonthlyAnalyticsResponse.CategorySlice slice = response.categories().get(0);
@@ -156,7 +158,7 @@ class AnalyticsServiceTest {
                 List.of(new Row(delivery.getId(), "DEBIT", new BigDecimal("-300.00"), 5)),
                 List.of(food, delivery, market), 0L);
 
-        MonthlyAnalyticsResponse response = service.monthly(EMAIL, month);
+        MonthlyAnalyticsResponse response = service.analyze(EMAIL, AnalysisWindow.ofMonth(month));
 
         assertThat(response.categories()).hasSize(1);
         MonthlyAnalyticsResponse.CategorySlice parent = response.categories().get(0);
@@ -181,7 +183,7 @@ class AnalyticsServiceTest {
                         new Row(food.getId(), "DEBIT", new BigDecimal("-20.00"), 1)),
                 List.of(), List.of(food, delivery), 0L);
 
-        MonthlyAnalyticsResponse response = service.monthly(EMAIL, month);
+        MonthlyAnalyticsResponse response = service.analyze(EMAIL, AnalysisWindow.ofMonth(month));
 
         MonthlyAnalyticsResponse.CategorySlice parent = response.categories().get(0);
         assertThat(parent.expenseTotal()).isEqualByComparingTo("200.00");
@@ -203,7 +205,7 @@ class AnalyticsServiceTest {
                         new Row(health.getId(), "DEBIT", new BigDecimal("-500.00"), 4)),
                 List.of(food, health), 0L);
 
-        MonthlyAnalyticsResponse response = service.monthly(EMAIL, month);
+        MonthlyAnalyticsResponse response = service.analyze(EMAIL, AnalysisWindow.ofMonth(month));
 
         // a fatia zerada vai para o fim da lista, ordenada por gasto do mês
         assertThat(response.categories())
@@ -229,7 +231,7 @@ class AnalyticsServiceTest {
                         new Row(delivery.getId(), "DEBIT", new BigDecimal("-180.00"), 6)),
                 List.of(food, delivery, market), 0L);
 
-        MonthlyAnalyticsResponse response = service.monthly(EMAIL, month);
+        MonthlyAnalyticsResponse response = service.analyze(EMAIL, AnalysisWindow.ofMonth(month));
 
         MonthlyAnalyticsResponse.CategorySlice parent = response.categories().get(0);
         assertThat(parent.children())
@@ -250,11 +252,63 @@ class AnalyticsServiceTest {
                 List.of(new Row(salary.getId(), "CREDIT", new BigDecimal("5000.00"), 1)),
                 List.of(food, salary), 0L);
 
-        MonthlyAnalyticsResponse response = service.monthly(EMAIL, month);
+        MonthlyAnalyticsResponse response = service.analyze(EMAIL, AnalysisWindow.ofMonth(month));
 
         assertThat(response.categories())
                 .extracting(MonthlyAnalyticsResponse.CategorySlice::categoryId)
                 .containsExactly(food.getId());
+    }
+
+    @Test
+    void anchoredWindowAggregatesTheWindowAndComparesWithTheSameLengthBefore() {
+        // ciclo do salário 12/07 -> 12/08 (32 dias): o comparável é 10/06 -> 11/07,
+        // não junho do calendário — senão a variação mudaria só por causa do
+        // tamanho do mês
+        Category food = systemCategory("Alimentação");
+        AnalysisWindow window = AnalysisWindow.of(LocalDate.of(2026, 7, 12), LocalDate.of(2026, 8, 12));
+        when(userRepository.findByEmail(EMAIL)).thenReturn(Optional.of(user));
+        when(bankTransactionRepository.sumByCategory(user.getId(),
+                utc(2026, 7, 12), utc(2026, 8, 13)))
+                .thenReturn(List.of(new Row(food.getId(), "DEBIT", new BigDecimal("-600.00"), 8)));
+        when(bankTransactionRepository.sumByCategory(user.getId(),
+                utc(2026, 6, 10), utc(2026, 7, 12)))
+                .thenReturn(List.of(new Row(food.getId(), "DEBIT", new BigDecimal("-500.00"), 7)));
+        when(categoryRepository.findVisibleTo(user.getId())).thenReturn(List.of(food));
+        when(bankTransactionRepository.countByUserIdAndReviewStatusIn(eq(user.getId()), anyCollection()))
+                .thenReturn(0L);
+
+        MonthlyAnalyticsResponse response = service.analyze(EMAIL, window);
+
+        // janela ancorada não pertence a mês nenhum: o rótulo some e o período
+        // viaja em start/end
+        assertThat(response.month()).isNull();
+        assertThat(response.start()).isEqualTo(LocalDate.of(2026, 7, 12));
+        assertThat(response.end()).isEqualTo(LocalDate.of(2026, 8, 12));
+        assertThat(response.totalExpense()).isEqualByComparingTo("600.00");
+
+        assertThat(response.previous().month()).isNull();
+        assertThat(response.previous().start()).isEqualTo(LocalDate.of(2026, 6, 10));
+        assertThat(response.previous().end()).isEqualTo(LocalDate.of(2026, 7, 11));
+        assertThat(response.previous().totalExpense()).isEqualByComparingTo("500.00");
+
+        MonthlyAnalyticsResponse.CategorySlice slice = response.categories().get(0);
+        assertThat(slice.previousExpenseTotal()).isEqualByComparingTo("500.00");
+        assertThat(slice.expenseDeltaPct()).isEqualByComparingTo("20.0");
+    }
+
+    @Test
+    void monthModeStillReportsTheCalendarBoundsAndTheCalendarComparison() {
+        stubMonthly(List.of(new Row(null, "DEBIT", new BigDecimal("-45.00"), 1)),
+                List.of(), List.of(), 0L);
+
+        MonthlyAnalyticsResponse response = service.analyze(EMAIL, AnalysisWindow.ofMonth(month));
+
+        assertThat(response.month()).isEqualTo("2026-07");
+        assertThat(response.start()).isEqualTo(LocalDate.of(2026, 7, 1));
+        assertThat(response.end()).isEqualTo(LocalDate.of(2026, 7, 31));
+        assertThat(response.previous().month()).isEqualTo("2026-06");
+        assertThat(response.previous().start()).isEqualTo(LocalDate.of(2026, 6, 1));
+        assertThat(response.previous().end()).isEqualTo(LocalDate.of(2026, 6, 30));
     }
 
     @Test
@@ -299,6 +353,10 @@ class AnalyticsServiceTest {
         when(categoryRepository.findVisibleTo(user.getId())).thenReturn(catalog);
         when(bankTransactionRepository.countByUserIdAndReviewStatusIn(eq(user.getId()), anyCollection()))
                 .thenReturn(pendingCount);
+    }
+
+    private OffsetDateTime utc(int year, int month, int dayOfMonth) {
+        return LocalDate.of(year, month, dayOfMonth).atStartOfDay().atOffset(ZoneOffset.UTC);
     }
 
     private Category systemCategory(String name) {

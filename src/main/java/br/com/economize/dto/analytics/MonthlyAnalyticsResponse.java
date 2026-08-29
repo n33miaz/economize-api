@@ -1,11 +1,19 @@
 package br.com.economize.dto.analytics;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
 
 public record MonthlyAnalyticsResponse(
+        // rótulo YYYY-MM quando a consulta foi por mês; NULO na janela ancorada
+        // (EC-092), que por definição não pertence a um mês do calendário
         String month,
+        // sempre preenchidos, nos dois modos: são a única resposta honesta a
+        // "qual período eu estou vendo?" e o app monta o cabeçalho com eles.
+        // Datas inclusivas.
+        LocalDate start,
+        LocalDate end,
         BigDecimal totalIncome,
         BigDecimal totalExpense,
         BigDecimal net,
@@ -13,8 +21,14 @@ public record MonthlyAnalyticsResponse(
         List<CategorySlice> categories,
         long pendingReviewCount
 ) {
+    /**
+     * Totais do período comparável — mês anterior do calendário no modo mês,
+     * janela anterior do MESMO tamanho no modo janela.
+     */
     public record MonthTotals(
             String month,
+            LocalDate start,
+            LocalDate end,
             BigDecimal totalIncome,
             BigDecimal totalExpense,
             BigDecimal net

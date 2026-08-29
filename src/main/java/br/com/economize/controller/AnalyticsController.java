@@ -1,5 +1,6 @@
 package br.com.economize.controller;
 
+import br.com.economize.dto.analytics.AnalysisWindow;
 import br.com.economize.dto.analytics.MonthlyAnalyticsResponse;
 import br.com.economize.service.AnalyticsService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -22,14 +23,27 @@ public class AnalyticsController {
 
     private final AnalyticsService analyticsService;
 
-    @Operation(summary = "Consolidação de um mês",
-            description = "Entradas, saídas, quebra por categoria e delta vs mês anterior. Default: mês atual.")
+    @Operation(summary = "Consolidação de um período",
+            description = "Entradas, saídas, quebra por categoria e delta vs período anterior. "
+                    + "Aceita `month=YYYY-MM` (mês do calendário, comparado com o mês anterior) OU o par "
+                    + "`start`/`end` em datas ISO `YYYY-MM-DD` inclusivas (janela ancorada, ex.: "
+                    + "2026-07-12 a 2026-08-12, comparada com a janela imediatamente anterior de MESMO "
+                    + "tamanho). Sem nenhum parâmetro: mês atual. Mês e janela juntos, janela pela metade, "
+                    + "`end` antes de `start` ou janela acima de 366 dias respondem 400 (ProblemDetail). "
+                    + "A data considerada é a de lançamento informada pelo extrato.")
     @GetMapping("/monthly")
     public Mono<MonthlyAnalyticsResponse> monthly(
             @AuthenticationPrincipal String email,
-            @RequestParam(required = false) String month) {
-        YearMonth parsed = parseMonth(month);
-        return Mono.fromCallable(() -> analyticsService.monthly(email, parsed))
+            @RequestParam(required = false) String month,
+            @RequestParam(required = false) String start,
+            @RequestParam(required = false) String end) {
+        AnalysisWindow requested = AnalysisWindow.resolve(month, start, end);
+        // sem parâmetro nenhum a tela continua abrindo no mês corrente, com a
+        // mesma referência de fuso das janelas de agregação
+        AnalysisWindow window = requested != null
+                ? requested
+                : AnalysisWindow.ofMonth(YearMonth.now(ZoneOffset.UTC));
+        return Mono.fromCallable(() -> analyticsService.analyze(email, window))
                 .subscribeOn(Schedulers.boundedElastic());
     }
 
@@ -38,17 +52,5 @@ public class AnalyticsController {
     public Mono<List<String>> months(@AuthenticationPrincipal String email) {
         return Mono.fromCallable(() -> analyticsService.monthsWithData(email))
                 .subscribeOn(Schedulers.boundedElastic());
-    }
-
-    private YearMonth parseMonth(String month) {
-        if (month == null || month.isBlank()) {
-            // mesma referência de fuso das janelas de agregação
-            return YearMonth.now(ZoneOffset.UTC);
-        }
-        try {
-            return YearMonth.parse(month);
-        } catch (Exception e) {
-            throw new IllegalArgumentException("Mês inválido — use o formato YYYY-MM");
-        }
     }
 }

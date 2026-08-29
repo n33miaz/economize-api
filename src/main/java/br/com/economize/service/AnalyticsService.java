@@ -1,5 +1,6 @@
 package br.com.economize.service;
 
+import br.com.economize.dto.analytics.AnalysisWindow;
 import br.com.economize.dto.analytics.MonthlyAnalyticsResponse;
 import br.com.economize.model.BankTransaction;
 import br.com.economize.model.Category;
@@ -27,9 +28,18 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 
 /**
- * Consolidação mensal: entradas vs saídas, quebra por categoria e comparação com
- * o mês anterior — os números da tela de Análise. Janela em UTC porque os parsers
- * gravam as datas do extrato sem fuso (meia-noite UTC).
+ * Consolidação de um período: entradas vs saídas, quebra por categoria e
+ * comparação com o período anterior — os números da tela de Análise. Janela em
+ * UTC porque os parsers gravam as datas do extrato sem fuso (meia-noite UTC).
+ *
+ * <p>O período é sempre um {@link AnalysisWindow}: mês do calendário ou janela
+ * ancorada no dia do salário (EC-092). A agregação não sabe a diferença — quem
+ * decide o recorte e o comparável é a janela.
+ *
+ * <p>A data considerada é a {@code date} da transação, isto é, a data de
+ * LANÇAMENTO que o extrato informou (DTPOSTED no OFX, coluna "Data" no CSV/XLSX,
+ * {@code date} no conector). Não existe data de liquidação no modelo: nenhuma
+ * fonte de importação entrega as duas.
  */
 @Service
 @RequiredArgsConstructor
@@ -42,11 +52,12 @@ public class AnalyticsService {
     private final CategoryRepository categoryRepository;
     private final UserRepository userRepository;
 
-    public MonthlyAnalyticsResponse monthly(String email, YearMonth month) {
+    public MonthlyAnalyticsResponse analyze(String email, AnalysisWindow window) {
         User user = requireUser(email);
 
-        Totals current = totalsFor(user.getId(), month);
-        Totals previous = totalsFor(user.getId(), month.minusMonths(1));
+        AnalysisWindow previousWindow = window.previous();
+        Totals current = totalsFor(user.getId(), window);
+        Totals previous = totalsFor(user.getId(), previousWindow);
 
         Map<UUID, Category> catalog = categoryRepository.findVisibleTo(user.getId()).stream()
                 .collect(Collectors.toMap(Category::getId, Function.identity()));
@@ -56,10 +67,12 @@ public class AnalyticsService {
         long pendingReview = bankTransactionRepository.countByUserIdAndReviewStatusIn(user.getId(), PENDING);
 
         return new MonthlyAnalyticsResponse(
-                month.toString(),
+                window.monthLabel(),
+                window.start(), window.end(),
                 current.income, current.expense, current.income.subtract(current.expense),
                 new MonthlyAnalyticsResponse.MonthTotals(
-                        month.minusMonths(1).toString(),
+                        previousWindow.monthLabel(),
+                        previousWindow.start(), previousWindow.end(),
                         previous.income, previous.expense, previous.income.subtract(previous.expense)),
                 slices,
                 pendingReview);
@@ -183,10 +196,9 @@ public class AnalyticsService {
                 children);
     }
 
-    private Totals totalsFor(UUID userId, YearMonth month) {
-        OffsetDateTime start = month.atDay(1).atStartOfDay().atOffset(ZoneOffset.UTC);
-        List<BankTransactionRepository.CategoryTotal> rows =
-                bankTransactionRepository.sumByCategory(userId, start, start.plusMonths(1));
+    private Totals totalsFor(UUID userId, AnalysisWindow window) {
+        List<BankTransactionRepository.CategoryTotal> rows = bankTransactionRepository.sumByCategory(
+                userId, window.startInstant(), window.endExclusiveInstant());
 
         Totals totals = new Totals();
         for (BankTransactionRepository.CategoryTotal row : rows) {
