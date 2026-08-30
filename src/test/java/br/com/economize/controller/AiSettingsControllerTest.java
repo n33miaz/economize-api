@@ -244,7 +244,7 @@ class AiSettingsControllerTest {
     @DisplayName("POST /settings/test - Chave recusada responde 200 com ok=false, não erro de HTTP")
     void testShouldReturnOkFalseOnRefusal() {
         when(service.test(eq(EMAIL), any())).thenReturn(new AiKeyTestResponse(
-                false, "OPENAI", "gpt-4o-mini", "AUTH", "O provedor recusou a chave cadastrada.", 412));
+                false, "OPENAI", "gpt-4o-mini", "AUTH", "O provedor recusou esta chave.", 412));
 
         webTestClient.post()
                 .uri("/api/v1/ai/settings/test")

@@ -306,7 +306,7 @@ class UserAiSettingsServiceTest {
         SecretCipher cipher = new SecretCipher(KEY_1, "k1", "");
         when(httpClient.complete(any(), anyString(), anyString(), any()))
                 .thenThrow(new AiProviderException(AiProviderException.Reason.AUTH,
-                        "O provedor recusou a chave cadastrada."));
+                        "O provedor recusou esta chave."));
 
         AiKeyTestResponse response = service(cipher)
                 .test(ana.getEmail(), new AiKeyTestRequest("OPENAI", "gpt-4o-mini", CHAVE));

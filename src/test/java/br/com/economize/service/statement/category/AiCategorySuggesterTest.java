@@ -149,7 +149,7 @@ class AiCategorySuggesterTest {
     void providerFailureMustNotBreakTheImport() {
         when(factory.resolve(eq(user), anyBoolean())).thenReturn(Optional.of(caller));
         when(caller.complete(anyString(), anyString())).thenThrow(
-                new AiProviderException(AiProviderException.Reason.AUTH, "O provedor recusou a chave cadastrada."));
+                new AiProviderException(AiProviderException.Reason.AUTH, "O provedor recusou esta chave."));
 
         assertThat(suggester(false).suggest(user, DESCRICOES, catalogo)).isEmpty();
     }

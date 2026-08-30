@@ -107,7 +107,11 @@ public class OpenAiCompatibleChatClient {
         String message;
         if (status == 401 || status == 403) {
             reason = AiProviderException.Reason.AUTH;
-            message = "O provedor recusou a chave cadastrada.";
+            // "esta chave", e não "a chave cadastrada": o mesmo texto atende o
+            // teste de uma chave DIGITADA (que ainda não foi salva) e o uso da
+            // que está gravada. Dizer "cadastrada" mandava metade dos usuários
+            // procurar problema na chave errada
+            message = "O provedor recusou esta chave.";
         } else if (status == 404) {
             reason = AiProviderException.Reason.MODEL;
             message = "O provedor não reconheceu o modelo escolhido.";
