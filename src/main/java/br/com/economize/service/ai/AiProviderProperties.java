@@ -346,7 +346,11 @@ public class AiProviderProperties {
         map.put(AiProvider.ANTHROPIC, new ProviderConfig("Anthropic Claude",
                 "https://api.anthropic.com/v1/chat/completions",
                 "https://console.anthropic.com/settings/keys",
-                List.of("claude-haiku-4-5", "claude-sonnet-4-5", "claude-opus-4-1"),
+                List.of("claude-haiku-4-5", "claude-sonnet-5", "claude-opus-5"),
+                // Família Claude 5. O id da Anthropic direta usa hífen
+                // ("claude-haiku-4-5"); o mesmo modelo no OpenRouter usa ponto
+                // ("anthropic/claude-haiku-4.5") — são catálogos distintos
+                // e trocar um pelo outro devolve 404 do provedor
                 // só a Anthropic precisa: a API nativa dela exige max_tokens e a
                 // camada de compatibilidade herda a exigência. Nos outros o
                 // parâmetro é opcional e alguns modelos de raciocínio recentes
@@ -356,7 +360,7 @@ public class AiProviderProperties {
         map.put(AiProvider.OPENROUTER, new ProviderConfig("OpenRouter",
                 "https://openrouter.ai/api/v1/chat/completions",
                 "https://openrouter.ai/settings/keys",
-                List.of("openai/gpt-4o-mini", "anthropic/claude-sonnet-4.5",
+                List.of("openai/gpt-4o-mini", "anthropic/claude-sonnet-5",
                         "google/gemini-2.5-flash", "deepseek/deepseek-chat"),
                 null));
         return map;
