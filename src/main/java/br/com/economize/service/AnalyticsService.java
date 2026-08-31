@@ -196,6 +196,27 @@ public class AnalyticsService {
                 children);
     }
 
+    /**
+     * Entrou, saiu e o que sobrou numa janela — sem a quebra por categoria.
+     *
+     * <p>Existe para que os Desejos (EC-140) meçam a sobra pela MESMA regra da
+     * tela de análise. A regra de sinal (CREDIT/DEBIT, com o valor decidindo
+     * quando o OFX vem fora do padrão) e a exclusão de transferência interna são
+     * sutis o bastante para que duas cópias divergissem em silêncio — e um
+     * desejo calculado sobre uma sobra diferente da que o usuário lê na tela
+     * seria indefensável.
+     */
+    public record CycleNet(BigDecimal income, BigDecimal expense) {
+        public BigDecimal leftover() {
+            return income.subtract(expense);
+        }
+    }
+
+    public CycleNet netFor(UUID userId, AnalysisWindow window) {
+        Totals totals = totalsFor(userId, window);
+        return new CycleNet(totals.income, totals.expense);
+    }
+
     private Totals totalsFor(UUID userId, AnalysisWindow window) {
         List<BankTransactionRepository.CategoryTotal> rows = bankTransactionRepository.sumByCategory(
                 userId, window.startInstant(), window.endExclusiveInstant());
