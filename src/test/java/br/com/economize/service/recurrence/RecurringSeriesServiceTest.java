@@ -568,6 +568,135 @@ class RecurringSeriesServiceTest {
         return series;
     }
 
+
+    // ------------------------------------------------- EC-136: o que já tem dono
+
+    @Test
+    void vencimentosNaJanelaSaemEmOrdemDeData() {
+        when(seriesRepository.findAllByUserId(user.getId())).thenReturn(List.of(
+                mensal("aluguel", 10, "1800.00", day(2026, 8, 10)),
+                mensal("streaming", 2, "39.90", day(2026, 8, 2))));
+
+        List<RecurringSeriesService.UpcomingDue> dues = service.upcomingExpenses(
+                user.getId(), LocalDate.of(2026, 9, 1), LocalDate.of(2026, 9, 30));
+
+        assertThat(dues).extracting(RecurringSeriesService.UpcomingDue::name)
+                .containsExactly("streaming", "aluguel");
+        assertThat(dues.get(0).dueDate()).isEqualTo(LocalDate.of(2026, 9, 2));
+    }
+
+    @Test
+    void serieQueVenceForaDaJanelaNaoEntra() {
+        when(seriesRepository.findAllByUserId(user.getId())).thenReturn(List.of(
+                mensal("aluguel", 10, "1800.00", day(2026, 8, 10))));
+
+        assertThat(service.upcomingExpenses(user.getId(),
+                LocalDate.of(2026, 9, 1), LocalDate.of(2026, 9, 5))).isEmpty();
+    }
+
+    @Test
+    void rendaEIrregularNaoContamComoContaAPagar() {
+        RecurringSeries renda = mensal("salario", 5, "4400.00", day(2026, 8, 5));
+        renda.setFlow(RecurringSeries.Flow.INCOME);
+        RecurringSeries irregular = mensal("freela", 5, "500.00", day(2026, 8, 5));
+        irregular.setCadence(RecurringSeries.Cadence.IRREGULAR);
+        when(seriesRepository.findAllByUserId(user.getId()))
+                .thenReturn(List.of(renda, irregular));
+
+        // renda não é conta; sem cadência não há vencimento a prever, e chutar
+        // um comprometeria o número que decide se a pessoa pode gastar
+        assertThat(service.upcomingExpenses(user.getId(),
+                LocalDate.of(2026, 9, 1), LocalDate.of(2026, 9, 30))).isEmpty();
+    }
+
+    @Test
+    void serieDescartadaOuInativaNaoEntra() {
+        RecurringSeries descartada = mensal("antiga", 10, "100.00", day(2026, 8, 10));
+        descartada.setDismissed(true);
+        RecurringSeries inativa = mensal("parada", 10, "100.00", day(2026, 8, 10));
+        inativa.setActive(false);
+        when(seriesRepository.findAllByUserId(user.getId()))
+                .thenReturn(List.of(descartada, inativa));
+
+        assertThat(service.upcomingExpenses(user.getId(),
+                LocalDate.of(2026, 9, 1), LocalDate.of(2026, 9, 30))).isEmpty();
+    }
+
+    @Test
+    void semValorEsperadoNaoEntraNoTotal() {
+        RecurringSeries semValor = mensal("misterio", 10, null, day(2026, 8, 10));
+        when(seriesRepository.findAllByUserId(user.getId())).thenReturn(List.of(semValor));
+
+        // somar zero mentiria para menos; a série continua na listagem, só não
+        // vira "já tem dono"
+        assertThat(service.upcomingExpenses(user.getId(),
+                LocalDate.of(2026, 9, 1), LocalDate.of(2026, 9, 30))).isEmpty();
+    }
+
+    @Test
+    void janelaLongaTrazAsRepeticoesDaMesmaSerie() {
+        when(seriesRepository.findAllByUserId(user.getId())).thenReturn(List.of(
+                mensal("aluguel", 10, "1800.00", day(2026, 8, 10))));
+
+        List<RecurringSeriesService.UpcomingDue> dues = service.upcomingExpenses(
+                user.getId(), LocalDate.of(2026, 9, 1), LocalDate.of(2026, 11, 30));
+
+        assertThat(dues).hasSize(3);
+        assertThat(dues).extracting(RecurringSeriesService.UpcomingDue::dueDate)
+                .containsExactly(LocalDate.of(2026, 9, 10), LocalDate.of(2026, 10, 10),
+                        LocalDate.of(2026, 11, 10));
+    }
+
+    @Test
+    void serieAntigaEParadaNaoTravaOAvancoAteAJanela() {
+        // último vencimento em 2019: a corrente precisa avançar até 2026 sem
+        // laço infinito — é o que o teto de passos protege
+        when(seriesRepository.findAllByUserId(user.getId())).thenReturn(List.of(
+                mensal("fantasma", 10, "50.00", day(2019, 1, 10))));
+
+        List<RecurringSeriesService.UpcomingDue> dues = service.upcomingExpenses(
+                user.getId(), LocalDate.of(2026, 9, 1), LocalDate.of(2026, 9, 30));
+
+        assertThat(dues).hasSize(1);
+        assertThat(dues.get(0).dueDate()).isEqualTo(LocalDate.of(2026, 9, 10));
+    }
+
+    @Test
+    void contaDeConsumoVemMarcadaComoEstimativa() {
+        RecurringSeries luz = mensal("luz", 15, "210.00", day(2026, 8, 15));
+        luz.setAmountType(RecurringSeries.AmountType.VARIABLE);
+        when(seriesRepository.findAllByUserId(user.getId())).thenReturn(List.of(luz));
+
+        assertThat(service.upcomingExpenses(user.getId(),
+                LocalDate.of(2026, 9, 1), LocalDate.of(2026, 9, 30)).get(0).estimated()).isTrue();
+    }
+
+    @Test
+    void janelaInvertidaDevolveVazioEmVezDeExplodir() {
+        assertThat(service.upcomingExpenses(user.getId(),
+                LocalDate.of(2026, 9, 30), LocalDate.of(2026, 9, 1))).isEmpty();
+        assertThat(service.upcomingExpenses(user.getId(), null, null)).isEmpty();
+    }
+
+    private RecurringSeries mensal(String key, int anchorDay, String amount, OffsetDateTime lastSeen) {
+        return RecurringSeries.builder()
+                .id(UUID.randomUUID())
+                .user(user)
+                .merchantKey(key)
+                .displayName(key)
+                .flow(RecurringSeries.Flow.EXPENSE)
+                .cadence(RecurringSeries.Cadence.MONTHLY)
+                .amountType(RecurringSeries.AmountType.FIXED)
+                .anchorDay((short) anchorDay)
+                .expectedAmount(amount != null ? new BigDecimal(amount) : null)
+                .occurrences(3)
+                .lastSeenAt(lastSeen)
+                .active(true)
+                .dismissed(false)
+                .source(RecurringSeries.Source.DETECTED)
+                .build();
+    }
+
     private RecurringSeries series(String merchantKey, RecurringSeries.Flow flow, boolean active) {
         return RecurringSeries.builder()
                 .id(UUID.randomUUID())

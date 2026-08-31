@@ -20,6 +20,7 @@ import java.time.LocalDate;
 import java.time.YearMonth;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
@@ -262,6 +263,72 @@ public class RecurringSeriesService {
         series.setDismissed(true);
         seriesRepository.save(series);
         return false;
+    }
+
+
+    /**
+     * Teto da corrente de vencimentos: ~50 anos de ciclos mensais. Série antiga
+     * e parada teria o próximo vencimento muito no passado, e sem o teto o
+     * avanço até a janela pedida seria um laço sem fim.
+     */
+    private static final int MAX_DUE_STEPS = 600;
+
+    /** Uma despesa prevista para vencer dentro de uma janela (EC-136). */
+    public record UpcomingDue(
+            UUID seriesId,
+            String name,
+            UUID categoryId,
+            LocalDate dueDate,
+            java.math.BigDecimal amount,
+            /* conta de consumo: o valor é a média do histórico, não um boleto */
+            boolean estimated
+    ) {
+    }
+
+    /**
+     * As despesas recorrentes que vencem entre duas datas (EC-136).
+     *
+     * <p>Serve à pergunta "quando o salário cair, quanto já tem dono": não é
+     * previsão estatística, são os boletos, assinaturas e faturas que o motor
+     * de recorrência já provou no extrato.
+     *
+     * <p>A corrente de vencimentos é a MESMA do {@code nextDueDate} da listagem
+     * e da previsão de saldo. Derivar a data da âncora do calendário faria a
+     * cobrança que deslizou para o começo do mês seguinte ser contada duas
+     * vezes — e as três telas discordariam entre si sobre o mesmo boleto.
+     *
+     * <p>IRREGULAR fica de fora: sem cadência estimável não há vencimento a
+     * prever, e chutar um comprometeria o número que o usuário vai usar para
+     * decidir se pode gastar.
+     */
+    public List<UpcomingDue> upcomingExpenses(UUID userId, LocalDate from, LocalDate to) {
+        List<UpcomingDue> out = new ArrayList<>();
+        if (from == null || to == null || to.isBefore(from)) return out;
+
+        for (RecurringSeries series : seriesRepository.findAllByUserId(userId)) {
+            if (series.getFlow() != RecurringSeries.Flow.EXPENSE) continue;
+            if (!series.isActive() || series.isDismissed()) continue;
+            if (series.getCadence() == RecurringSeries.Cadence.IRREGULAR) continue;
+            if (series.getExpectedAmount() == null) continue;
+
+            LocalDate due = nextDueDate(series);
+            int steps = 0;
+            while (due != null && !due.isAfter(to) && steps++ < MAX_DUE_STEPS) {
+                if (!due.isBefore(from)) {
+                    out.add(new UpcomingDue(
+                            series.getId(),
+                            series.getDisplayName() != null
+                                    ? series.getDisplayName() : series.getMerchantKey(),
+                            series.getCategoryId(),
+                            due,
+                            series.getExpectedAmount().abs(),
+                            series.getAmountType() == RecurringSeries.AmountType.VARIABLE));
+                }
+                due = dueAfter(series, due);
+            }
+        }
+        out.sort(Comparator.comparing(UpcomingDue::dueDate));
+        return out;
     }
 
     /**
