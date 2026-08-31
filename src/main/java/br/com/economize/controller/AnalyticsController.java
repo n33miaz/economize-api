@@ -1,8 +1,10 @@
 package br.com.economize.controller;
 
 import br.com.economize.dto.analytics.AnalysisWindow;
+import br.com.economize.dto.analytics.DebtOverviewResponse;
 import br.com.economize.dto.analytics.MonthlyAnalyticsResponse;
 import br.com.economize.service.AnalyticsService;
+import br.com.economize.service.DebtInsightService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
@@ -22,6 +24,7 @@ import java.util.List;
 public class AnalyticsController {
 
     private final AnalyticsService analyticsService;
+    private final DebtInsightService debtInsightService;
 
     @Operation(summary = "Consolidação de um período",
             description = "Entradas, saídas, quebra por categoria e delta vs período anterior. "
@@ -44,6 +47,25 @@ public class AnalyticsController {
                 ? requested
                 : AnalysisWindow.ofMonth(YearMonth.now(ZoneOffset.UTC));
         return Mono.fromCallable(() -> analyticsService.analyze(email, window))
+                .subscribeOn(Schedulers.boundedElastic());
+    }
+
+    @Operation(summary = "Quanto do período é dívida",
+            description = "Separa financiamento, parcelamento, consórcio, empréstimo e rotativo do "
+                    + "consumo comum — sem isso o app soma a parcela do carro com o mercado e chama "
+                    + "tudo de despesa. A classificação é derivada da descrição do extrato (ou do "
+                    + "apelido, quando houver). Mesmos parâmetros de janela do /monthly.")
+    @GetMapping("/debt")
+    public Mono<DebtOverviewResponse> debt(
+            @AuthenticationPrincipal String email,
+            @RequestParam(required = false) String month,
+            @RequestParam(required = false) String start,
+            @RequestParam(required = false) String end) {
+        AnalysisWindow requested = AnalysisWindow.resolve(month, start, end);
+        AnalysisWindow window = requested != null
+                ? requested
+                : AnalysisWindow.ofMonth(YearMonth.now(ZoneOffset.UTC));
+        return Mono.fromCallable(() -> debtInsightService.summarize(email, window))
                 .subscribeOn(Schedulers.boundedElastic());
     }
 
