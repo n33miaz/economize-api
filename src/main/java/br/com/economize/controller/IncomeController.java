@@ -2,6 +2,7 @@ package br.com.economize.controller;
 
 import br.com.economize.dto.wish.WishRequests;
 import br.com.economize.dto.wish.WishResponses;
+import br.com.economize.service.wish.CommittedIncomeService;
 import br.com.economize.service.wish.IncomeSourceService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -29,6 +30,7 @@ import java.util.UUID;
 public class IncomeController {
 
     private final IncomeSourceService incomeSourceService;
+    private final CommittedIncomeService committedIncomeService;
 
     @Operation(summary = "Panorama de renda",
             description = "Fontes cadastradas, jornada declarada e as fontes que o motor de "
@@ -36,6 +38,17 @@ public class IncomeController {
     @GetMapping
     public Mono<WishResponses.IncomeOverview> overview(@AuthenticationPrincipal String email) {
         return Mono.fromCallable(() -> incomeSourceService.overview(email))
+                .subscribeOn(Schedulers.boundedElastic());
+    }
+
+    @Operation(summary = "O que já tem dono do próximo salário",
+            description = "Boletos, assinaturas e faturas que o motor de recorrência já provou no "
+                    + "extrato, separados entre os que vencem ANTES do próximo salário e os que "
+                    + "saem DEPOIS que ele cair — com o que sobra de verdade. Não é previsão "
+                    + "estatística: só entra o que já aconteceu antes.")
+    @GetMapping("/committed")
+    public Mono<WishResponses.CommittedOverview> committed(@AuthenticationPrincipal String email) {
+        return Mono.fromCallable(() -> committedIncomeService.overview(email))
                 .subscribeOn(Schedulers.boundedElastic());
     }
 

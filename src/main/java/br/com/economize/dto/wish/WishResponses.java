@@ -157,4 +157,43 @@ public final class WishResponses {
             Short anchorDay
     ) {
     }
+
+    /**
+     * Uma conta que já tem dono: recorrência prevista para vencer na janela.
+     *
+     * @param estimated conta de consumo (luz, água): o valor é a média do
+     *                  histórico, não um boleto fechado — a tela precisa dizer
+     *                  isso, senão o total parece mais exato do que é
+     */
+    public record CommittedItem(
+            UUID seriesId,
+            String name,
+            UUID categoryId,
+            LocalDate dueDate,
+            BigDecimal amount,
+            boolean estimated
+    ) {
+    }
+
+    /**
+     * "Quando o salário cair, R$ X já têm dono" (EC-136).
+     *
+     * <p>Com {@code salaryKnown = false} não há salário confirmado com dia de
+     * pagamento: {@code beforeSalary} passa a ser simplesmente as contas dos
+     * próximos 30 dias, e {@code salaryDate}, {@code expectedSalary} e
+     * {@code free} vêm nulos. A tela troca o título e pede o cadastro.
+     */
+    public record CommittedOverview(
+            boolean salaryKnown,
+            LocalDate salaryDate,
+            Integer daysUntilSalary,
+            BigDecimal expectedSalary,
+            BigDecimal committedBeforeSalary,
+            List<CommittedItem> beforeSalary,
+            BigDecimal committedAfterSalary,
+            List<CommittedItem> afterSalary,
+            /* o que realmente sobra do próximo pagamento */
+            BigDecimal free
+    ) {
+    }
 }
