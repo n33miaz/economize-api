@@ -19,7 +19,10 @@ public record MonthlyAnalyticsResponse(
         BigDecimal net,
         MonthTotals previous,
         List<CategorySlice> categories,
-        long pendingReviewCount
+        long pendingReviewCount,
+        // EC-138: o que o total NÃO diz. Campo aditivo — o app publicado
+        // ignora o que não conhece, então o contrato antigo segue valendo
+        List<CycleCaveat> caveats
 ) {
     /**
      * Totais do período comparável — mês anterior do calendário no modo mês,

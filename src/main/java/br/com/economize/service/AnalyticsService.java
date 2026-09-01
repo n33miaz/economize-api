@@ -1,6 +1,7 @@
 package br.com.economize.service;
 
 import br.com.economize.dto.analytics.AnalysisWindow;
+import br.com.economize.dto.analytics.CycleCaveat;
 import br.com.economize.dto.analytics.MonthlyAnalyticsResponse;
 import br.com.economize.model.BankTransaction;
 import br.com.economize.model.Category;
@@ -8,11 +9,13 @@ import br.com.economize.model.User;
 import br.com.economize.repository.BankTransactionRepository;
 import br.com.economize.repository.CategoryRepository;
 import br.com.economize.repository.UserRepository;
+import br.com.economize.service.wish.CycleCaveatService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.YearMonth;
 import java.time.ZoneOffset;
@@ -51,6 +54,7 @@ public class AnalyticsService {
     private final BankTransactionRepository bankTransactionRepository;
     private final CategoryRepository categoryRepository;
     private final UserRepository userRepository;
+    private final CycleCaveatService cycleCaveatService;
 
     public MonthlyAnalyticsResponse analyze(String email, AnalysisWindow window) {
         User user = requireUser(email);
@@ -75,7 +79,14 @@ public class AnalyticsService {
                         previousWindow.start(), previousWindow.end(),
                         previous.income, previous.expense, previous.income.subtract(previous.expense)),
                 slices,
-                pendingReview);
+                pendingReview,
+                // "teve movimento" e não "existe extrato": comparar contra um
+                // período zerado produz variação tão falsa quanto comparar
+                // contra período nenhum
+                cycleCaveatService.caveatsFor(
+                        user.getId(), window,
+                        previous.income.signum() > 0 || previous.expense.signum() > 0,
+                        LocalDate.now(ZoneOffset.UTC)));
     }
 
     /**

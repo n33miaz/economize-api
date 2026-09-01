@@ -7,6 +7,7 @@ import br.com.economize.model.User;
 import br.com.economize.repository.BankTransactionRepository;
 import br.com.economize.repository.CategoryRepository;
 import br.com.economize.repository.UserRepository;
+import br.com.economize.service.wish.CycleCaveatService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
@@ -41,6 +42,11 @@ class AnalyticsServiceTest {
 
     @Mock
     private UserRepository userRepository;
+
+    // As ressalvas (EC-138) são calculadas por serviço próprio; aqui o
+    // interesse é a agregação, então o mock devolve lista vazia por padrão
+    @Mock
+    private CycleCaveatService cycleCaveatService;
 
     @InjectMocks
     private AnalyticsService service;
