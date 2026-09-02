@@ -1,9 +1,10 @@
 package br.com.economize.controller;
 
+import br.com.economize.dto.ai.ChatRequest;
 import br.com.economize.service.AiAssistantService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
-import lombok.Data;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -24,14 +25,9 @@ public class AiAssistantController {
     @Operation(summary = "Enviar mensagem para a IA", description = "Envia uma pergunta e recebe uma resposta baseada nos dados financeiros do usuário.")
     public Mono<ResponseEntity<Map<String, String>>> askAssistant(
             @AuthenticationPrincipal String email,
-            @RequestBody ChatRequest request) {
+            @Valid @RequestBody ChatRequest request) {
 
-        return aiAssistantService.askAssistant(email, request.getMessage())
+        return aiAssistantService.askAssistant(email, request.message())
                 .map(response -> ResponseEntity.ok(Map.of("reply", response)));
     }
-}
-
-@Data
-class ChatRequest {
-    private String message;
 }
