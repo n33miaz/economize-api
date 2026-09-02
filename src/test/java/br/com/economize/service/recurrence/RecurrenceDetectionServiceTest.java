@@ -115,6 +115,12 @@ class RecurrenceDetectionServiceTest {
             linkStore.addAll(links);
             return links;
         });
+        when(linkRepository.deleteAllBySeriesIdIn(anyCollection())).thenAnswer(inv -> {
+            Collection<?> ids = inv.getArgument(0);
+            int before = linkStore.size();
+            linkStore.removeIf(link -> ids.contains(link.getSeriesId()));
+            return before - linkStore.size();
+        });
     }
 
     @Test
@@ -158,17 +164,18 @@ class RecurrenceDetectionServiceTest {
         assertThat(phone.getCadence()).isEqualTo(RecurringSeries.Cadence.QUARTERLY);
 
         // 5) movimentação do titular entre bancos = INTERNAL, nunca gasto/renda
-        RecurringSeries internal = series("pereira", RecurringSeries.Flow.INTERNAL);
+        //    (contraparte de PIX é chaveada por primeiro nome + dominante)
+        RecurringSeries internal = series("carlos pereira", RecurringSeries.Flow.INTERNAL);
         assertThat(internal.getOccurrences()).isEqualTo(6);
-        assertThat(find("pereira", RecurringSeries.Flow.EXPENSE)).isEmpty();
-        assertThat(find("pereira", RecurringSeries.Flow.INCOME)).isEmpty();
+        assertThat(find("carlos pereira", RecurringSeries.Flow.EXPENSE)).isEmpty();
+        assertThat(find("carlos pereira", RecurringSeries.Flow.INCOME)).isEmpty();
 
         // 6) renda: salário fixo e PIX informal do mesmo nome todo mês
         RecurringSeries salary = series("salario", RecurringSeries.Flow.INCOME);
         assertThat(salary.getAmountType()).isEqualTo(RecurringSeries.AmountType.FIXED);
         assertThat(salary.getExpectedAmount()).isEqualByComparingTo("4500.00");
         assertThat(salary.getAnchorDay()).isEqualTo((short) 30);
-        RecurringSeries informal = series("prado", RecurringSeries.Flow.INCOME);
+        RecurringSeries informal = series("joana prado", RecurringSeries.Flow.INCOME);
         assertThat(informal.getOccurrences()).isEqualTo(3);
 
         // compras esparsas (1-2 ocorrências) não viram série
@@ -478,10 +485,153 @@ class RecurrenceDetectionServiceTest {
 
         service.detect(EMAIL);
 
-        assertThat(series("lima", RecurringSeries.Flow.EXPENSE).getOccurrences()).isEqualTo(3);
-        assertThat(find("lima", RecurringSeries.Flow.INTERNAL)).isEmpty();
-        assertThat(series("cliente", RecurringSeries.Flow.INCOME).getOccurrences()).isEqualTo(3);
-        assertThat(find("cliente", RecurringSeries.Flow.INTERNAL)).isEmpty();
+        assertThat(series("ana lima", RecurringSeries.Flow.EXPENSE).getOccurrences()).isEqualTo(3);
+        assertThat(find("ana lima", RecurringSeries.Flow.INTERNAL)).isEmpty();
+        assertThat(series("cliente xis", RecurringSeries.Flow.INCOME).getOccurrences()).isEqualTo(3);
+        assertThat(find("cliente xis", RecurringSeries.Flow.INTERNAL)).isEmpty();
+    }
+
+    @Test
+    void sharedSurnameNeverFusesDifferentPixCounterparties() {
+        // Cinco pessoas com o mesmo sobrenome, uma delas recebendo todo mês: no
+        // extrato real "silva" juntava 26 pessoas numa série só. Só a Ana vira
+        // série; os outros quatro são PIX avulsos e ficam de fora.
+        transactions.add(tx("Pix enviado: \"Cp :123-Ana Beatriz Costa\"", "DEBIT", "-150.00", day(2025, 4, 5)));
+        transactions.add(tx("Pix enviado: \"Cp :123-Ana Beatriz Costa\"", "DEBIT", "-150.00", day(2025, 5, 5)));
+        transactions.add(tx("Pix enviado: \"Cp :123-Ana Beatriz Costa\"", "DEBIT", "-150.00", day(2025, 6, 5)));
+        transactions.add(tx("Pix enviado: \"Cp :123-Bruno Costa\"", "DEBIT", "-40.00", day(2025, 3, 9)));
+        transactions.add(tx("Pix enviado: \"Cp :456-Carla Mendes Costa\"", "DEBIT", "-25.00", day(2025, 5, 11)));
+        transactions.add(tx("Pix enviado: \"Cp :789-Diego Costa Ramos\"", "DEBIT", "-60.00", day(2025, 5, 20)));
+        transactions.add(tx("Pix enviado: \"Cp :789-null Elisa Costa\"", "DEBIT", "-12.00", day(2025, 6, 2)));
+
+        service.detect(EMAIL);
+
+        assertThat(seriesStore).hasSize(1);
+        RecurringSeries ana = series("ana costa", RecurringSeries.Flow.EXPENSE);
+        assertThat(ana.getOccurrences()).isEqualTo(3);
+        assertThat(ana.getCadence()).isEqualTo(RecurringSeries.Cadence.MONTHLY);
+        assertThat(find("costa", RecurringSeries.Flow.EXPENSE)).isEmpty();
+    }
+
+    @Test
+    void samePixCounterpartyLandsInOneSeriesAcrossTheOwnersTwoBanks() {
+        // A mesma pessoa paga ora pelo Inter ("Cp :NNN-Nome"), ora pelo Nubank,
+        // que imprime o nome completo, o CPF mascarado e o BANCO DE DESTINO por
+        // extenso ("MERCADO PAGO IP LTDA", "NU PAGAMENTOS - IP"). O resíduo do
+        // banco não está na lista de nomes de banco e, como acompanha todo PIX
+        // para aquele banco, é o token mais persistente do histórico: a chave
+        // virava "ana mercado" num extrato e "ana beatriz" no outro
+        transactions.add(tx("Pix enviado: \"Cp :260-Ana Beatriz Costa\"", "DEBIT", "-150.00", day(2025, 1, 5)));
+        transactions.add(tx("Pix enviado: \"Cp :260-Ana Beatriz Costa\"", "DEBIT", "-150.00", day(2025, 2, 5)));
+        transactions.add(tx("Transferência enviada pelo Pix - ANA BEATRIZ COSTA - •••.123.456-•• - "
+                + "MERCADO PAGO IP LTDA (0323) Agência: 1 Conta: 12345678-9", "DEBIT", "-150.00", day(2025, 3, 5)));
+        transactions.add(tx("Transferência enviada pelo Pix - ANA BEATRIZ COSTA - •••.123.456-•• - "
+                + "MERCADO PAGO IP LTDA (0323) Agência: 1 Conta: 12345678-9", "DEBIT", "-150.00", day(2025, 4, 5)));
+        // outros PIX do mesmo banco de destino, em meses diferentes, dão ao resíduo
+        // do banco mais meses do que qualquer token do nome da Ana
+        for (int month = 1; month <= 6; month++) {
+            transactions.add(tx("Transferência enviada pelo Pix - BRUNO LIMA - •••.987.654-•• - "
+                    + "MERCADO PAGO IP LTDA (0323) Agência: 1 Conta: 87654321-0", "DEBIT", "-30.00", day(2025, month, 20)));
+            transactions.add(tx("Transferência recebida pelo Pix - CARLA MENDES - •••.111.222-•• - "
+                    + "NU PAGAMENTOS - IP (0260) Agência: 1 Conta: 11112222-3", "CREDIT", "80.00", day(2025, month, 22)));
+        }
+
+        service.detect(EMAIL);
+
+        // uma série só para a Ana, com os quatro PIX — qual token do nome completa
+        // a chave é desempate do dominante (aqui "beatriz", por comprimento)
+        List<RecurringSeries> anas = seriesStore.stream()
+                .filter(s -> s.getMerchantKey().startsWith("ana ")).toList();
+        assertThat(anas).hasSize(1);
+        assertThat(anas.get(0).getOccurrences()).isEqualTo(4);
+        assertThat(seriesStore).noneMatch(s -> s.getMerchantKey().contains("mercado")
+                || s.getMerchantKey().contains("pago")
+                || s.getMerchantKey().contains("pagamentos"));
+        assertThat(series("bruno lima", RecurringSeries.Flow.EXPENSE).getOccurrences()).isEqualTo(6);
+        assertThat(series("carla mendes", RecurringSeries.Flow.INCOME).getOccurrences()).isEqualTo(6);
+    }
+
+    @Test
+    void abbreviatedMiddleNameStillLandsInTheSamePixSeries() {
+        // o banco de origem ora imprime o nome completo, ora abrevia o meio
+        transactions.add(tx("Pix recebido: \"Cp :123-Helena Maria Duarte Reis\"", "CREDIT", "300.00", day(2025, 4, 10)));
+        transactions.add(tx("Pix recebido: \"Cp :123-Helena M D Reis\"", "CREDIT", "300.00", day(2025, 5, 10)));
+        transactions.add(tx("Pix recebido: \"Cp :123-Helena Maria Duarte Reis\"", "CREDIT", "300.00", day(2025, 6, 10)));
+
+        service.detect(EMAIL);
+
+        assertThat(seriesStore).hasSize(1);
+        assertThat(series("helena reis", RecurringSeries.Flow.INCOME).getOccurrences()).isEqualTo(3);
+    }
+
+    @Test
+    void bankNameDoesNotSwallowInvestmentsAndCashbackIntoOneSeries() {
+        // "inter" acompanhava CDB, cashback e estorno e era o token mais persistente:
+        // 271 lançamentos de quatro entidades caíam numa série INCOME só
+        for (int month = 1; month <= 6; month++) {
+            transactions.add(tx("Resgate: \"CDB COFRINHO BANCO INTER SA\"", "CREDIT", "80.00", day(2025, month, 3)));
+            transactions.add(tx("Resgate: \"CDB COFRINHO BANCO INTER SA\"", "CREDIT", "45.00", day(2025, month, 17)));
+            transactions.add(tx("Cashback: \"INTER PRE 20GB MENSAL\"", "CREDIT", "2.40", day(2025, month, 9)));
+        }
+
+        service.detect(EMAIL);
+
+        assertThat(seriesStore).hasSize(2);
+        assertThat(find("inter", RecurringSeries.Flow.INCOME)).isEmpty();
+        // resgate/cdb/cofrinho empatam em meses: vence o token mais longo
+        RecurringSeries redemptions = series("cofrinho", RecurringSeries.Flow.INCOME);
+        assertThat(redemptions.getOccurrences()).isEqualTo(12);
+        RecurringSeries cashback = series("cashback", RecurringSeries.Flow.INCOME);
+        assertThat(cashback.getOccurrences()).isEqualTo(6);
+        assertThat(cashback.getCadence()).isEqualTo(RecurringSeries.Cadence.MONTHLY);
+    }
+
+    @Test
+    void loneCadenceHintDoesNotOverrideTheGroupsIntervals() {
+        // seis cobranças mensais sem dica e UMA com "Trimestral" por último: a
+        // dica da mais recente só manda quando a maioria do grupo também a traz
+        for (int month = 1; month <= 6; month++) {
+            transactions.add(tx("Clube do Livro Aurora", "DEBIT", "-39.90", day(2025, month, 12)));
+        }
+        transactions.add(tx("Clube do Livro Aurora Trimestral", "DEBIT", "-39.90", day(2025, 7, 12)));
+
+        service.detect(EMAIL);
+
+        RecurringSeries club = series("aurora", RecurringSeries.Flow.EXPENSE);
+        assertThat(club.getOccurrences()).isEqualTo(7);
+        assertThat(club.getCadence()).isEqualTo(RecurringSeries.Cadence.MONTHLY);
+    }
+
+    @Test
+    void cadenceFollowsTheRecentIntervalsNotTheWholeHistory() {
+        // fatura paga em 3-4 parcelas por mês no primeiro semestre e em uma só
+        // nos 13 meses seguintes: a mediana de todos os intervalos dava IRREGULAR
+        // e a maior despesa recorrente ficava fora da previsão
+        LocalDate start = LocalDate.of(2024, 1, 1);
+        for (int month = 0; month < 6; month++) {
+            LocalDate base = start.plusMonths(month);
+            transactions.add(tx("Pagamento fatura cartao", "DEBIT", "-200.00", at(base.withDayOfMonth(3))));
+            transactions.add(tx("Pagamento fatura cartao", "DEBIT", "-150.00", at(base.withDayOfMonth(11))));
+            transactions.add(tx("Pagamento fatura cartao", "DEBIT", "-120.00", at(base.withDayOfMonth(19))));
+            transactions.add(tx("Pagamento fatura cartao", "DEBIT", "-90.00", at(base.withDayOfMonth(26))));
+        }
+        for (int month = 6; month < 19; month++) {
+            transactions.add(tx("Pagamento fatura cartao", "DEBIT", "-1300.00",
+                    at(start.plusMonths(month).withDayOfMonth(8))));
+        }
+
+        service.detect(EMAIL);
+
+        RecurringSeries bill = series("fatura", RecurringSeries.Flow.EXPENSE);
+        assertThat(bill.getOccurrences()).isEqualTo(37);
+        assertThat(bill.getCadence()).isEqualTo(RecurringSeries.Cadence.MONTHLY);
+        assertThat(bill.getAnchorDay()).isEqualTo((short) 8);
+        assertThat(bill.getDayTolerance()).isEqualTo((short) 0);
+        // o valor esperado também é o de hoje: a média da vida inteira (com as
+        // parcelas de 90 a 200) previa um terço do que a fatura custa
+        assertThat(bill.getAmountType()).isEqualTo(RecurringSeries.AmountType.FIXED);
+        assertThat(bill.getExpectedAmount()).isEqualByComparingTo("1300.00");
+        assertThat(bill.isActive()).isTrue();
     }
 
     @Test
@@ -616,6 +766,136 @@ class RecurrenceDetectionServiceTest {
 
         assertThat(paused.isActive()).isTrue();
         assertThat(paused.isDismissed()).isFalse();
+    }
+
+    @Test
+    void seriesWhoseKeyChangedHandsItsLinksToTheTwinAndGoesInactive() {
+        // Produção já tem séries gravadas com as chaves ANTIGAS (deploy anterior
+        // ao EC-111): o cashback do plano de celular vivia em "inter|INCOME". Com a
+        // derivação nova a mesma transação cai em "cashback|INCOME". Sem tratamento
+        // a série velha ficava ativa (não está stale: a última ocorrência é de
+        // hoje) e a gêmea nascia SEM vínculo nenhum — as transações continuavam
+        // presas à velha — e a previsão de saldo projetava as duas.
+        List<BankTransaction> cashback = new ArrayList<>();
+        for (int month = 1; month <= 6; month++) {
+            cashback.add(tx("Cashback: \"INTER PRE 20GB MENSAL\"", "CREDIT", "2.40", day(2025, month, 9)));
+        }
+        transactions.addAll(cashback);
+        RecurringSeries legacy = RecurringSeries.builder()
+                .id(UUID.randomUUID()).user(user)
+                .merchantKey("inter").flow(RecurringSeries.Flow.INCOME)
+                .displayName("Cashback: \"INTER PRE 20GB MENSAL\"")
+                .cadence(RecurringSeries.Cadence.MONTHLY).anchorDay((short) 9).dayTolerance((short) 0)
+                .amountType(RecurringSeries.AmountType.FIXED).expectedAmount(new BigDecimal("2.4000"))
+                .occurrences(cashback.size())
+                .firstSeenAt(cashback.get(0).getDate()).lastSeenAt(cashback.get(5).getDate())
+                .active(true).source(RecurringSeries.Source.DETECTED)
+                .build();
+        seriesStore.add(legacy);
+        linkGymTransactions(legacy, cashback);
+
+        RecurrenceDetectionService.DetectionSummary summary = service.detect(EMAIL);
+
+        RecurringSeries twin = series("cashback", RecurringSeries.Flow.INCOME);
+        assertThat(summary.seriesCreated()).isEqualTo(1);
+        // os seis vínculos MUDAM de dona: a gêmea passa a ter o histórico
+        assertThat(summary.linksCreated()).isEqualTo(6);
+        assertThat(linkStore).hasSize(6);
+        assertThat(linkStore).allMatch(link -> link.getSeriesId().equals(twin.getId()));
+        assertThat(twin.getOccurrences()).isEqualTo(6);
+        assertThat(twin.isActive()).isTrue();
+        // a órfã não é apagada, mas sai da tela e da previsão
+        assertThat(legacy.isActive()).isFalse();
+        assertThat(legacy.isDismissed()).isFalse();
+        assertThat(seriesStore).contains(legacy);
+        assertThat(summary.seriesUpdated()).isEqualTo(1);
+
+        // e a varredura seguinte não fica oscilando
+        assertThat(service.detect(EMAIL))
+                .isEqualTo(new RecurrenceDetectionService.DetectionSummary(0, 0, 0));
+        assertThat(legacy.isActive()).isFalse();
+        assertThat(linkStore).hasSize(6);
+    }
+
+    @Test
+    void orphanWhoseTransactionsSplitBelowTheMinimumStillReleasesAllOfThem() {
+        // "costa" juntava três pessoas; só a Ana tem histórico para virar série.
+        // Os vínculos do Bruno e da Carla também são liberados: presos à órfã,
+        // bloqueariam a série de cada um quando ela vier a existir.
+        List<BankTransaction> costa = List.of(
+                tx("Pix enviado: \"Cp :123-Ana Beatriz Costa\"", "DEBIT", "-150.00", day(2025, 4, 5)),
+                tx("Pix enviado: \"Cp :123-Ana Beatriz Costa\"", "DEBIT", "-150.00", day(2025, 5, 5)),
+                tx("Pix enviado: \"Cp :123-Ana Beatriz Costa\"", "DEBIT", "-150.00", day(2025, 6, 5)),
+                tx("Pix enviado: \"Cp :123-Bruno Costa\"", "DEBIT", "-40.00", day(2025, 3, 9)),
+                tx("Pix enviado: \"Cp :456-Carla Mendes Costa\"", "DEBIT", "-25.00", day(2025, 5, 11)));
+        transactions.addAll(costa);
+        RecurringSeries legacy = RecurringSeries.builder()
+                .id(UUID.randomUUID()).user(user)
+                .merchantKey("costa").flow(RecurringSeries.Flow.EXPENSE)
+                .displayName("Pix enviado: \"Cp :123-Ana Beatriz Costa\"")
+                .cadence(RecurringSeries.Cadence.IRREGULAR)
+                .amountType(RecurringSeries.AmountType.VARIABLE).expectedAmount(new BigDecimal("103.0000"))
+                .occurrences(costa.size())
+                .firstSeenAt(costa.get(3).getDate()).lastSeenAt(costa.get(2).getDate())
+                .active(true).source(RecurringSeries.Source.DETECTED)
+                .build();
+        seriesStore.add(legacy);
+        linkGymTransactions(legacy, costa);
+
+        service.detect(EMAIL);
+
+        RecurringSeries ana = series("ana costa", RecurringSeries.Flow.EXPENSE);
+        assertThat(linkStore).hasSize(3);
+        assertThat(linkStore).allMatch(link -> link.getSeriesId().equals(ana.getId()));
+        // IRREGULAR nunca fica stale: sem esta regra a órfã ficaria ativa para sempre
+        assertThat(legacy.isActive()).isFalse();
+    }
+
+    @Test
+    void dismissedOrphanReleasesItsLinksButKeepsTheDismissal() {
+        List<BankTransaction> cashback = new ArrayList<>();
+        for (int month = 1; month <= 3; month++) {
+            cashback.add(tx("Cashback: \"INTER PRE 20GB MENSAL\"", "CREDIT", "2.40", day(2025, month, 9)));
+        }
+        transactions.addAll(cashback);
+        RecurringSeries dismissed = RecurringSeries.builder()
+                .id(UUID.randomUUID()).user(user)
+                .merchantKey("inter").flow(RecurringSeries.Flow.INCOME)
+                .cadence(RecurringSeries.Cadence.MONTHLY).anchorDay((short) 9).dayTolerance((short) 0)
+                .amountType(RecurringSeries.AmountType.FIXED).expectedAmount(new BigDecimal("2.4000"))
+                .occurrences(3)
+                .firstSeenAt(cashback.get(0).getDate()).lastSeenAt(cashback.get(2).getDate())
+                .active(false).dismissed(true).source(RecurringSeries.Source.DETECTED)
+                .build();
+        seriesStore.add(dismissed);
+        linkGymTransactions(dismissed, cashback);
+
+        service.detect(EMAIL);
+
+        RecurringSeries twin = series("cashback", RecurringSeries.Flow.INCOME);
+        assertThat(linkStore).hasSize(3);
+        assertThat(linkStore).allMatch(link -> link.getSeriesId().equals(twin.getId()));
+        assertThat(dismissed.isActive()).isFalse();
+        assertThat(dismissed.isDismissed()).isTrue();
+    }
+
+    @Test
+    void userSeriesNotRefoundKeepsItsLinksAndStaysActive() {
+        // agendamento manual cuja transação conciliada não está mais na base
+        // (extrato removido): curadoria do usuário nunca é órfã para o motor
+        RecurringSeries scheduled = scheduledUtilities("luz",
+                RecurringSeries.AmountType.VARIABLE, "230.00");
+        seriesStore.add(scheduled);
+        linkStore.add(RecurringSeriesLink.builder()
+                .id(UUID.randomUUID()).seriesId(scheduled.getId())
+                .bankTransactionId(UUID.randomUUID()).matchedAt(OffsetDateTime.now()).build());
+        transactions.add(tx("Padaria Estrela do Sul", "DEBIT", "-12.50", day(2025, 5, 21)));
+
+        service.detect(EMAIL);
+
+        assertThat(linkStore).hasSize(1);
+        assertThat(linkStore.get(0).getSeriesId()).isEqualTo(scheduled.getId());
+        assertThat(scheduled.isActive()).isTrue();
     }
 
     @Test
@@ -775,6 +1055,10 @@ class RecurrenceDetectionServiceTest {
     }
 
     private OffsetDateTime day(int year, int month, int dayOfMonth) {
-        return OffsetDateTime.of(LocalDate.of(year, month, dayOfMonth), LocalTime.NOON, ZoneOffset.UTC);
+        return at(LocalDate.of(year, month, dayOfMonth));
+    }
+
+    private OffsetDateTime at(LocalDate date) {
+        return OffsetDateTime.of(date, LocalTime.NOON, ZoneOffset.UTC);
     }
 }

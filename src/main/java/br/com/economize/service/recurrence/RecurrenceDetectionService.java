@@ -44,7 +44,9 @@ import java.util.function.Supplier;
  * (usuário, merchant_key, fluxo), o vínculo é único por transação, e os
  * agregados são recalculados do zero a cada varredura — rodar duas vezes sobre
  * os mesmos dados não muda nada. Série sem ocorrência há 2+ ciclos vira
- * {@code active=false}, nunca é apagada (o histórico alimenta o EC-096).
+ * {@code active=false}, nunca é apagada (o histórico alimenta o EC-096); série
+ * cuja chave o motor não produz mais cede os vínculos à que a substitui e
+ * também é só desativada (ver {@link #releaseOrphanLinks}).
  *
  * <p>Transação programática ({@link TransactionTemplate}) em vez de
  * {@code @Transactional}: o listener pós-importação e o {@code POST /detect}
@@ -62,6 +64,8 @@ public class RecurrenceDetectionService {
 
     // 2 ocorrências dão um único intervalo — coincidência, não padrão
     static final int MIN_OCCURRENCES = 3;
+    // intervalos mais recentes que decidem cadência, âncora e tolerância (ver computeStats)
+    static final int RECENT_INTERVALS = 12;
     private static final int STALE_CYCLES = 2;
     private static final int MAX_DAY_TOLERANCE = 15;
     // ciclo do dia do mês para distância circular: dia 31 e dia 1 distam 1
@@ -152,6 +156,8 @@ public class RecurrenceDetectionService {
                 transactions, extractions, tokenMonthCounts, pixPairIds, nameTokens,
                 curatedSeries, seriesIdByLinkedTx);
         Set<UUID> linkedTransactionIds = new HashSet<>(seriesIdByLinkedTx.keySet());
+        Set<UUID> orphanSeriesIds = releaseOrphanLinks(existing, seriesByKey, groups,
+                seriesIdByLinkedTx, linkedTransactionIds);
         LocalDate referenceDay = newestDay(transactions);
 
         int created = 0;
@@ -168,10 +174,7 @@ public class RecurrenceDetectionService {
             // um pedido explícito de casamento: a primeira transação real que
             // cair na chave dela concilia na hora, sem esperar histórico.
             RecurringSeries scheduled = seriesByKey.get(entry.getKey());
-            boolean curatedTarget = scheduled != null
-                    && scheduled.getSource() == RecurringSeries.Source.USER
-                    && !scheduled.isDismissed();
-            if (groupTxs.size() < MIN_OCCURRENCES && !curatedTarget) continue;
+            if (!materializes(groupTxs, scheduled)) continue;
 
             String merchantKey = entry.getKey().substring(0, entry.getKey().lastIndexOf('|'));
             RecurringSeries.Flow flow = RecurringSeries.Flow
@@ -210,17 +213,24 @@ public class RecurrenceDetectionService {
             }
         }
 
-        // séries que a varredura não reencontrou (chave que mudou, dado que
-        // parou de vir): a inatividade é medida pela própria série
+        // séries que a varredura não reencontrou. Órfã de verdade (tinha vínculos
+        // e o motor acabou de redistribuí-los, ver releaseOrphanLinks) sai de
+        // cena agora: ativa, ela apareceria na tela e na previsão ao lado da
+        // gêmea que herdou o histórico — e IRREGULAR nunca fica stale, então
+        // ficaria lá para sempre. Sem vínculo a liberar (dado que parou de vir),
+        // a inatividade continua sendo medida pela própria série.
         for (RecurringSeries series : existing) {
             if (matchedSeriesIds.contains(series.getId())) continue;
             if (series.getSource() != RecurringSeries.Source.DETECTED || !series.isActive()) continue;
-            if (series.getLastSeenAt() == null) continue;
-            if (isStale(series.getCadence(), series.getDayTolerance(), utcDay(series.getLastSeenAt()), referenceDay)) {
-                series.setActive(false);
-                dirtySeries.add(series);
-                updated++;
+            boolean orphaned = orphanSeriesIds.contains(series.getId());
+            if (!orphaned) {
+                if (series.getLastSeenAt() == null) continue;
+                if (!isStale(series.getCadence(), series.getDayTolerance(),
+                        utcDay(series.getLastSeenAt()), referenceDay)) continue;
             }
+            series.setActive(false);
+            dirtySeries.add(series);
+            updated++;
         }
 
         if (!dirtySeries.isEmpty()) seriesRepository.saveAll(dirtySeries);
@@ -234,6 +244,78 @@ public class RecurrenceDetectionService {
         log.info("Detecção de recorrência: {} séries novas, {} atualizadas, {} vínculos, user={}",
                 created, updated, linksCreated, user.getEmail());
         return new DetectionSummary(created, updated, linksCreated);
+    }
+
+    /**
+     * O grupo vira (ou alimenta) uma série? O mínimo de 3 ocorrências separa
+     * padrão de coincidência — mas só para DESCOBRIR série nova. Série agendada
+     * pelo usuário (USER) já é um pedido explícito de casamento: a primeira
+     * transação real que cair na chave dela concilia na hora, sem esperar
+     * histórico.
+     */
+    private boolean materializes(List<BankTransaction> groupTxs, RecurringSeries scheduled) {
+        boolean curatedTarget = scheduled != null
+                && scheduled.getSource() == RecurringSeries.Source.USER
+                && !scheduled.isDismissed();
+        return groupTxs.size() >= MIN_OCCURRENCES || curatedTarget;
+    }
+
+    /**
+     * Libera os vínculos das séries DETECTED que esta varredura não vai
+     * reencontrar, para que as transações delas possam ser vinculadas de novo
+     * onde o motor as agrupa AGORA.
+     *
+     * <p>Quando a derivação da chave muda (EC-111: nome do banco virou
+     * stopword, PIX ganhou chave composta) ou o token dominante oscila entre
+     * varreduras, a série gravada com a chave antiga não é reencontrada e o
+     * mesmo histórico nasce de novo sob a chave nova. Sem esta liberação a
+     * gêmea nascia SEM vínculo nenhum — "transação já vinculada nunca
+     * revincula" — e a previsão de saldo nunca a via liquidada no mês, enquanto
+     * a órfã, ainda ativa, projetava a mesma cobrança ao lado dela. Os
+     * vínculos seguem a transação para a série que a explica hoje; a órfã fica
+     * sem nenhum e é desativada logo adiante, com a contagem de ocorrências
+     * preservada como histórico.
+     *
+     * <p>Todos os vínculos da órfã são liberados, não só os que alguma série
+     * absorve nesta varredura: a transação que hoje cai num grupo abaixo do
+     * mínimo, presa à órfã, bloquearia a série dela quando vier a existir.
+     * Série USER nunca entra aqui — é curadoria, e a chave dela é reencontrada
+     * pela prioridade que tem em {@link #electKey}.
+     *
+     * <p>O delete é em lote e roda AGORA, antes de qualquer insert desta
+     * varredura: no flush o Hibernate executa INSERTs antes de DELETEs, e o
+     * UNIQUE de {@code bank_transaction_id} estouraria (ver
+     * {@link RecurringSeriesLinkRepository#deleteAllBySeriesIdIn}).
+     *
+     * @return ids das séries órfãs cujos vínculos foram liberados
+     */
+    private Set<UUID> releaseOrphanLinks(List<RecurringSeries> existing,
+                                         Map<String, RecurringSeries> seriesByKey,
+                                         Map<String, List<BankTransaction>> groups,
+                                         Map<UUID, UUID> seriesIdByLinkedTx,
+                                         Set<UUID> linkedTransactionIds) {
+        Set<UUID> refound = new HashSet<>();
+        for (Map.Entry<String, List<BankTransaction>> entry : groups.entrySet()) {
+            RecurringSeries series = seriesByKey.get(entry.getKey());
+            if (series != null && materializes(entry.getValue(), series)) refound.add(series.getId());
+        }
+        Set<UUID> candidates = new HashSet<>();
+        for (RecurringSeries series : existing) {
+            if (series.getSource() != RecurringSeries.Source.DETECTED) continue;
+            if (!refound.contains(series.getId())) candidates.add(series.getId());
+        }
+        Set<UUID> orphans = new HashSet<>();
+        for (Map.Entry<UUID, UUID> link : seriesIdByLinkedTx.entrySet()) {
+            if (!candidates.contains(link.getValue())) continue;
+            orphans.add(link.getValue());
+            linkedTransactionIds.remove(link.getKey());
+        }
+        if (!orphans.isEmpty()) {
+            int released = linkRepository.deleteAllBySeriesIdIn(orphans);
+            log.info("Detecção de recorrência: {} vínculos liberados de {} séries não reencontradas",
+                    released, orphans.size());
+        }
+        return orphans;
     }
 
     // ------------------------------------------------------------------
@@ -308,7 +390,7 @@ public class RecurrenceDetectionService {
             // chave curada nenhuma: não há sequestro a evitar
             String key = extraction.anchor() != null
                     ? extraction.anchor()
-                    : electKey(tx, direction, extraction.tokens(), tokenMonthCounts,
+                    : electKey(tx, direction, extraction, tokenMonthCounts,
                     curatedSeries, seriesIdByLinkedTx);
             if (key == null || key.isBlank()) continue;
             String groupKey = seriesKey(key, direction);
@@ -378,30 +460,43 @@ public class RecurrenceDetectionService {
      * tokens restantes e a transação segue o fluxo normal de descoberta. Quando
      * não sobra token nenhum ela simplesmente não é agrupada — como já acontece
      * com descrição feita só de ruído.
+     *
+     * <p>A chave "natural" da transação (o que a descoberta daria a ela — token
+     * dominante, ou nome composto no PIX, ver {@link MerchantKeyExtractor#entityKey})
+     * é testada contra as curadas ANTES dos tokens soltos: é assim que o
+     * agendamento "Pix Maria Souza" (chave "maria souza", pelo mesmo deriveKey)
+     * concilia os PIX reais dessa pessoa.
      */
-    private String electKey(BankTransaction tx, RecurringSeries.Flow direction, List<String> tokens,
+    private String electKey(BankTransaction tx, RecurringSeries.Flow direction,
+                            MerchantKeyExtractor.Extraction extraction,
                             Map<String, Integer> tokenMonthCounts,
                             Map<String, RecurringSeries> curatedSeries,
                             Map<UUID, UUID> seriesIdByLinkedTx) {
         if (curatedSeries.isEmpty()) {
-            return MerchantKeyExtractor.dominantToken(tokens, tokenMonthCounts);
+            return MerchantKeyExtractor.entityKey(extraction, extraction.tokens(), tokenMonthCounts);
         }
-        List<String> candidates = new ArrayList<>(tokens);
+        List<String> candidates = new ArrayList<>(extraction.tokens());
         while (!candidates.isEmpty()) {
             String dominant = MerchantKeyExtractor.dominantToken(candidates, tokenMonthCounts);
-            String elected = dominant;
-            for (String token : candidates) {
-                if (curatedSeries.containsKey(seriesKey(token, direction))) {
-                    elected = token;
-                    break;
+            String natural = MerchantKeyExtractor.entityKey(extraction, candidates, tokenMonthCounts);
+            String elected = natural;
+            if (!curatedSeries.containsKey(seriesKey(natural, direction))) {
+                for (String token : candidates) {
+                    if (curatedSeries.containsKey(seriesKey(token, direction))) {
+                        elected = token;
+                        break;
+                    }
                 }
             }
             RecurringSeries curated = curatedSeries.get(seriesKey(elected, direction));
-            if (curated == null || matchesCuratedSeries(curated, tx, elected, dominant,
+            // a chave natural nasce do próprio dominante: não há token marginal a
+            // comparar, e o teste de meses se faz com o dominante
+            String curatedToken = elected.equals(natural) ? dominant : elected;
+            if (curated == null || matchesCuratedSeries(curated, tx, curatedToken, dominant,
                     tokenMonthCounts, seriesIdByLinkedTx)) {
                 return elected;
             }
-            candidates.remove(elected);
+            candidates.remove(curatedToken);
         }
         return null;
     }
@@ -462,13 +557,25 @@ public class RecurrenceDetectionService {
         sorted.sort(java.util.Comparator.comparing(BankTransaction::getDate));
         BankTransaction latest = sorted.get(sorted.size() - 1);
 
-        List<LocalDate> days = sorted.stream().map(tx -> utcDay(tx.getDate())).distinct().sorted().toList();
+        List<LocalDate> allDays = sorted.stream().map(tx -> utcDay(tx.getDate())).distinct().sorted().toList();
+        // A cadência é o que a série FAZ HOJE, não a média de toda a vida dela.
+        // Medido no extrato real (EC-111): a fatura do cartão foi paga em duas a
+        // cinco parcelas por mês no primeiro ano e em uma só nos 14 meses
+        // seguintes; sobre os 33 intervalos a mediana caía num gap de 23 dias e
+        // a maior despesa recorrente do usuário saía IRREGULAR — fora da previsão,
+        // que ignora IRREGULAR por construção. A janela dos últimos 12 intervalos
+        // cobre um ano de cobrança mensal ou um trimestre de semanal, que é o
+        // horizonte em que o comportamento atual se estabelece; série curta usa
+        // tudo o que tem, como antes.
+        List<LocalDate> days = allDays.size() > RECENT_INTERVALS + 1
+                ? allDays.subList(allDays.size() - RECENT_INTERVALS - 1, allDays.size())
+                : allDays;
         List<Long> gaps = new ArrayList<>();
         for (int i = 1; i < days.size(); i++) {
             gaps.add(ChronoUnit.DAYS.between(days.get(i - 1), days.get(i)));
         }
 
-        RecurringSeries.Cadence hint = extractions.get(latest.getId()).cadenceHint();
+        RecurringSeries.Cadence hint = corroboratedHint(sorted, extractions);
         RecurringSeries.Cadence cadence = hint != null ? hint : classifyCadence(gaps);
 
         Short anchorDay = null;
@@ -483,7 +590,16 @@ public class RecurrenceDetectionService {
             dayTolerance = (short) Math.min(tolerance, MAX_DAY_TOLERANCE);
         }
 
-        List<BigDecimal> amounts = sorted.stream().map(tx -> tx.getAmount().abs()).toList();
+        // Valor esperado e tipo de valor saem da MESMA janela recente: a média de
+        // toda a vida da fatura (R$ 623, puxada pelas parcelas de R$ 75 do
+        // primeiro ano) previa um terço do que ela custa hoje (R$ 1,3 mil a 2,6
+        // mil nos últimos doze meses), e uma assinatura reajustada há um ano
+        // continuaria VARIABLE para sempre por causa do preço antigo.
+        Set<LocalDate> recentDays = new HashSet<>(days);
+        List<BankTransaction> recent = sorted.stream()
+                .filter(tx -> recentDays.contains(utcDay(tx.getDate())))
+                .toList();
+        List<BigDecimal> amounts = recent.stream().map(tx -> tx.getAmount().abs()).toList();
         BigDecimal min = amounts.stream().min(BigDecimal::compareTo).orElse(BigDecimal.ZERO);
         BigDecimal max = amounts.stream().max(BigDecimal::compareTo).orElse(BigDecimal.ZERO);
         // mediana de verdade exige ordenar por VALOR: "amounts" está em ordem
@@ -508,6 +624,28 @@ public class RecurrenceDetectionService {
                 fixed ? RecurringSeries.AmountType.FIXED : RecurringSeries.AmountType.VARIABLE,
                 expected, sorted.get(0).getDate(), latest.getDate(), displayName,
                 dominantCategory(sorted));
+    }
+
+    /**
+     * A dica de cadência do descritivo ("Mensal"/"Trimestral") só manda quando
+     * ela é a regra do grupo, não a exceção. A regra original — a dica da
+     * transação MAIS RECENTE vence o histórico — existe para a troca de plano:
+     * o descritivo novo já diz a cadência daqui para frente. Mas ela pressupõe
+     * que o grupo é uma entidade só. No extrato real (EC-111) um único crédito
+     * "Plano ... Trimestral" caiu num grupo de 271 lançamentos sem dica nenhuma e
+     * o classificou inteiro como QUARTERLY. Exigir dica em pelo menos metade do
+     * grupo mantém a troca de plano (todas as cobranças do plano trazem a dica) e
+     * neutraliza o intruso: sem maioria, quem decide são os intervalos.
+     */
+    private RecurringSeries.Cadence corroboratedHint(List<BankTransaction> sorted,
+                                                     Map<UUID, MerchantKeyExtractor.Extraction> extractions) {
+        BankTransaction latest = sorted.get(sorted.size() - 1);
+        RecurringSeries.Cadence hint = extractions.get(latest.getId()).cadenceHint();
+        if (hint == null) return null;
+        long hinted = sorted.stream()
+                .filter(tx -> extractions.get(tx.getId()).cadenceHint() != null)
+                .count();
+        return hinted * 2 >= sorted.size() ? hint : null;
     }
 
     private RecurringSeries.Cadence classifyCadence(List<Long> gaps) {

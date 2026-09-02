@@ -84,6 +84,113 @@ class MerchantKeyExtractorTest {
     }
 
     @Test
+    void bankNamesAndOperationVerbsNeverIdentifyTheEntity() {
+        // o nome do banco acompanha o CDB, o cashback e o estorno; "compra" é o
+        // verbo da operação — nenhum deles é a entidade
+        assertThat(MerchantKeyExtractor.extract("Resgate: \"CDB Cofrinho BANCO INTER SA\"").tokens())
+                .containsExactly("resgate", "cdb", "cofrinho");
+        assertThat(MerchantKeyExtractor.extract("Cashback: \"ITAU PRE 20GB MENSAL\"").tokens())
+                .containsExactly("cashback", "pre");
+        assertThat(MerchantKeyExtractor.extract("Compra Meio De Transporte: \"No estabelecimento TRILHOS SP\"").tokens())
+                .containsExactly("meio", "transporte", "trilhos");
+    }
+
+    @Test
+    void cityTokensAreRemovedFromTheDuplicatedMerchantCopyToo() {
+        // MEMO truncado + NAME reformatado: a cidade da cópia do meio escapava do
+        // corte terminal e virava o token mais persistente do histórico
+        assertThat(MerchantKeyExtractor.extract(
+                "Compra no debito: \"No estabelecimento 123 JOAO VITOR G VILAREAL 1\" Joao Vitor G Vilareal Bra")
+                .tokens()).containsExactly("joao", "vitor");
+    }
+
+    @Test
+    void transferCounterpartyIsKeyedByFirstNameAndDominantToken() {
+        Map<String, Integer> monthCounts = Map.of("alice", 6, "santos", 20, "araujo", 8);
+        MerchantKeyExtractor.Extraction alice =
+                MerchantKeyExtractor.extract("Pix recebido: \"Cp :123-Alice dos Santos Araujo\"");
+        assertThat(alice.transferLike()).isTrue();
+        assertThat(MerchantKeyExtractor.entityKey(alice, alice.tokens(), monthCounts))
+                .isEqualTo("alice santos");
+        // outra pessoa com o mesmo sobrenome dominante fica em outra chave
+        MerchantKeyExtractor.Extraction other =
+                MerchantKeyExtractor.extract("Pix enviado: \"Cp :456-Bruno Santos Lima\"");
+        assertThat(MerchantKeyExtractor.entityKey(other, other.tokens(), monthCounts))
+                .isEqualTo("bruno santos");
+        // "null" literal do banco de origem ausente não vira primeiro nome
+        MerchantKeyExtractor.Extraction noBank =
+                MerchantKeyExtractor.extract("Pix enviado: \"Cp :456-null Bruno Santos Lima\"");
+        assertThat(MerchantKeyExtractor.entityKey(noBank, noBank.tokens(), monthCounts))
+                .isEqualTo("bruno santos");
+    }
+
+    @Test
+    void transferKeyCompletesWithSecondTokenWhenFirstNameDominates() {
+        // "maria" é o token mais persistente por ser comum: duas Marias não podem
+        // colidir numa chave de um token só
+        Map<String, Integer> monthCounts = Map.of("maria", 13, "eduarda", 5, "bezerra", 5, "luiza", 2, "ribeiro", 4);
+        MerchantKeyExtractor.Extraction first =
+                MerchantKeyExtractor.extract("Pix enviado: \"Cp :1-Maria Eduarda Bezerra\"");
+        MerchantKeyExtractor.Extraction second =
+                MerchantKeyExtractor.extract("Pix enviado: \"Cp :1-Maria Luiza Ribeiro\"");
+        assertThat(MerchantKeyExtractor.entityKey(first, first.tokens(), monthCounts))
+                .isEqualTo("maria bezerra");
+        assertThat(MerchantKeyExtractor.entityKey(second, second.tokens(), monthCounts))
+                .isEqualTo("maria ribeiro");
+    }
+
+    @Test
+    void purchasesKeepTheSingleDominantTokenAcrossLabelDrift() {
+        // compra no cartão não é transferência: a chave continua o dominante
+        // sozinho, que é o que sobrevive à troca de rótulo do estabelecimento
+        Map<String, Integer> monthCounts = Map.of("luminora", 6, "axis", 3);
+        MerchantKeyExtractor.Extraction purchase =
+                MerchantKeyExtractor.extract("No Estabelecimento Axis Luminora Sao Paulo Bra");
+        assertThat(purchase.transferLike()).isFalse();
+        assertThat(MerchantKeyExtractor.entityKey(purchase, purchase.tokens(), monthCounts))
+                .isEqualTo("luminora");
+    }
+
+    @Test
+    void deriveKeyComposesTransferHintsLikeDetectionDoes() {
+        assertThat(MerchantKeyExtractor.deriveKey("Pix Maria Souza")).isEqualTo("maria souza");
+        assertThat(MerchantKeyExtractor.deriveKey("Aluguel")).isEqualTo("aluguel");
+    }
+
+    @Test
+    void transferStopsAtTheMaskedDocumentOfTheCounterparty() {
+        // O que vem depois do CPF mascarado é banco de destino, agência e conta.
+        // "MERCADO PAGO IP LTDA" não está em lista de banco nenhuma e acompanha
+        // TODO PIX para aquele destino: sem o corte, ele ganha mais meses que o
+        // nome de quem recebe e vira a identidade da série
+        MerchantKeyExtractor.Extraction nubank = MerchantKeyExtractor.extract(
+                "Transferência enviada pelo Pix - ANA BEATRIZ COSTA - •••.123.456-•• - "
+                        + "MERCADO PAGO IP LTDA (0323) Agência: 1 Conta: 12345678-9");
+
+        assertThat(nubank.tokens()).containsExactly("ana", "beatriz", "costa");
+    }
+
+    @Test
+    void transferWithoutMaskKeepsTheWholeDescription() {
+        // O formato do Inter não traz documento: cortar aqui perderia o nome
+        MerchantKeyExtractor.Extraction inter =
+                MerchantKeyExtractor.extract("Pix enviado: \"Cp :260-Ana Beatriz Costa\"");
+
+        assertThat(inter.tokens()).containsExactly("ana", "beatriz", "costa");
+    }
+
+    @Test
+    void purchaseWithMaskedCardNumberIsNotTruncated() {
+        // O corte vale só para transferência: em compra, a máscara é o número do
+        // cartão e o nome do estabelecimento vem DEPOIS dela
+        MerchantKeyExtractor.Extraction compra =
+                MerchantKeyExtractor.extract("Compra cartão final ****1234 Padaria Aurora");
+
+        assertThat(compra.transferLike()).isFalse();
+        assertThat(compra.tokens()).contains("padaria", "aurora");
+    }
+
+    @Test
     void mentionsNameRequiresTwoTokensOfTheOwnerName() {
         List<String> owner = MerchantKeyExtractor.nameTokens("Carlos Pereira");
         assertThat(MerchantKeyExtractor.mentionsName(
