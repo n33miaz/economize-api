@@ -52,14 +52,24 @@ public class ReportService {
                 .reduce(BigDecimal.ZERO, BigDecimal::add)
                 .abs();
 
-        Map<String, BigDecimal> byCategory = new LinkedHashMap<>();
+        // Entrada e saída SEPARADAS por categoria. Antes as duas somavam na
+        // mesma chave e viravam um líquido: uma categoria que recebeu 4.400 e
+        // gastou 5.830 aparecia como 1.430, então a fatia da pizza contradizia
+        // o total de saídas do próprio relatório na mesma tela
+        Map<String, CategorySplit> byCategory = new LinkedHashMap<>();
         for (BankTransaction tx : transactions) {
             String cat = tx.getCategory() != null ? tx.getCategory() : "OTHER";
-            byCategory.merge(cat, tx.getAmount(), BigDecimal::add);
+            byCategory.computeIfAbsent(cat, k -> new CategorySplit()).add(tx.getAmount());
         }
 
+        // A dominante é a de maior GASTO: é o que a pergunta "no que foi meu
+        // dinheiro" quer saber. Só quando o período não teve saída nenhuma ela
+        // passa a ser a maior entrada
         String dominant = byCategory.entrySet().stream()
-                .max(Comparator.comparing(entry -> entry.getValue().abs()))
+                .filter(entry -> entry.getValue().expense.signum() > 0)
+                .max(Comparator.comparing(entry -> entry.getValue().expense))
+                .or(() -> byCategory.entrySet().stream()
+                        .max(Comparator.comparing(entry -> entry.getValue().income)))
                 .map(Map.Entry::getKey)
                 .orElse(null);
 
@@ -101,20 +111,70 @@ public class ReportService {
         reportRepository.delete(report);
     }
 
+    /**
+     * O resumo que aparece no card, em português de gente.
+     *
+     * <p>A versão anterior imprimia o enum cru e o valor do banco: "Período
+     * monthly: receitas R$ 4400.0000". Quatro casas decimais e um enum em
+     * inglês na frase mais visível da tela — que o usuário lê antes de qualquer
+     * número — faziam o relatório parecer log de depuração.
+     *
+     * <p>A categoria dominante fica FORA daqui: ela aparece com nome resolvido
+     * no próprio card, e repeti-la em texto significaria imprimir a chave de
+     * sistema ("OTHER") que o app sabe traduzir e o serviço não.
+     */
     private String buildSummary(Report.Period period, BigDecimal income, BigDecimal expense, String dominant) {
         BigDecimal saldo = income.subtract(expense);
-        String tone = saldo.signum() >= 0 ? "positivo" : "negativo";
-        return String.format(
-                "Período %s: receitas R$ %s, despesas R$ %s, saldo %s (R$ %s). Categoria dominante: %s.",
-                period.name().toLowerCase(),
-                income.toPlainString(),
-                expense.toPlainString(),
-                tone,
-                saldo.toPlainString(),
-                dominant != null ? dominant : "n/d");
+        String entrou = brl(income);
+        String saiu = brl(expense);
+        if (saldo.signum() > 0) {
+            return "Entraram " + entrou + " e saíram " + saiu + ": sobraram " + brl(saldo) + ".";
+        }
+        if (saldo.signum() < 0) {
+            // "Faltaram" e não "saldo negativo": o que aconteceu é que o
+            // dinheiro acabou antes, e é assim que a pessoa conta o que viveu
+            return "Entraram " + entrou + " e saíram " + saiu + ": faltaram " + brl(saldo.abs()) + ".";
+        }
+        return "Entrou e saiu exatamente " + entrou + " — o período fechou no zero.";
     }
 
-    private String serialize(Map<String, BigDecimal> map) {
+    /** "R$ 4.400,00" com o separador que o Brasil usa, sem casa sobrando. */
+    private String brl(BigDecimal value) {
+        return java.text.NumberFormat
+                .getCurrencyInstance(new java.util.Locale("pt", "BR"))
+                .format(value.setScale(2, java.math.RoundingMode.HALF_UP));
+    }
+
+    /**
+     * Entrada e saída de UMA categoria no período, cada uma em módulo.
+     *
+     * <p>Serializado como {@code {"FOOD":{"income":0,"expense":500.00}}}. O app
+     * ainda aceita o formato antigo (um número com sinal por categoria), que é
+     * o que os relatórios já gravados carregam.
+     */
+    private static final class CategorySplit {
+        private BigDecimal income = BigDecimal.ZERO;
+        private BigDecimal expense = BigDecimal.ZERO;
+
+        void add(BigDecimal amount) {
+            if (amount == null) return;
+            if (amount.signum() >= 0) {
+                income = income.add(amount);
+            } else {
+                expense = expense.add(amount.abs());
+            }
+        }
+
+        public BigDecimal getIncome() {
+            return income;
+        }
+
+        public BigDecimal getExpense() {
+            return expense;
+        }
+    }
+
+    private String serialize(Map<String, CategorySplit> map) {
         try {
             return objectMapper.writeValueAsString(map);
         } catch (JsonProcessingException e) {
