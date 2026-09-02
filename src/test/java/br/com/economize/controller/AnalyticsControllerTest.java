@@ -256,7 +256,8 @@ class AnalyticsControllerTest {
                 List.of(new CycleCaveat(CycleCaveat.Kind.LATE_INCOME,
                         "Vale-refeição caiu no fim do ciclo",
                         "Entrou em 25/07, a 6 dias do fechamento.",
-                        new BigDecimal("800.00"))));
+                        new BigDecimal("800.00"))),
+                base.lastTransactionDate());
     }
 
     private MonthlyAnalyticsResponse monthResponse() {
@@ -266,7 +267,7 @@ class AnalyticsControllerTest {
                 new MonthlyAnalyticsResponse.MonthTotals("2026-06",
                         LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 30),
                         new BigDecimal("5000.00"), new BigDecimal("3000.00"), new BigDecimal("2000.00")),
-                List.of(), 0, List.of());
+                List.of(), 0, List.of(), LocalDate.of(2026, 7, 28));
     }
 
     private MonthlyAnalyticsResponse windowResponse() {
@@ -276,7 +277,7 @@ class AnalyticsControllerTest {
                 new MonthlyAnalyticsResponse.MonthTotals(null,
                         LocalDate.of(2026, 6, 10), LocalDate.of(2026, 7, 11),
                         new BigDecimal("5000.00"), new BigDecimal("3000.00"), new BigDecimal("2000.00")),
-                List.of(), 0, List.of());
+                List.of(), 0, List.of(), LocalDate.of(2026, 8, 10));
     }
 
     private String bearerToken() {

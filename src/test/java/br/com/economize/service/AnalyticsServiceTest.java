@@ -8,6 +8,7 @@ import br.com.economize.repository.BankTransactionRepository;
 import br.com.economize.repository.CategoryRepository;
 import br.com.economize.repository.UserRepository;
 import br.com.economize.service.wish.CycleCaveatService;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
@@ -315,6 +316,35 @@ class AnalyticsServiceTest {
         assertThat(response.previous().month()).isEqualTo("2026-06");
         assertThat(response.previous().start()).isEqualTo(LocalDate.of(2026, 6, 1));
         assertThat(response.previous().end()).isEqualTo(LocalDate.of(2026, 6, 30));
+    }
+
+    @Test
+    @DisplayName("A consolidação diz até que dia o extrato alcança (EC-137)")
+    void monthlyExposesLastTransactionDate() {
+        stubMonthly(List.of(), List.of(), List.of(), 0);
+        OffsetDateTime max = OffsetDateTime.of(2026, 7, 28, 15, 30, 0, 0, ZoneOffset.UTC);
+        when(bankTransactionRepository.findDateBounds(user.getId()))
+                .thenReturn(Collections.singletonList(
+                        new Object[]{OffsetDateTime.of(2026, 5, 1, 0, 0, 0, 0, ZoneOffset.UTC), max}));
+
+        var response = service.analyze(EMAIL, AnalysisWindow.ofMonth(month));
+
+        // O dia, e não o instante: a pergunta do app é "o extrato já alcança
+        // o dia 25?", e hora nenhuma muda essa resposta
+        assertThat(response.lastTransactionDate()).isEqualTo(LocalDate.of(2026, 7, 28));
+    }
+
+    @Test
+    @DisplayName("Sem transação nenhuma, a data mais recente é nula e não hoje")
+    void monthlyLastTransactionDateIsNullWithoutData() {
+        stubMonthly(List.of(), List.of(), List.of(), 0);
+        when(bankTransactionRepository.findDateBounds(user.getId()))
+                .thenReturn(Collections.singletonList(new Object[]{null, null}));
+
+        var response = service.analyze(EMAIL, AnalysisWindow.ofMonth(month));
+
+        // Nulo é "não sei"; hoje seria dizer que o extrato está em dia
+        assertThat(response.lastTransactionDate()).isNull();
     }
 
     @Test

@@ -22,7 +22,13 @@ public record MonthlyAnalyticsResponse(
         long pendingReviewCount,
         // EC-138: o que o total NÃO diz. Campo aditivo — o app publicado
         // ignora o que não conhece, então o contrato antigo segue valendo
-        List<CycleCaveat> caveats
+        List<CycleCaveat> caveats,
+        // EC-137: a data da transação mais recente que o usuário tem, de
+        // QUALQUER período. É o que permite ao app saber se o extrato já
+        // alcança um dia específico — a pergunta "o VR de 25/08 já chegou
+        // aqui?" não se responde com os totais deste recorte. Nulo quando não
+        // há transação nenhuma
+        LocalDate lastTransactionDate
 ) {
     /**
      * Totais do período comparável — mês anterior do calendário no modo mês,

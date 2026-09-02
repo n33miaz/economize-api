@@ -86,7 +86,21 @@ public class AnalyticsService {
                 cycleCaveatService.caveatsFor(
                         user.getId(), window,
                         previous.income.signum() > 0 || previous.expense.signum() > 0,
-                        LocalDate.now(ZoneOffset.UTC)));
+                        LocalDate.now(ZoneOffset.UTC)),
+                lastTransactionDate(user.getId()));
+    }
+
+    /**
+     * O dia da transação mais recente do usuário, ou {@code null} se não há
+     * nenhuma (EC-137).
+     *
+     * <p>Sai do mesmo min/max que já alimenta o seletor de meses: é um agregado
+     * sobre o índice {@code (user_id, date)}, não uma varredura.
+     */
+    private LocalDate lastTransactionDate(UUID userId) {
+        List<Object[]> bounds = bankTransactionRepository.findDateBounds(userId);
+        if (bounds.isEmpty() || bounds.get(0)[1] == null) return null;
+        return ((OffsetDateTime) bounds.get(0)[1]).atZoneSameInstant(ZoneOffset.UTC).toLocalDate();
     }
 
     /**
