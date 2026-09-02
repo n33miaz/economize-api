@@ -12,6 +12,8 @@ import java.util.List;
  * @param remaining        quanto falta juntar (alvo menos o já guardado)
  * @param hoursOfWork      o preço medido em horas de trabalho
  * @param workDays         as mesmas horas convertidas em dias de expediente
+ * @param workMonths       os mesmos dias convertidos em meses de expediente
+ * @param workYears        e em anos, para o desejo que atravessa vários deles
  * @param monthsToAfford   ciclos guardando a sobra até completar
  * @param estimatedDate    quando isso aconteceria, no ritmo de hoje
  * @param installments     em quantas vezes caberia usando SÓ a sobra
@@ -23,6 +25,11 @@ public record WishProjection(
         BigDecimal remaining,
         BigDecimal hoursOfWork,
         BigDecimal workDays,
+        // Meses TRABALHADOS, que não são os `monthsToAfford`: aqueles são de
+        // espera guardando a sobra. O mesmo desejo custa 4,1 meses de trabalho
+        // e leva 19 meses para ser pago — misturar os dois é prometer prazo
+        BigDecimal workMonths,
+        BigDecimal workYears,
         Integer monthsToAfford,
         LocalDate estimatedDate,
         Integer installments,

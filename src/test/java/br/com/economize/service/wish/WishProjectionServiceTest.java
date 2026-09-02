@@ -146,6 +146,34 @@ class WishProjectionServiceTest {
         // arredondada, para o desejo caro não deslizar horas inteiras
         assertThat(projection.hoursOfWork()).isEqualByComparingTo("709.1");
         assertThat(projection.workDays()).isEqualByComparingTo("88.6");
+        // 18.000 / 4.400: quatro salários inteiros para uma moto
+        assertThat(projection.workMonths()).isEqualByComparingTo("4.1");
+        assertThat(projection.workYears()).isEqualByComparingTo("0.3");
+    }
+
+    @Test
+    void desejoCaroSeMedeEmAnosDeTrabalho() {
+        givenSalary("4400");
+        givenWorkProfile(5, "8");
+
+        // Uma casa de R$ 320 mil: em horas o número deixa de comunicar, e é
+        // justamente aí que o ano de trabalho passa a ser a unidade legível
+        WishProjection projection = service.project(wish("320000"), service.baselineFor(USER, TODAY), TODAY);
+
+        assertThat(projection.workMonths()).isEqualByComparingTo("72.7");
+        assertThat(projection.workYears()).isEqualByComparingTo("6.1");
+    }
+
+    @Test
+    void semJornadaDeclaradaNaoInventaDiaNemMesTrabalhado() {
+        givenSalary("4400");
+
+        WishProjection projection = service.project(wish("18000"), service.baselineFor(USER, TODAY), TODAY);
+
+        // Sem jornada não há hora, e sem hora não há mês de trabalho: nulo é a
+        // resposta honesta, zero seria uma moto de graça
+        assertThat(projection.workMonths()).isNull();
+        assertThat(projection.workYears()).isNull();
     }
 
     @Test

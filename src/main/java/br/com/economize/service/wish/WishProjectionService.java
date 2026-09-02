@@ -155,6 +155,8 @@ public class WishProjectionService {
         // antes de dividir desloca o resultado em horas inteiras num desejo caro
         BigDecimal hoursOfWork = null;
         BigDecimal workDays = null;
+        BigDecimal workMonths = null;
+        BigDecimal workYears = null;
         if (baseline.knowsHourlyRate() && baseline.hoursPerMonth() != null
                 && baseline.workIncome().signum() > 0) {
             hoursOfWork = remaining
@@ -163,6 +165,12 @@ public class WishProjectionService {
             if (baseline.hoursPerDay() != null && baseline.hoursPerDay().signum() > 0) {
                 workDays = hoursOfWork.divide(baseline.hoursPerDay(), 1, RoundingMode.HALF_UP);
             }
+            // Um mês de trabalho é uma renda mensal inteira, então o mês sai da
+            // divisão direta — sem passar pelas horas já arredondadas, que num
+            // desejo caro deslocariam o resultado em dias
+            workMonths = remaining.divide(baseline.workIncome(), 1, RoundingMode.HALF_UP);
+            workYears = remaining.divide(
+                    baseline.workIncome().multiply(BigDecimal.valueOf(12)), 1, RoundingMode.HALF_UP);
         }
 
         Integer months = null;
@@ -180,7 +188,8 @@ public class WishProjectionService {
         }
 
         return new WishProjection(
-                scale2(remaining), hoursOfWork, workDays, months, estimatedDate,
+                scale2(remaining), hoursOfWork, workDays, workMonths, workYears,
+                months, estimatedDate,
                 installments, maxInstallment, achieved,
                 whatIfs(remaining, baseline, months, today));
     }

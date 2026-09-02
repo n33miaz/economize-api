@@ -57,6 +57,8 @@ public final class WishResponses {
             BigDecimal remaining,
             BigDecimal hoursOfWork,
             BigDecimal workDays,
+            BigDecimal workMonths,
+            BigDecimal workYears,
             Integer monthsToAfford,
             LocalDate estimatedDate,
             Integer installments,
@@ -66,7 +68,8 @@ public final class WishResponses {
     ) {
         static Projection from(WishProjection p) {
             return new Projection(
-                    p.remaining(), p.hoursOfWork(), p.workDays(), p.monthsToAfford(),
+                    p.remaining(), p.hoursOfWork(), p.workDays(),
+                    p.workMonths(), p.workYears(), p.monthsToAfford(),
                     p.estimatedDate(), p.installments(), p.maxInstallment(), p.achieved(),
                     p.whatIfs().stream()
                             .map(w -> new WhatIf(w.percentOfExpense(), w.monthlyCut(),

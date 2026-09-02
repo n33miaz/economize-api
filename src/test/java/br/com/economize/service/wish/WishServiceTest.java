@@ -257,6 +257,6 @@ class WishServiceTest {
     }
 
     private static WishProjection emptyProjection() {
-        return new WishProjection(BigDecimal.ZERO, null, null, null, null, null, null, false, List.of());
+        return new WishProjection(BigDecimal.ZERO, null, null, null, null, null, null, null, null, false, List.of());
     }
 }
