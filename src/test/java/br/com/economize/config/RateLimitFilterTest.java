@@ -128,6 +128,32 @@ class RateLimitFilterTest {
                 cheap.getResponse().getHeaders().getFirst("X-RateLimit-Remaining"));
     }
 
+    @Test
+    @DisplayName("O aceite de convite da casa está no balde caro: 10 tentativas e para (EC-149)")
+    void familyJoinShouldBeExpensive() {
+        for (int i = 0; i < 10; i++) {
+            ServerWebExchange attempt = MockServerWebExchange.from(
+                    MockServerHttpRequest.post("/api/v1/family/join").header(HttpHeaders.ORIGIN, ALLOWED_ORIGIN));
+            filter.filter(attempt, chain).block();
+            assertNotEquals(HttpStatus.TOO_MANY_REQUESTS, attempt.getResponse().getStatusCode());
+        }
+
+        ServerWebExchange eleventh = MockServerWebExchange.from(
+                MockServerHttpRequest.post("/api/v1/family/join").header(HttpHeaders.ORIGIN, ALLOWED_ORIGIN));
+        filter.filter(eleventh, chain).block();
+
+        // O código tem 40 bits; é a taxa, e não o tamanho, que inviabiliza a
+        // força bruta. No balde padrão seriam 60 palpites por minuto.
+        assertEquals(HttpStatus.TOO_MANY_REQUESTS, eleventh.getResponse().getStatusCode());
+        assertEquals(10, chainCalls.get());
+
+        // o resto da família segue no balde padrão, cheio
+        ServerWebExchange readFamily = get(ALLOWED_ORIGIN, "/api/v1/family");
+        filter.filter(readFamily, chain).block();
+        assertEquals(String.valueOf(STANDARD_CAPACITY - 1),
+                readFamily.getResponse().getHeaders().getFirst("X-RateLimit-Remaining"));
+    }
+
     private void exhaustBucket() {
         for (int i = 0; i < STANDARD_CAPACITY; i++) {
             filter.filter(get(ALLOWED_ORIGIN), chain).block();

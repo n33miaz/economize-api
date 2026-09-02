@@ -56,8 +56,13 @@ public class RateLimitFilter implements WebFilter {
     // O teste de chave do EC-107 entra no balde caro porque cada chamada vira
     // uma requisição paga ao provedor do usuário. O prefixo é o da rota exata:
     // ler o catálogo e a configuração são leituras locais e continuam baratas.
+    //
+    // O aceite de convite da casa (EC-149) entra pelo motivo oposto: é barato
+    // para o servidor e por isso mesmo seria barato de adivinhar. O código tem
+    // 40 bits; a 10 tentativas por minuto a força bruta deixa de ser um plano.
+    // Só o /join — criar a casa, ler e configurar seguem no balde padrão.
     private static final Set<String> EXPENSIVE_PREFIXES = Set.of(
-            "/api/v1/chat", "/api/v1/reports", "/api/v1/ai/settings/test");
+            "/api/v1/chat", "/api/v1/reports", "/api/v1/ai/settings/test", "/api/v1/family/join");
 
     private final ConcurrentMap<String, Bucket> standardBuckets = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, Bucket> expensiveBuckets = new ConcurrentHashMap<>();
