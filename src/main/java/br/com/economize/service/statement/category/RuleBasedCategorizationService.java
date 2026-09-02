@@ -73,8 +73,12 @@ public class RuleBasedCategorizationService {
                     List.of("ifood", "rappi", "uber eats", "delivery", "james delivery")),
             new Rule("FOOD_GROCERIES", "FOOD", List.of("supermercado", "mercadinho", "minimercado", "mercearia", "adega", "hortifruti", "sacolao", "sacolão", "atacadao", "atacadão", "assai", "assaí", "carrefour", "roldao", "roldão", "pao de acucar", "pão de açúcar", "big bompreco", "extra super")),
             new Rule("FOOD_COFFEE", "FOOD", List.of("padaria", "cafeteria", "starbucks", "confeitaria", "doceria")),
-            // "restaurant"/"lanche" como prefixo cobrem restaurante(s) e lanchonete(s)
-            new Rule("FOOD_RESTAURANT", "FOOD", List.of("restaurant", "lanche", "pizzaria", "churrascaria", "hamburgueria", "bar e ", "burger", "mc donalds", "mcdonald", "burger king", "subway", "outback", "habibs", "habib's")),
+            // "restaurant"/"lanch" como prefixo cobrem restaurante(s), lanche(s) e
+            // lanchonete(s). Era "lanche", que NÃO está dentro de "lanchonete"
+            // (lanch-o-nete): medido no extrato real (EC-111), 6 compras em
+            // lanchonetes ficavam sem categoria e 4 PIX para lanchonete caíam em
+            // Transferências
+            new Rule("FOOD_RESTAURANT", "FOOD", List.of("restaurant", "lanch", "pizzaria", "churrascaria", "hamburgueria", "bar e ", "burger", "mc donalds", "mcdonald", "burger king", "subway", "outback", "habibs", "habib's")),
             // Transporte
             new Rule("TRANSPORT_RIDE", "TRANSPORT", List.of("uber", "99app", "99 pop", "99pop", "cabify", "indriver")),
             new Rule("TRANSPORT_FUEL", "TRANSPORT", List.of("posto", "gasolina", "ipiranga", "shell", "petrobras", "combustivel", "combustível", "etanol")),

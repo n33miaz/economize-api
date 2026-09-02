@@ -49,6 +49,16 @@ class RuleBasedCategorizationServiceTest {
     }
 
     @Test
+    void lanchoneteIsARestaurantEvenWhenGluedOrPaidByPix() {
+        // "lanche" não está dentro de "lanchonete" (lanch-o-nete): a compra ficava
+        // sem categoria e o PIX para a lanchonete caía em Transferências
+        assertThat(keyOf("Compra no debito: \"No estabelecimento SolLanchonete VILAREAL BRA\""))
+                .isEqualTo("FOOD_RESTAURANT");
+        assertThat(keyOf("Pix enviado: \"Cp :123-LANCHONETE ESTRELA DO SUL\"")).isEqualTo("FOOD_RESTAURANT");
+        assertThat(keyOf("LANCHES DO ZE")).isEqualTo("FOOD_RESTAURANT");
+    }
+
+    @Test
     void carriesTheParentKeyAsFallback() {
         RuleBasedCategorizationService.Hit hit = service.match("NETFLIX.COM").orElseThrow();
         assertThat(hit.systemKey()).isEqualTo("LEISURE_STREAMING");

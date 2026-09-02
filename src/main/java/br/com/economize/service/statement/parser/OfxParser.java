@@ -6,7 +6,10 @@ import org.springframework.stereotype.Component;
 import java.io.IOException;
 import java.io.InputStream;
 import java.math.BigDecimal;
+import java.nio.ByteBuffer;
+import java.nio.charset.CharacterCodingException;
 import java.nio.charset.Charset;
+import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
@@ -89,16 +92,47 @@ public class OfxParser implements StatementParserStrategy {
     private String readAll(InputStream input) {
         try {
             byte[] bytes = input.readAllBytes();
-            // o cabeçalho OFX declara o charset em ASCII puro — dá para sniffar
-            // nele mesmo; Inter exporta CHARSET:1252, Nubank UTF-8
-            String header = new String(bytes, 0, Math.min(bytes.length, 512), StandardCharsets.US_ASCII);
-            Charset charset = header.contains("CHARSET:1252")
-                    ? Charset.forName("windows-1252")
-                    : StandardCharsets.UTF_8;
-            return new String(bytes, charset);
+            return decode(bytes);
         } catch (IOException e) {
             throw new IllegalStateException("Falha ao ler OFX", e);
         }
+    }
+
+    /**
+     * O cabeçalho OFX declara o charset em ASCII puro, então dá para sniffar
+     * nele mesmo — mas o cabeçalho MENTE. Medido com o extrato real de dois anos
+     * do Inter (EC-111): declara {@code ENCODING:USASCII} + {@code CHARSET:1252}
+     * e grava os bytes em UTF-8 ({@code C3 A7 C3 A3} em "Aplicação"). Honrar a
+     * declaração produzia "AplicaÃ§Ã£o"/"CrÃ©dito"/"cartÃ£o" em 54 lançamentos,
+     * e o lixo descia para a descrição normalizada, para a chave da série
+     * recorrente ("cra©dito") e para o nome exibido.
+     *
+     * <p>Os bytes valem mais que a etiqueta: se o conteúdo decodifica como UTF-8
+     * ESTRITO e contém ao menos uma sequência multibyte, é UTF-8 — texto legítimo
+     * em 1252 com acento ("ç" = {@code E7}, "ã" = {@code E3}) não sobrevive à
+     * decodificação estrita, porque esses bytes soltos são inválidos em UTF-8,
+     * então não há como um extrato 1252 de verdade cair aqui por engano. Sem
+     * multibyte nenhum o conteúdo é ASCII puro e qualquer charset serve. Só
+     * quando a decodificação estrita falha é que a declaração do cabeçalho
+     * decide, como antes (Nubank declara UTF-8 e cumpre).
+     */
+    static String decode(byte[] bytes) {
+        try {
+            String utf8 = StandardCharsets.UTF_8.newDecoder()
+                    .onMalformedInput(CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(CodingErrorAction.REPORT)
+                    .decode(ByteBuffer.wrap(bytes))
+                    .toString();
+            // menos chars que bytes = houve sequência multibyte válida
+            if (utf8.length() < bytes.length) return utf8;
+        } catch (CharacterCodingException notUtf8) {
+            // segue para o charset declarado
+        }
+        String header = new String(bytes, 0, Math.min(bytes.length, 512), StandardCharsets.US_ASCII);
+        Charset charset = header.contains("CHARSET:1252")
+                ? Charset.forName("windows-1252")
+                : StandardCharsets.UTF_8;
+        return new String(bytes, charset);
     }
 
     private String extract(Pattern pattern, String text) {
