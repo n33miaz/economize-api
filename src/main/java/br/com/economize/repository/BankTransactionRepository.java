@@ -77,6 +77,100 @@ public interface BankTransactionRepository extends JpaRepository<BankTransaction
                                       @Param("start") OffsetDateTime start,
                                       @Param("end") OffsetDateTime end);
 
+    // ------------------------------------------------------------------
+    // EC-149: a VISÃO DA CASA. As duas consultas abaixo são a soma e a listagem
+    // de um membro com os parâmetros DELE (categorias ocultas, contas
+    // compartilhadas, "extrato importado") aplicados AQUI, na cláusula — e não
+    // em memória, depois de ler tudo. É a privacidade por construção da §7: o
+    // que o membro escolheu não mostrar nunca sai do banco, então nenhum passo
+    // posterior (soma, ordenação, serialização) tem como deixá-lo escapar.
+    //
+    // Regras da cláusula, iguais nas duas consultas:
+    //  - perna interna fora, como na pessoal (EC-106);
+    //  - categoria oculta sai; linha SEM categoria NÃO é oculta (só as listadas
+    //    são) — daí o "is null or not in";
+    //  - lista de contas vazia = todas (allAccounts); preenchida = só as
+    //    listadas; a linha SEM conta (upload manual) entra apenas se
+    //    includeUnassigned, em qualquer dos dois casos.
+    //
+    // O `in :lista` com coleção VAZIA é o problema: renderiza "in ()", que não
+    // é SQL válido. Por isso a entrada pública são os métodos default
+    // (sumByCategoryShared / findSharedInWindow), que trocam a coleção vazia
+    // por um sentinela — um UUID nulo (0000...) que nenhuma linha carrega, e
+    // portanto não muda o resultado: "not in (sentinela)" é verdade para todas
+    // e "in (sentinela)" só é consultado quando allAccounts é falso.
+    // ------------------------------------------------------------------
+
+    UUID NO_MATCH_SENTINEL = new UUID(0L, 0L);
+
+    @Query("""
+            select t.categoryId as categoryId, t.type as type,
+                   sum(t.amount) as total, count(t) as txCount
+            from BankTransaction t
+            where t.user.id = :userId and t.date >= :start and t.date < :end
+              and t.internalTransfer = false
+              and (t.categoryId is null or t.categoryId not in :hiddenCategoryIds)
+              and ((t.accountId is null and :includeUnassigned = true)
+                   or (t.accountId is not null
+                       and (:allAccounts = true or t.accountId in :sharedAccountIds)))
+            group by t.categoryId, t.type
+            """)
+    List<CategoryTotal> sumByCategoryFiltered(@Param("userId") UUID userId,
+                                              @Param("start") OffsetDateTime start,
+                                              @Param("end") OffsetDateTime end,
+                                              @Param("hiddenCategoryIds") Collection<UUID> hiddenCategoryIds,
+                                              @Param("allAccounts") boolean allAccounts,
+                                              @Param("sharedAccountIds") Collection<UUID> sharedAccountIds,
+                                              @Param("includeUnassigned") boolean includeUnassigned);
+
+    @Query("""
+            select t from BankTransaction t
+            where t.user.id = :userId and t.date >= :start and t.date < :end
+              and t.internalTransfer = false
+              and (t.categoryId is null or t.categoryId not in :hiddenCategoryIds)
+              and ((t.accountId is null and :includeUnassigned = true)
+                   or (t.accountId is not null
+                       and (:allAccounts = true or t.accountId in :sharedAccountIds)))
+            order by t.date desc
+            """)
+    List<BankTransaction> findSharedFiltered(@Param("userId") UUID userId,
+                                             @Param("start") OffsetDateTime start,
+                                             @Param("end") OffsetDateTime end,
+                                             @Param("hiddenCategoryIds") Collection<UUID> hiddenCategoryIds,
+                                             @Param("allAccounts") boolean allAccounts,
+                                             @Param("sharedAccountIds") Collection<UUID> sharedAccountIds,
+                                             @Param("includeUnassigned") boolean includeUnassigned);
+
+    /**
+     * Soma por categoria do que UM membro mostra à casa na janela. Coleções
+     * vazias têm o significado natural: nenhuma categoria oculta, todas as
+     * contas.
+     */
+    default List<CategoryTotal> sumByCategoryShared(UUID userId, OffsetDateTime start, OffsetDateTime end,
+                                                    Collection<UUID> hiddenCategoryIds,
+                                                    Collection<UUID> sharedAccountIds,
+                                                    boolean includeUnassigned) {
+        return sumByCategoryFiltered(userId, start, end,
+                orSentinel(hiddenCategoryIds),
+                sharedAccountIds.isEmpty(), orSentinel(sharedAccountIds),
+                includeUnassigned);
+    }
+
+    /** As linhas que UM membro mostra à casa na janela, mais recente primeiro. */
+    default List<BankTransaction> findSharedInWindow(UUID userId, OffsetDateTime start, OffsetDateTime end,
+                                                     Collection<UUID> hiddenCategoryIds,
+                                                     Collection<UUID> sharedAccountIds,
+                                                     boolean includeUnassigned) {
+        return findSharedFiltered(userId, start, end,
+                orSentinel(hiddenCategoryIds),
+                sharedAccountIds.isEmpty(), orSentinel(sharedAccountIds),
+                includeUnassigned);
+    }
+
+    private static Collection<UUID> orSentinel(Collection<UUID> ids) {
+        return ids.isEmpty() ? List.of(NO_MATCH_SENTINEL) : ids;
+    }
+
     // Janela total de dados do usuário — o seletor de meses é derivado disso
     @Query("select min(t.date), max(t.date) from BankTransaction t where t.user.id = :userId")
     List<Object[]> findDateBounds(@Param("userId") UUID userId);

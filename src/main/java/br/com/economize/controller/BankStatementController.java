@@ -11,10 +11,10 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.http.codec.multipart.FilePart;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
-import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
+import java.util.List;
 import java.util.Map;
 
 @RestController
@@ -54,12 +54,21 @@ public class BankStatementController {
                         "duplicated", result.duplicated())));
     }
 
-    @Operation(summary = "Listar transações bancárias")
+    @Operation(summary = "Listar transações bancárias",
+            description = "Histórico inteiro do usuário, do mais recente para o mais antigo. É a "
+                    + "fonte da aba Extrato; para recorte por janela/status/categoria use /transactions.")
     @GetMapping
-    public Flux<BankTransactionResponse> list(@AuthenticationPrincipal String email) {
-        return Mono.fromCallable(() -> bankStatementService.listTransactions(email))
-                .subscribeOn(Schedulers.boundedElastic())
-                .flatMapIterable(list -> list)
-                .map(BankTransactionResponse::from);
+    public Mono<List<BankTransactionResponse>> list(@AuthenticationPrincipal String email) {
+        // A resposta é montada INTEIRA dentro da thread bloqueante e devolvida
+        // como uma lista: a versão anterior devolvia um Flux e o WebFlux
+        // serializava e descarregava elemento a elemento — medido em campo,
+        // 1.688 linhas levavam 18 s contra 1,3 s de /transactions com o MESMO
+        // payload. No Render, com o timeout de 30 s do app, isso virava
+        // "Sem conexão com o servidor" e Extrato vazio para quem tem dois anos
+        // de histórico.
+        return Mono.fromCallable(() -> bankStatementService.listTransactions(email).stream()
+                        .map(BankTransactionResponse::from)
+                        .toList())
+                .subscribeOn(Schedulers.boundedElastic());
     }
 }

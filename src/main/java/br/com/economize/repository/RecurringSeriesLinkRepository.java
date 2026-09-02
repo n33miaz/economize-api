@@ -2,6 +2,7 @@ package br.com.economize.repository;
 
 import br.com.economize.model.RecurringSeriesLink;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -17,6 +18,15 @@ public interface RecurringSeriesLinkRepository extends JpaRepository<RecurringSe
     List<RecurringSeriesLink> findAllBySeriesIdIn(Collection<UUID> seriesIds);
 
     boolean existsBySeriesId(UUID seriesId);
+
+    // Em lote e em JPQL, não pelo remove() entidade a entidade: a varredura
+    // libera os vínculos de uma série órfã e no MESMO flush insere vínculos
+    // novos para as mesmas transações. O Hibernate executa os INSERTs antes dos
+    // DELETEs pendentes, e o UNIQUE de bank_transaction_id estouraria; o bulk
+    // delete roda na hora em que é chamado, antes de qualquer insert.
+    @Modifying
+    @Query("delete from RecurringSeriesLink l where l.seriesId in :seriesIds")
+    int deleteAllBySeriesIdIn(@Param("seriesIds") Collection<UUID> seriesIds);
 
     /** Contagem de ocorrências por série dentro do período. */
     interface SeriesOccurrences {
