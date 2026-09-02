@@ -2,6 +2,7 @@ package br.com.economize.service;
 
 import br.com.economize.dto.wallet.TransactionRequest;
 import br.com.economize.dto.wallet.TransactionResponse;
+import br.com.economize.exception.ResourceNotFoundException;
 import br.com.economize.model.Transaction;
 import br.com.economize.model.User;
 import br.com.economize.repository.TransactionRepository;
@@ -56,12 +57,14 @@ public class WalletService {
 
     public Mono<Void> deleteTransaction(String email, UUID transactionId) {
         return Mono.fromRunnable(() -> {
-            Transaction transaction = transactionRepository.findById(transactionId)
-                    .orElseThrow(() -> new IllegalArgumentException("Transação não encontrada"));
-
-            if (!transaction.getUser().getEmail().equals(email)) {
-                throw new SecurityException("Acesso negado a esta transação");
-            }
+            User user = userRepository.findByEmail(email)
+                    .orElseThrow(() -> new ResourceNotFoundException("Usuário não encontrado"));
+            // Dono é FILTRO, não checagem posterior: buscar por id e comparar
+            // o e-mail depois respondia 403 para operação de outra pessoa, e um
+            // 403 confirma que aquele id existe. É a mesma regra do EC-037
+            Transaction transaction = transactionRepository
+                    .findByIdAndUserId(transactionId, user.getId())
+                    .orElseThrow(() -> new ResourceNotFoundException("Transação não encontrada"));
 
             transactionRepository.delete(transaction);
             log.info("Transação {} deletada pelo usuário {}", transactionId, email);
