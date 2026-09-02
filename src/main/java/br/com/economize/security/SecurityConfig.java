@@ -29,7 +29,12 @@ public class SecurityConfig {
                 .authorizeExchange(exchanges -> exchanges
                         // Rotas públicas
                         .pathMatchers("/api/v1/auth/**").permitAll()
-                        .pathMatchers("/swagger-ui/**", "/v3/api-docs/**", "/webjars/**").permitAll()
+                        // `/swagger-ui.html` é a PORTA de entrada e não casa com
+                        // `/swagger-ui/**` (que exige a barra): sem ela na lista,
+                        // quem abria a documentação levava 401 antes de qualquer
+                        // redirecionamento acontecer
+                        .pathMatchers("/swagger-ui.html", "/swagger-ui/**",
+                                "/v3/api-docs", "/v3/api-docs/**", "/webjars/**").permitAll()
                         .pathMatchers("/actuator/**").permitAll()
                         // Qualquer outra rota exige token
                         .anyExchange().authenticated())
