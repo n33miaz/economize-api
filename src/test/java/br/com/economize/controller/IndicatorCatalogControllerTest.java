@@ -11,6 +11,7 @@ import br.com.economize.security.JwtUtil;
 import br.com.economize.security.SecurityConfig;
 import br.com.economize.service.IndicatorService;
 import br.com.economize.service.catalog.MarketCatalogService;
+import br.com.economize.service.provider.BrapiProvider;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -42,6 +43,11 @@ class IndicatorCatalogControllerTest {
 
         @MockitoBean
         private MarketCatalogService catalogService;
+
+        // Mesma razão do IndicatorControllerTest: o controller agora depende do
+        // provedor de ações (EC-103) e a fatia precisa dele no contexto
+        @MockitoBean
+        private BrapiProvider brapiProvider;
 
         @Test
         @DisplayName("GET /catalog - Deve devolver itens e metadados de paginação")

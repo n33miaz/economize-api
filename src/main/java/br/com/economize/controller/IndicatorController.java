@@ -4,7 +4,10 @@ import br.com.economize.config.MarketCatalogProperties;
 import br.com.economize.dto.HistoricalDataPoint;
 import br.com.economize.dto.Indicator;
 import br.com.economize.dto.catalog.CatalogPage;
+import br.com.economize.dto.indicator.AssetDetail;
+import br.com.economize.exception.ResourceNotFoundException;
 import br.com.economize.service.IndicatorService;
+import br.com.economize.service.provider.BrapiProvider;
 import br.com.economize.service.catalog.CatalogQuery;
 import br.com.economize.service.catalog.MarketCatalogService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -39,12 +42,18 @@ public class IndicatorController {
     private final IndicatorService indicatorService;
     private final MarketCatalogService catalogService;
     private final MarketCatalogProperties catalogProperties;
+    // EC-103: o detalhe do papel fala direto com o provedor de ações porque é
+    // ele quem guarda a cota diária — passar por um serviço intermediário
+    // abriria um segundo caminho para gastá-la, que é justamente o que o
+    // javadoc do BrapiProvider existe para impedir
+    private final BrapiProvider brapiProvider;
 
     public IndicatorController(IndicatorService indicatorService, MarketCatalogService catalogService,
-            MarketCatalogProperties catalogProperties) {
+            MarketCatalogProperties catalogProperties, BrapiProvider brapiProvider) {
         this.indicatorService = indicatorService;
         this.catalogService = catalogService;
         this.catalogProperties = catalogProperties;
+        this.brapiProvider = brapiProvider;
     }
 
     @Operation(summary = "Listar todos os indicadores", description = """
@@ -149,6 +158,31 @@ public class IndicatorController {
                     MAX_SEARCH_TICKERS, tickers.size()));
         }
         return String.join(",", tickers);
+    }
+
+    @Operation(summary = "Detalhe enriquecido de um ativo", description = """
+            Faixa de 52 semanas e variação em 24h, 7 dias, 30 dias e no ano, \
+            para um papel da B3.
+
+            Custa UMA requisição ao provedor — a série do ano vem na mesma \
+            resposta do preço, e a faixa de 52 semanas já vinha nela. Sem \
+            orçamento diário, responde o último preço bom com `stale=true` e \
+            sem janelas: janela precisa de série, e série só vem da rede.
+
+            Janela sem histórico que a alcance volta com `changePct` NULO, \
+            nunca zero — papel recém-listado não tem 30 dias.""")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Detalhe do ativo"),
+            @ApiResponse(responseCode = "404", description = "O provedor não conhece este papel", content = @Content(schema = @Schema(implementation = ProblemDetail.class)))
+    })
+    @GetMapping("/{code}/detail")
+    public Mono<ResponseEntity<AssetDetail>> getAssetDetail(
+            @Parameter(description = "Código do papel na B3", example = "PETR4")
+            @PathVariable String code) {
+        return brapiProvider.fetchDetail(code)
+                .map(ResponseEntity::ok)
+                .switchIfEmpty(Mono.error(new ResourceNotFoundException(
+                        "Ativo não encontrado")));
     }
 
     @Operation(summary = "Dados Históricos", description = "Retorna o histórico de variação de uma moeda nos últimos dias.")

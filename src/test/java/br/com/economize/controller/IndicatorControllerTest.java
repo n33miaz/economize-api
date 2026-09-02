@@ -5,6 +5,7 @@ import br.com.economize.config.MarketCatalogProperties;
 import br.com.economize.dto.Indicator;
 import br.com.economize.service.IndicatorService;
 import br.com.economize.service.catalog.MarketCatalogService;
+import br.com.economize.service.provider.BrapiProvider;
 import br.com.economize.security.JwtAuthenticationFilter;
 import br.com.economize.security.JwtUtil;
 import br.com.economize.security.SecurityConfig;
@@ -44,6 +45,12 @@ class IndicatorControllerTest {
 
         @MockitoBean
         private MarketCatalogService catalogService;
+
+        // EC-103: o detalhe do papel fala direto com o provedor, porque é nele
+        // que vive a cota diária. A fatia monta o controller de verdade, então
+        // a dependência precisa existir mesmo quando o teste não a exercita
+        @MockitoBean
+        private BrapiProvider brapiProvider;
 
         @Test
         @DisplayName("GET /all - Deve retornar lista de indicadores com sucesso")
