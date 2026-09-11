@@ -1,5 +1,6 @@
 package br.com.economize.service.provider;
 
+import br.com.economize.service.LogSafe;
 import br.com.economize.dto.Indicator;
 import br.com.economize.model.MarketSnapshot;
 import br.com.economize.repository.MarketSnapshotRepository;
@@ -315,7 +316,7 @@ public class MarketSnapshotStore {
         })
                 .subscribeOn(blockingScheduler)
                 .subscribe(ignored -> {
-                }, error -> log.warn("Snapshot [{}] não persistido ({}); segue só em memória", key,
+                }, error -> log.warn("Snapshot [{}] não persistido ({}); segue só em memória", LogSafe.value(key),
                         error.toString()));
     }
 
@@ -333,7 +334,8 @@ public class MarketSnapshotStore {
             }
             return snapshot;
         } catch (RuntimeException e) {
-            log.warn("Snapshot [{}] não pôde ser lido do banco ({}); seguindo só com a memória", key,
+            log.warn("Snapshot [{}] não pôde ser lido do banco ({}); seguindo só com a memória",
+                    LogSafe.value(key),
                     e.toString());
             knownMisses.put(key, Boolean.TRUE);
             return Optional.empty();

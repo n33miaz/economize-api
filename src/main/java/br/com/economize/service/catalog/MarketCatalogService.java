@@ -1,5 +1,6 @@
 package br.com.economize.service.catalog;
 
+import br.com.economize.service.LogSafe;
 import br.com.economize.config.MarketCatalogProperties;
 import br.com.economize.dto.Indicator;
 import br.com.economize.dto.catalog.CatalogItem;
@@ -415,7 +416,11 @@ public class MarketCatalogService {
         if (from >= indicators.size()) {
             return new ArrayList<>();
         }
-        int to = limit == null ? indicators.size() : Math.min(from + limit, indicators.size());
+        // `from + limit` com os dois vindos da URL: o teto antes da soma evita o
+        // estouro de inteiro que faria a fatia virar negativa — e uma página
+        // maior que a lista inteira não é página, é a lista
+        int passo = limit == null ? indicators.size() : Math.min(limit, indicators.size());
+        int to = Math.min(from + passo, indicators.size());
         return new ArrayList<>(indicators.subList(from, to));
     }
 
