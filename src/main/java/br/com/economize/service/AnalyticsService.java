@@ -2,6 +2,7 @@ package br.com.economize.service;
 
 import br.com.economize.dto.analytics.AnalysisWindow;
 import br.com.economize.dto.analytics.CycleCaveat;
+import br.com.economize.dto.analytics.DailyTotalResponse;
 import br.com.economize.dto.analytics.MonthlyAnalyticsResponse;
 import br.com.economize.model.BankTransaction;
 import br.com.economize.model.Category;
@@ -26,6 +27,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.TreeMap;
 import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -106,6 +108,48 @@ public class AnalyticsService {
     /**
      * Meses com movimento, do mais recente ao mais antigo — alimenta o seletor.
      */
+    /**
+     * Totais por DIA de um período — EC-235, o calendário da primeira tela.
+     *
+     * <p>Agregado aqui e não no app por uma razão medida: para somar trinta
+     * dias, o app teria de baixar o extrato inteiro, e 1.688 linhas custam
+     * 92 KB e segundos de espera. Trinta linhas destas custam menos de 2 KB.
+     *
+     * <p>As MESMAS exclusões de toda soma do app — transferência entre contas
+     * do próprio dono, aplicação e resgate, par de estorno, duplicata
+     * descartada. Um dia de aplicação de R$ 411 não é um dia caro: o dinheiro
+     * mudou de gaveta. Um calendário que discordasse da Análise seria mais um
+     * número em desacordo, que é o defeito que o EC-200 fechou.
+     *
+     * <p>Dia sem movimento NÃO volta: ausência é ausência, e mandar trinta
+     * zeros para o app redesenhar a mesma coisa é pagar por nada.
+     */
+    public List<DailyTotalResponse> dailyTotals(String email, AnalysisWindow window) {
+        User user = requireUser(email);
+
+        Map<LocalDate, BigDecimal[]> porDia = new TreeMap<>();
+        Map<LocalDate, Long> contagem = new TreeMap<>();
+        for (BankTransaction tx : bankTransactionRepository
+                .findAllByUserIdAndDateGreaterThanEqualAndDateLessThanOrderByDateDesc(
+                        user.getId(), window.startInstant(), window.endExclusiveInstant())) {
+            if (tx.isInternalTransfer() || tx.isIgnored() || tx.isRefunded()) continue;
+            LocalDate dia = tx.getDate().toLocalDate();
+            BigDecimal[] somas = porDia.computeIfAbsent(dia,
+                    k -> new BigDecimal[] {BigDecimal.ZERO, BigDecimal.ZERO});
+            if (tx.getAmount().signum() < 0) {
+                somas[0] = somas[0].add(tx.getAmount().abs());
+            } else {
+                somas[1] = somas[1].add(tx.getAmount());
+            }
+            contagem.merge(dia, 1L, Long::sum);
+        }
+
+        return porDia.entrySet().stream()
+                .map(en -> new DailyTotalResponse(en.getKey(), en.getValue()[0],
+                        en.getValue()[1], contagem.get(en.getKey())))
+                .toList();
+    }
+
     public List<String> monthsWithData(String email) {
         User user = requireUser(email);
         List<Object[]> bounds = bankTransactionRepository.findDateBounds(user.getId());
