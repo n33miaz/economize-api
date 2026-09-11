@@ -86,6 +86,24 @@ public final class WishRequests {
     ) {
     }
 
+    /**
+     * Um aporte numa meta (EC-205).
+     *
+     * <p>Sem {@code Bean Validation} no valor de propósito: zero e negativo têm
+     * significados diferentes e a mensagem de recusa de cada um é específica —
+     * negativo é devolução legítima, zero não é aporte nenhum. O service
+     * explica os dois; uma anotação diria "valor inválido" para os dois.
+     */
+    public record ContributeToWish(
+            BigDecimal amount,
+
+            /* `YYYY-MM`: presente marca o aporte como MEDIDO e trava o ciclo */
+            String cycleMonth,
+
+            String note
+    ) {
+    }
+
     public record CreateIncomeSource(
             @NotBlank(message = "Tipo da fonte é obrigatório")
             String kind,

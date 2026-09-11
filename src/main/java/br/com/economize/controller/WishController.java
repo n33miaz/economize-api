@@ -2,6 +2,7 @@ package br.com.economize.controller;
 
 import br.com.economize.dto.wish.WishRequests;
 import br.com.economize.dto.wish.WishResponses;
+import br.com.economize.service.wish.WishContributionService;
 import br.com.economize.service.wish.WishService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -30,6 +31,7 @@ import java.util.UUID;
 public class WishController {
 
     private final WishService wishService;
+    private final WishContributionService contributionService;
 
     @Operation(summary = "Listar desejos com projeção",
             description = "Devolve o retrato financeiro (valor da hora, sobra típica) e cada desejo "
@@ -79,6 +81,35 @@ public class WishController {
         WishRequests.PurchaseWish body = request != null
                 ? request : new WishRequests.PurchaseWish(null, null);
         return Mono.fromCallable(() -> wishService.purchase(email, id, body))
+                .subscribeOn(Schedulers.boundedElastic());
+    }
+
+    @Operation(summary = "Guardar dinheiro numa meta",
+            description = "EC-205: o progresso deixa de ser um campo digitado e passa a ser a soma "
+                    + "de aportes com data, valor e origem. `cycleMonth` (YYYY-MM) marca o aporte "
+                    + "como MEDIDO — veio da sobra que o app apurou daquele ciclo — e trava o "
+                    + "ciclo: a sobra de setembro entra uma vez só, por mais vezes que alguém "
+                    + "toque no botão. Sem ele o aporte é DECLARADO, que é o número que a pessoa "
+                    + "afirma. Valor NEGATIVO devolve: sai do saldo e fica no histórico, que é o "
+                    + "desfazer honesto. O app nunca move esse dinheiro sozinho — ele propõe a "
+                    + "sobra, e quem decide se guardou mesmo é o dono da conta.")
+    @PostMapping("/{id}/contributions")
+    public Mono<WishContributionService.Result> contribute(
+            @AuthenticationPrincipal String email,
+            @PathVariable UUID id,
+            @RequestBody WishRequests.ContributeToWish request) {
+        return Mono.fromCallable(() -> contributionService.contribute(
+                        email, id, request.amount(), request.cycleMonth(), request.note()))
+                .subscribeOn(Schedulers.boundedElastic());
+    }
+
+    @Operation(summary = "O extrato de uma meta",
+            description = "Os aportes que explicam o saldo, do mais novo para o mais velho.")
+    @GetMapping("/{id}/contributions")
+    public Mono<java.util.List<WishContributionService.Item>> contributions(
+            @AuthenticationPrincipal String email,
+            @PathVariable UUID id) {
+        return Mono.fromCallable(() -> contributionService.historyFor(email, id))
                 .subscribeOn(Schedulers.boundedElastic());
     }
 
