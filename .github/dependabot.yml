@@ -16,6 +16,15 @@ updates:
     open-pull-requests-limit: 5
     commit-message:
       prefix: chore
+    ignore:
+      # O MAJOR do Spring é migração planejada, não rotina semanal: ele muda
+      # requisito de JDK, remove API depreciada e mexe na autoconfiguração —
+      # e esta base junta WebFlux, JPA bloqueante sobre boundedElastic,
+      # Flyway, Security e Spring AI. Minor e patch continuam chegando.
+      - dependency-name: "org.springframework*"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "io.projectreactor*"
+        update-types: ["version-update:semver-major"]
     groups:
       # Spring sobe em bloco; PRs separados por artefato do mesmo release só
       # geram conflito entre si
