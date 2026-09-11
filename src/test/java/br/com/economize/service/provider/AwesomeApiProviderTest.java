@@ -19,7 +19,9 @@ import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -90,6 +92,22 @@ class AwesomeApiProviderTest {
                 List.of(frankfurter, ptax), List.of(coinGecko));
     }
 
+    /**
+     * A hora das cotações do teste, relativa ao relógio.
+     *
+     * <p>Eram dois instantes FIXOS em 04/09/2026, e isso quebrou sozinho em
+     * 11/09: o {@link MarketSnapshotStore} não serve item com mais de
+     * {@code MAX_AGE} (7 dias), então a partir do sétimo dia o snapshot saía
+     * vazio e o teste reprovava sem que nada no código tivesse mudado — a
+     * mesma armadilha do balde de fichas do {@code RateLimitFilterTest}, que
+     * media a CPU da máquina em vez de medir o filtro.
+     *
+     * <p>Uma hora atrás: é cotação viva por construção, que é exatamente o
+     * que estes testes afirmam sobre a fonte alternativa.
+     */
+    private static final Instant AGORA_MENOS_UMA_HORA =
+            Instant.now().minus(Duration.ofHours(1)).truncatedTo(ChronoUnit.SECONDS);
+
     private Map<String, Indicator> awesomeResponse() {
         Map<String, Indicator> response = new LinkedHashMap<>();
         Indicator usd = new Indicator();
@@ -97,7 +115,7 @@ class AwesomeApiProviderTest {
         usd.setCodeIn("BRL");
         usd.setName("Dólar Americano/Real Brasileiro");
         usd.setBuy(new BigDecimal("5.40"));
-        usd.setProviderTimestamp("1788557375");
+        usd.setProviderTimestamp(String.valueOf(AGORA_MENOS_UMA_HORA.getEpochSecond()));
         response.put("USD", usd);
 
         Indicator usdt = new Indicator();
@@ -105,7 +123,7 @@ class AwesomeApiProviderTest {
         usdt.setCodeIn("BRLT");
         usdt.setName("Dólar Americano/Real Brasileiro");
         usdt.setBuy(new BigDecimal("5.60"));
-        usdt.setProviderTimestamp("1788557375");
+        usdt.setProviderTimestamp(String.valueOf(AGORA_MENOS_UMA_HORA.getEpochSecond()));
         response.put("USDT", usdt);
         return response;
     }
@@ -119,7 +137,7 @@ class AwesomeApiProviderTest {
         indicator.setBuy(new BigDecimal(price));
         indicator.setSell(new BigDecimal(price));
         indicator.setSource(source);
-        indicator.setAsOf(Instant.parse("2026-09-04T14:00:00Z"));
+        indicator.setAsOf(AGORA_MENOS_UMA_HORA);
         return indicator;
     }
 
@@ -147,7 +165,7 @@ class AwesomeApiProviderTest {
                     assertEquals("currency_USD", usd.getId());
                     assertEquals(AwesomeApiProvider.SOURCE, usd.getSource());
                     // a data vem da própria cotação (época em segundos), não da leitura
-                    assertEquals(Instant.ofEpochSecond(1788557375L), usd.getAsOf());
+                    assertEquals(AGORA_MENOS_UMA_HORA, usd.getAsOf());
                     assertFalse(usd.isStale());
                     assertEquals("Dólar Americano/Real Brasileiro (Turismo)", indicators.get(1).getName());
                 })
@@ -222,7 +240,7 @@ class AwesomeApiProviderTest {
                     assertEquals("currency_USDT", turismo.getId());
                     assertTrue(turismo.isStale(), "item reaproveitado do snapshot é preço velho");
                     assertEquals(AwesomeApiProvider.SOURCE, turismo.getSource());
-                    assertEquals(Instant.ofEpochSecond(1788557375L), turismo.getAsOf());
+                    assertEquals(AGORA_MENOS_UMA_HORA, turismo.getAsOf());
                 })
                 .verifyComplete();
     }
