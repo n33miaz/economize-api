@@ -59,9 +59,50 @@ class AiChatCallerFactoryTest {
     }
 
     private AiChatCallerFactory factory(SecretCipher cipher) {
+        return factory(cipher, "chave-do-servidor");
+    }
+
+    private AiChatCallerFactory factory(SecretCipher cipher, String serverApiKey) {
         ChatClient.Builder builder = mock(ChatClient.Builder.class);
         when(builder.build()).thenReturn(serverChatClient);
-        return new AiChatCallerFactory(repository, cipher, properties, httpClient, builder, "gemini-2.0-flash");
+        return new AiChatCallerFactory(repository, cipher, properties, httpClient, builder,
+                "gemini-2.0-flash", serverApiKey);
+    }
+
+    @Test
+    @DisplayName("Sem GEMINI_API_KEY a sentinela ocupa o lugar da chave — e o caminho do servidor NÃO existe")
+    void shouldNotOfferServerPathWithPlaceholderKey() {
+        when(repository.findByUserId(user.getId())).thenReturn(Optional.empty());
+        AiChatCallerFactory factory = factory(new SecretCipher(KEY_1, "k1", ""),
+                AiChatCallerFactory.SERVER_KEY_PLACEHOLDER);
+
+        // O assistente aceita cair no servidor, mas não há servidor onde cair:
+        // chamar o provedor com a sentinela renderia um 401 vestido de resposta
+        assertThat(factory.serverKeyConfigured()).isFalse();
+        assertThat(factory.resolve(user, true)).isEmpty();
+        verifyNoInteractions(httpClient);
+    }
+
+    @Test
+    @DisplayName("Chave em branco vale o mesmo que sentinela")
+    void shouldTreatBlankServerKeyAsMissing() {
+        AiChatCallerFactory factory = factory(new SecretCipher(KEY_1, "k1", ""), "   ");
+
+        assertThat(factory.serverKeyConfigured()).isFalse();
+    }
+
+    @Test
+    @DisplayName("Sem chave do servidor, quem tem a própria continua atendido — é o BYOK do EC-107")
+    void shouldStillServeByokWithoutServerKey() {
+        SecretCipher cipher = new SecretCipher(KEY_1, "k1", "");
+        when(repository.findByUserId(user.getId()))
+                .thenReturn(Optional.of(settingsWith(cipher, AiProvider.OPENAI, "gpt-4o-mini")));
+        AiChatCallerFactory factory = factory(cipher, AiChatCallerFactory.SERVER_KEY_PLACEHOLDER);
+
+        Optional<AiChatCaller> caller = factory.resolve(user, true);
+
+        assertThat(caller).isPresent();
+        assertThat(caller.get().userOwned()).isTrue();
     }
 
     private UserAiSettings settingsWith(SecretCipher cipher, AiProvider provider, String model) {
