@@ -116,7 +116,7 @@ public class FamilyTransferService {
         }
         log.info("Varredura da casa: {} de {} lançamento(s) marcados, user={}",
                 marcar.size(), all.size(), email);
-        return new Outcome(all.size(), marcar.size(), outros.size());
+        return new Outcome(all.size(), marcar.size(), outros.size(), List.copyOf(marcar));
     }
 
     /**
@@ -139,6 +139,11 @@ public class FamilyTransferService {
      * @param against contra quantos outros membros a varredura teve nome
      *                completo para comparar — zero explica um resultado zerado
      */
-    public record Outcome(int scanned, int marked, int against) {
+    public record Outcome(int scanned, int marked, int against, List<UUID> markedIds) {
+
+        /** Para quem só quer os números. */
+        public Outcome(int scanned, int marked, int against) {
+            this(scanned, marked, against, List.of());
+        }
     }
 }

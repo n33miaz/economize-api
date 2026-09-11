@@ -207,5 +207,15 @@ public class DuplicateTransactionService {
      */
     public record Outcome(int scanned, int pairs, BigDecimal volume, boolean dryRun,
                           List<Pair> details) {
+
+        /**
+         * As linhas que ESTA passada descartou — o lado do arquivo de cada par.
+         *
+         * <p>Só o descartado, nunca o que ficou: o desfazer do EC-202 solta a
+         * marca de "ignorada", e a linha mantida nunca a recebeu.
+         */
+        public List<UUID> discardedIds() {
+            return details.stream().map(Pair::ignoredId).toList();
+        }
     }
 }

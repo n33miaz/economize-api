@@ -91,7 +91,7 @@ public class InternalTransferService {
         }
         log.info("Varredura de movimentação própria: {} de {} lançamento(s) marcados, user={}",
                 toMark.size(), all.size(), email);
-        return new Outcome(all.size(), toMark.size(), true);
+        return new Outcome(all.size(), toMark.size(), true, List.copyOf(toMark));
     }
 
     private User requireUser(String email) {
@@ -104,7 +104,15 @@ public class InternalTransferService {
      * @param marked       quantos passaram a contar como movimentação própria
      * @param hasFullName  false = o cadastro não tem nome completo, e a
      *                     varredura não tinha sinal nenhum para usar
+     * @param markedIds    QUAIS linhas esta passada marcou. Só as que ela
+     *                     mudou — o que já estava marcado antes fica de fora,
+     *                     senão o desfazer do EC-202 desfaria decisão alheia
      */
-    public record Outcome(int scanned, int marked, boolean hasFullName) {
+    public record Outcome(int scanned, int marked, boolean hasFullName, List<UUID> markedIds) {
+
+        /** Para quem só quer os números: a varredura sem sinal nenhum. */
+        public Outcome(int scanned, int marked, boolean hasFullName) {
+            this(scanned, marked, hasFullName, List.of());
+        }
     }
 }
