@@ -1,5 +1,6 @@
 package br.com.economize.service.provider;
 
+import br.com.economize.service.LogSafe;
 import br.com.economize.dto.Indicator;
 import br.com.economize.dto.indicator.AssetDetail;
 import br.com.economize.service.catalog.QuoteBudget;
@@ -165,7 +166,7 @@ public class BrapiProvider implements MarketDataProvider {
                         unknownTickers.put(symbol, Boolean.TRUE);
                         return Mono.empty();
                     }
-                    log.warn("Detalhe indisponível para [{}]: {}", symbol, e.getMessage());
+                    log.warn("Detalhe indisponível para [{}]: {}", LogSafe.value(symbol), e.getMessage());
                     return Mono.just(staleDetail(symbol));
                 });
     }

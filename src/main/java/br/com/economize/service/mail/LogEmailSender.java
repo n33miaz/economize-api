@@ -1,5 +1,6 @@
 package br.com.economize.service.mail;
 
+import br.com.economize.service.LogSafe;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
@@ -12,9 +13,9 @@ public class LogEmailSender implements EmailSender {
     @Override
     public void sendPasswordResetEmail(String to, String resetLink) {
         log.warn("Envio de e-mail desabilitado (economize.mail.enabled=false): "
-                + "link de recuperação de senha gerado para {} mas nenhum e-mail foi enviado", to);
+                + "link de recuperação de senha gerado para {} mas nenhum e-mail foi enviado", LogSafe.email(to));
         // O link carrega o token de reset: só pode aparecer em DEBUG, nunca em INFO
-        log.debug("Link de recuperação de senha para {}: {}", to, resetLink);
+        log.debug("Link de recuperação de senha para {}: {}", LogSafe.email(to), resetLink);
     }
 
     @Override
