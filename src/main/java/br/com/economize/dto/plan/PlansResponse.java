@@ -3,6 +3,7 @@ package br.com.economize.dto.plan;
 import br.com.economize.model.Plan;
 
 import java.math.BigDecimal;
+import java.time.OffsetDateTime;
 import java.util.List;
 
 /**
@@ -15,7 +16,17 @@ public record PlansResponse(
         Plan current,
         List<PlanOption> plans,
         boolean checkoutAvailable,
-        boolean interestRegistered
+        boolean interestRegistered,
+        /**
+         * Até quando o plano pago vale. Nulo em FREE e no PLUS sem prazo.
+         *
+         * <p>É o número que a tela precisa para dizer a data exata, em vez de
+         * "sua assinatura continua ativa" — que é a frase que não responde
+         * nada a quem acabou de cancelar.
+         */
+        OffsetDateTime activeUntil,
+        /** Quando a pessoa pediu para sair; nulo = não pediu (EC-208). */
+        OffsetDateTime cancelledAt
 ) {
 
     public record PlanOption(Plan id, String name, BigDecimal priceMonthly, List<String> features) {
