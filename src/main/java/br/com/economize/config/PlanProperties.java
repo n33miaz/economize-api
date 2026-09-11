@@ -15,6 +15,18 @@ import java.util.List;
  *
  * <p>{@code checkoutAvailable} fica falso até existir gateway de pagamento. É
  * ele que faz o app mostrar "tenho interesse" no lugar de "assinar".
+ *
+ * <p><b>EC-207 — preço sem degrau.</b> O número de contas bancárias NUNCA é o
+ * que se cobra. Conectar o segundo banco não custa mais do que o primeiro:
+ * quem tem três contas não é mais rico, é só mais bagunçado — e o app existe
+ * justamente para essa pessoa. Cobrar por conta seria cobrar mais de quem mais
+ * precisa.
+ *
+ * <p>Por isso o Plus deixou de anunciar "conexão bancária ilimitada". Não
+ * havia limite nenhum no gratuito, e a palavra "ilimitada" <b>inventa o
+ * degrau</b>: quem lê entende que existe um teto em algum lugar e passa a
+ * procurar por ele. Um {@code PlanFeaturesTest} cobra isso, para o degrau não
+ * voltar por uma edição de texto de oferta.
  */
 @Data
 @Component
@@ -23,13 +35,16 @@ public class PlanProperties {
 
     private Option free = Option.of("Gratuito", BigDecimal.ZERO, List.of(
             "Extratos, carteira e metas",
+            // Dito no GRATUITO, e de propósito: o silêncio sobre conexão
+            // bancária aqui é o que fazia a palavra "ilimitada" do Plus
+            // parecer uma vantagem — e vantagem sobre um teto que não existe
+            "Conexão bancária e importação de arquivo",
             "Categorização automática",
             "Assistente com a sua própria chave",
             "Com anúncios"));
 
     private Option plus = Option.of("Economize! Plus", new BigDecimal("9.90"), List.of(
             "Sem anúncios",
-            "Conexão bancária ilimitada",
             "Relatórios em PDF",
             "Prioridade no assistente"));
 
