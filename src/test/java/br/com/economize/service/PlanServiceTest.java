@@ -66,7 +66,11 @@ class PlanServiceTest {
         PlansResponse.PlanOption plus = response.plans().get(1);
         assertThat(plus.name()).isEqualTo("Economize! Plus");
         assertThat(plus.priceMonthly()).isEqualByComparingTo(new BigDecimal("9.90"));
-        assertThat(plus.features()).containsExactly("Sem anúncios", "Conexão bancária ilimitada",
+        // EC-207: sem "conexão ilimitada". Não havia limite no gratuito, e a
+        // palavra inventava o degrau — quem lê entende que existe um teto e
+        // passa a procurar por ele. A guarda contra a volta está no
+        // PlanFeaturesTest
+        assertThat(plus.features()).containsExactly("Sem anúncios",
                 "Relatórios em PDF", "Prioridade no assistente");
         assertThat(response.plans().get(0).priceMonthly()).isEqualByComparingTo(BigDecimal.ZERO);
     }
