@@ -1,5 +1,6 @@
 package br.com.economize.service.macro;
 
+import br.com.economize.service.LogSafe;
 import br.com.economize.config.MarketSourcesProperties;
 import br.com.economize.dto.Indicator;
 import br.com.economize.dto.indicator.ForeignQuote;
@@ -78,18 +79,18 @@ public class ForeignQuoteService {
         String snapshotKey = MarketSnapshotStore.DATA_PREFIX + "quote:" + market + ":" + symbol;
         return yahoo(symbol, market)
                 .onErrorResume(e -> {
-                    log.warn("Yahoo Finance indisponível para [{}]: {}", symbol, FailureSummary.of(e));
+                    log.warn("Yahoo Finance indisponível para [{}]: {}", LogSafe.value(symbol), FailureSummary.of(e));
                     return Mono.empty();
                 })
                 .switchIfEmpty(Mono.defer(() -> stooq(symbol, market)
                         .onErrorResume(e -> {
-                            log.warn("Stooq indisponível para [{}]: {}", symbol, FailureSummary.of(e));
+                            log.warn("Stooq indisponível para [{}]: {}", LogSafe.value(symbol), FailureSummary.of(e));
                             return Mono.empty();
                         })))
                 .doOnNext(quote -> snapshotStore.savePayload(snapshotKey, quote, quote.source()))
                 .switchIfEmpty(Mono.defer(() -> snapshotStore.lookupPayload(snapshotKey, TYPE)
                         .map(snapshot -> {
-                            log.warn("Cotação [{}]: fontes indisponíveis; servindo snapshot de {} ({})", symbol,
+                            log.warn("Cotação [{}]: fontes indisponíveis; servindo snapshot de {} ({})", LogSafe.value(symbol),
                                     snapshot.savedAt(), snapshot.source());
                             return snapshot.payload().asStale();
                         })))

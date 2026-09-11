@@ -97,7 +97,7 @@ public class HistoricalDataService {
                 .switchIfEmpty(Mono.defer(() -> snapshotStore.lookupPayload(snapshotKey, POINTS)
                         .map(snapshot -> {
                             log.warn("Histórico {} ({}d): fontes indisponíveis; servindo snapshot de {} ({})",
-                                    code, days, snapshot.savedAt(), snapshot.source());
+                                    LogSafe.value(code), days, snapshot.savedAt(), snapshot.source());
                             return snapshot.payload();
                         })))
                 .defaultIfEmpty(Collections.emptyList());
@@ -107,7 +107,8 @@ public class HistoricalDataService {
     private Mono<List<HistoricalDataPoint>> fromAwesome(String code, int days) {
         return Mono.defer(() -> {
             if (!budget.tryAcquire()) {
-                log.warn("Histórico {} ({}d): orçamento diário da AwesomeAPI esgotado; fonte alternativa", code,
+                log.warn("Histórico {} ({}d): orçamento diário da AwesomeAPI esgotado; fonte alternativa",
+                            LogSafe.value(code),
                         days);
                 return Mono.empty();
             }
@@ -120,7 +121,8 @@ public class HistoricalDataService {
                     })
                     .filter(points -> !points.isEmpty())
                     .onErrorResume(e -> {
-                        log.warn("Histórico {} ({}d): AwesomeAPI falhou ({}); fonte alternativa", code, days,
+                        log.warn("Histórico {} ({}d): AwesomeAPI falhou ({}); fonte alternativa",
+                            LogSafe.value(code), days,
                                 FailureSummary.of(e));
                         return Mono.empty();
                     });
@@ -142,7 +144,8 @@ public class HistoricalDataService {
         return alternative
                 .filter(points -> !points.isEmpty())
                 .onErrorResume(e -> {
-                    log.warn("Histórico {} ({}d): fonte alternativa falhou ({})", code, days, FailureSummary.of(e));
+                    log.warn("Histórico {} ({}d): fonte alternativa falhou ({})",
+                            LogSafe.value(code), days, FailureSummary.of(e));
                     return Mono.empty();
                 });
     }
