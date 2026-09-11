@@ -1,5 +1,6 @@
 package br.com.economize.service.mail;
 
+import br.com.economize.service.LogSafe;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -38,7 +39,7 @@ public class SmtpEmailSender implements EmailSender {
                 Se você não fez esse pedido, ignore este e-mail — sua senha continua a mesma.
                 """.formatted(resetLink));
         mailSender.send(message);
-        log.info("E-mail de recuperação de senha enviado para {}", to);
+        log.info("E-mail de recuperação de senha enviado para {}", LogSafe.email(to));
     }
 
     @Override
@@ -55,6 +56,6 @@ public class SmtpEmailSender implements EmailSender {
                 Este é um aviso automático. Nada foi bloqueado.
                 """.formatted(alert));
         mailSender.send(message);
-        log.info("Aviso de segurança enviado para {}", to);
+        log.info("Aviso de segurança enviado para {}", LogSafe.email(to));
     }
 }
