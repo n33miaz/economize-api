@@ -124,8 +124,11 @@ public class AiAssistantService {
             AiChatCaller caller = chatCallerFactory.resolve(user, true)
                     .orElseThrow(() -> new IllegalStateException("Nenhum caminho de IA disponível"));
 
-            log.info("Enviando prompt para a IA para o usuário: {} ({}, {} fala(s) de contexto))",
-                    email, caller.describe(), history.size());
+            // O id, e não o e-mail: este log escapou da troca anterior porque a
+            // frase não seguia o padrão `user={}`, e era o único ponto que ainda
+            // carregava dado pessoal para o log
+            log.info("Enviando prompt para a IA: user={} ({}, {} fala(s) de contexto)",
+                    user.getId(), caller.describe(), history.size());
             return caller.complete(systemPrompt, history, userQuestion);
 
         }).subscribeOn(Schedulers.boundedElastic());
