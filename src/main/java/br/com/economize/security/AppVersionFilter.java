@@ -97,17 +97,22 @@ public class AppVersionFilter implements WebFilter {
 
     public AppVersionFilter(CorsConfigurationSource corsConfigurationSource,
                             ObjectMapper objectMapper,
-                            @Value("${economize.app.min-version:2.2.0}") String minVersion,
+                            @Value("${economize.app.latest-version:2.2.0}") String minVersion,
                             @Value("${economize.app.download-url:https://economize-web.onrender.com/baixar}")
                             String downloadUrl,
                             @Value("${economize.app.update-message:" + DEFAULT_MESSAGE + "}") String updateMessage,
                             @Value("${economize.app.block-legacy-clients:false}") boolean blockLegacyClients) {
         this.corsConfigurationSource = corsConfigurationSource;
         this.objectMapper = objectMapper;
-        // mínima ilegível derruba o boot: um APP_MIN_VERSION torto que virasse
+        // A mínima É a versão publicada: o filtro e o /app/version leem a MESMA
+        // propriedade de propósito. Se fossem duas, um dia o app anunciaria uma
+        // mínima e a API barraria por outra, e o usuário veria "atualize" numa
+        // tela e 426 na seguinte.
+        //
+        // Ilegível derruba o boot: um APP_LATEST_VERSION torto que virasse
         // "ninguém é bloqueado" (ou "todo mundo é") só apareceria em produção
         this.minVersion = SemanticVersion.parse(minVersion).orElseThrow(() -> new IllegalStateException(
-                "economize.app.min-version não é uma versão MAJOR.MINOR.PATCH: " + minVersion));
+                "economize.app.latest-version não é uma versão MAJOR.MINOR.PATCH: " + minVersion));
         this.downloadUrl = downloadUrl;
         this.updateMessage = updateMessage;
         this.blockLegacyClients = blockLegacyClients;

@@ -42,8 +42,8 @@ class AppVersionServiceTest {
                     .orElseThrow();
         }
 
-        AppVersionService service = new AppVersionService(emptyBuild(), "2.2.0", "2.2.0",
-                "https://economize-web.onrender.com/baixar", "", "msg");
+        AppVersionService service = new AppVersionService(emptyBuild(), "2.2.0",
+                "https://economize-web.onrender.com/baixar", "", "", "msg");
 
         assertThat(service.schemaVersion()).isEqualTo("V" + esperado);
         // e esta rodada entregou a V23: se o número abaixo ficar menor que o
@@ -80,12 +80,13 @@ class AppVersionServiceTest {
     @Test
     @DisplayName("Sem build-info (mvn spring-boot:run, fatia de teste) a versão da API é 'dev'")
     void semBuildInfoEDev() {
-        AppVersionService service = new AppVersionService(emptyBuild(), "2.2.0", "2.3.0",
-                "https://d", "", "msg");
+        AppVersionService service = new AppVersionService(emptyBuild(), "2.3.0",
+                "https://d", "", "", "msg");
 
         var response = service.describe();
         assertThat(response.apiVersion()).isEqualTo(AppVersionService.DEV_VERSION);
-        assertThat(response.minVersion()).isEqualTo("2.2.0");
+        // a minima acompanha a publicada -- ver minimaEsempreAPublicada
+        assertThat(response.minVersion()).isEqualTo("2.3.0");
         assertThat(response.latestVersion()).isEqualTo("2.3.0");
         assertThat(response.storeUrl()).as("loja vazia vira null, não string vazia").isNull();
         assertThat(response.schemaVersion()).startsWith("V");
@@ -100,7 +101,7 @@ class AppVersionServiceTest {
         ObjectProvider<BuildProperties> provider = mock(ObjectProvider.class);
         when(provider.getIfAvailable()).thenReturn(new BuildProperties(props));
 
-        AppVersionService service = new AppVersionService(provider, "2.2.0", "2.2.0", "https://d",
+        AppVersionService service = new AppVersionService(provider, "2.2.0", "https://d", "https://cdn/economize.apk",
                 " https://play.google.com/store/apps/details?id=app.economize ", "msg");
 
         assertThat(service.apiVersion()).isEqualTo("1.4.0");
@@ -115,6 +116,38 @@ class AppVersionServiceTest {
                 new PathMatchingResourcePatternResolver(getClass().getClassLoader()));
 
         assertThat(schema).matches("V\\d+");
+    }
+
+    @Test
+    @DisplayName("A mínima anunciada é SEMPRE a versão publicada")
+    void minimaEsempreAPublicada() {
+        // A regra do dono: quem está atrás da versão atual não usa o app e vai
+        // para a página de download. Um segundo número configurável seria um
+        // número que um dia diverge — e o modo de falha é silencioso.
+        for (String publicada : new String[] {"2.2.0", "2.3.0", "10.0.1"}) {
+            AppVersionService service = new AppVersionService(emptyBuild(), publicada,
+                    "https://economize-web.onrender.com/baixar", "", "", "atualize");
+
+            assertThat(service.describe().minVersion())
+                    .as("mínima anunciada para a publicada %s", publicada)
+                    .isEqualTo(publicada)
+                    .isEqualTo(service.describe().latestVersion());
+        }
+    }
+
+    @Test
+    @DisplayName("Sem APK publicado o apkUrl é nulo — a página mostra 'em breve'")
+    void semApkPublicadoOCampoENulo() {
+        // A pagina /baixar so oferece o arquivo quando ele existe. Oferecer um
+        // link que da 404 para quem acabou de ser bloqueado seria pior do que
+        // dizer "em breve".
+        AppVersionService semArquivo = new AppVersionService(emptyBuild(), "2.2.0",
+                "https://d", "  ", "", "msg");
+        assertThat(semArquivo.describe().apkUrl()).isNull();
+
+        AppVersionService comArquivo = new AppVersionService(emptyBuild(), "2.2.0",
+                "https://d", " https://cdn/economize.apk ", "", "msg");
+        assertThat(comArquivo.describe().apkUrl()).isEqualTo("https://cdn/economize.apk");
     }
 
     @SuppressWarnings("unchecked")
