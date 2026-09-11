@@ -220,7 +220,7 @@ class AppVersionFilterTest {
     void minimaIlegivelDerrubaOBoot() {
         assertThatThrownBy(() -> new AppVersionFilter(corsSource(), objectMapper, "latest", DOWNLOAD, "x", false))
                 .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("economize.app.min-version");
+                .hasMessageContaining("economize.app.latest-version");
     }
 
     private MockServerWebExchange request(String version, String platform, String origin) {

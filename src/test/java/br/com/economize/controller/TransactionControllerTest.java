@@ -10,6 +10,8 @@ import br.com.economize.security.JwtUtil;
 import br.com.economize.security.SecurityConfig;
 import br.com.economize.service.DuplicateTransactionService;
 import br.com.economize.service.InternalTransferService;
+import br.com.economize.service.InvestmentFlowService;
+import br.com.economize.service.RefundReconciliationService;
 import br.com.economize.service.StatementHygieneService;
 import br.com.economize.service.family.FamilyTransferService;
 import br.com.economize.service.TransactionAliasService;
@@ -69,6 +71,12 @@ class TransactionControllerTest {
 
     @MockitoBean
     private DuplicateTransactionService duplicateService;
+
+    @MockitoBean
+    private InvestmentFlowService investmentFlowService;
+
+    @MockitoBean
+    private RefundReconciliationService refundService;
 
     @Test
     @DisplayName("GET /review/count - só a contagem, sem baixar a fila")
@@ -346,7 +354,7 @@ class TransactionControllerTest {
     @DisplayName("POST /tidy - devolve o que cada varredura mexeu")
     void tidyReportsEveryPass() {
         when(hygieneService.runFor(EMAIL))
-                .thenReturn(new StatementHygieneService.Outcome(197, 68, 20, 3, 12));
+                .thenReturn(new StatementHygieneService.Outcome(197, 350, 68, 20, 8, 3, 12));
 
         webTestClient.post()
                 .uri("/api/v1/transactions/tidy")
@@ -355,9 +363,53 @@ class TransactionControllerTest {
                 .expectStatus().isOk()
                 .expectBody()
                 .jsonPath("$.internalMarked").isEqualTo(197)
+                .jsonPath("$.investmentMarked").isEqualTo(350)
                 .jsonPath("$.familyMarked").isEqualTo(68)
                 .jsonPath("$.duplicatesMarked").isEqualTo(20)
+                .jsonPath("$.refundsMarked").isEqualTo(8)
                 .jsonPath("$.seriesCreated").isEqualTo(3)
                 .jsonPath("$.seriesUpdated").isEqualTo(12);
+    }
+
+    @Test
+    @DisplayName("POST /investment-flow/sweep - ensaio por padrão, e devolve as linhas")
+    void investmentFlowSweepDefaultsToDryRun() {
+        when(investmentFlowService.sweep(EMAIL, true))
+                .thenReturn(new InvestmentFlowService.Outcome(1682, 350,
+                        new BigDecimal("16405.15"), new BigDecimal("22810.91"), true,
+                        List.of(new InvestmentFlowService.Move(UUID.randomUUID(),
+                                new BigDecimal("-411.35"), "2026-04-22",
+                                "Aplicação Cdb Porq Obj Banco Inter Sa"))));
+
+        webTestClient.post()
+                .uri("/api/v1/transactions/investment-flow/sweep")
+                .header(HttpHeaders.AUTHORIZATION, bearerToken())
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.marked").isEqualTo(350)
+                .jsonPath("$.dryRun").isEqualTo(true)
+                .jsonPath("$.details[0].description").isEqualTo("Aplicação Cdb Porq Obj Banco Inter Sa");
+
+        // sem o parâmetro, nada é marcado: 350 linhas mudando de lado sozinhas
+        // seria a surpresa que o dono não pediu
+        verify(investmentFlowService, never()).sweep(EMAIL, false);
+    }
+
+    @Test
+    @DisplayName("POST /refunds/sweep?dryRun=false - marca quando o dono manda")
+    void refundSweepMarksWhenAsked() {
+        when(refundService.sweep(EMAIL, false))
+                .thenReturn(new RefundReconciliationService.Outcome(1682, 3,
+                        new BigDecimal("11.50"), false, List.of()));
+
+        webTestClient.post()
+                .uri("/api/v1/transactions/refunds/sweep?dryRun=false")
+                .header(HttpHeaders.AUTHORIZATION, bearerToken())
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.pairs").isEqualTo(3)
+                .jsonPath("$.dryRun").isEqualTo(false);
     }
 }

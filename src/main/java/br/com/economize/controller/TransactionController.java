@@ -11,6 +11,8 @@ import br.com.economize.dto.statement.UpdateTransactionAliasRequest;
 import br.com.economize.model.BankTransaction;
 import br.com.economize.service.DuplicateTransactionService;
 import br.com.economize.service.InternalTransferService;
+import br.com.economize.service.InvestmentFlowService;
+import br.com.economize.service.RefundReconciliationService;
 import br.com.economize.service.StatementHygieneService;
 import br.com.economize.service.family.FamilyTransferService;
 import br.com.economize.service.TransactionAliasService;
@@ -40,6 +42,8 @@ public class TransactionController {
     private final FamilyTransferService familyTransferService;
     private final StatementHygieneService hygieneService;
     private final DuplicateTransactionService duplicateService;
+    private final InvestmentFlowService investmentFlowService;
+    private final RefundReconciliationService refundService;
 
     @Operation(summary = "Listar transações bancárias",
             description = "Período opcional por `month=YYYY-MM` OU pelo par `start`/`end` em datas ISO "
@@ -188,6 +192,34 @@ public class TransactionController {
             @AuthenticationPrincipal String email,
             @RequestParam(defaultValue = "true") boolean dryRun) {
         return Mono.fromCallable(() -> duplicateService.sweep(email, dryRun))
+                .subscribeOn(Schedulers.boundedElastic());
+    }
+
+    @Operation(summary = "Procurar aplicação e resgate lidos como gasto e receita",
+            description = "Aplicar não é gastar e resgatar não é ganhar: o dinheiro trocou de gaveta "
+                    + "dentro do mesmo bolso. Medido no extrato real do dono: 350 linhas e R$ 39.216,06 "
+                    + "de movimento que nunca existiu, num extrato cujo Pix soma R$ 48 mil de entrada. "
+                    + "Imposto, IOF, taxa, rendimento, juros, pontos e cashback ficam de fora da marca — "
+                    + "são dinheiro de verdade. `dryRun=true` (padrão) só relata, com a lista das linhas.")
+    @PostMapping("/investment-flow/sweep")
+    public Mono<InvestmentFlowService.Outcome> sweepInvestmentFlow(
+            @AuthenticationPrincipal String email,
+            @RequestParam(defaultValue = "true") boolean dryRun) {
+        return Mono.fromCallable(() -> investmentFlowService.sweep(email, dryRun))
+                .subscribeOn(Schedulers.boundedElastic());
+    }
+
+    @Operation(summary = "Procurar compras que foram estornadas",
+            description = "Quem gastou R$ 4,00 e recebeu R$ 4,00 de volta não gastou nada, e hoje as duas "
+                    + "linhas entram nas somas. Pareia um crédito que se anuncia como estorno com uma "
+                    + "despesa de mesmo valor até três dias ANTES dele — nunca depois. Sem par exato não "
+                    + "marca: o \"Estorno\" de R$ 539,70 do extrato do dono é o banco zerando saldo "
+                    + "negativo, e marcá-lo apagaria receita real. `dryRun=true` (padrão) só relata.")
+    @PostMapping("/refunds/sweep")
+    public Mono<RefundReconciliationService.Outcome> sweepRefunds(
+            @AuthenticationPrincipal String email,
+            @RequestParam(defaultValue = "true") boolean dryRun) {
+        return Mono.fromCallable(() -> refundService.sweep(email, dryRun))
                 .subscribeOn(Schedulers.boundedElastic());
     }
 

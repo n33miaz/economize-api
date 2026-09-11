@@ -124,6 +124,32 @@ public class BankTransaction {
     @Column(nullable = false)
     private boolean ignored;
 
+    /**
+     * Uma das duas pernas de um estorno (V29): a compra que saiu e o crédito
+     * que voltou.
+     *
+     * <p>As duas linhas existem no extrato e estão certas — o que estaria
+     * errado é somá-las. Quem gastou R$ 4,00 e recebeu R$ 4,00 de volta não
+     * gastou nada; sem esta marca o app conta R$ 4,00 de despesa E R$ 4,00 de
+     * receita, e os dois totais ficam inflados na mesma medida.
+     *
+     * <p>Diferente de {@link #internalTransfer}, onde o dinheiro trocou de
+     * bolso entre contas do dono; e de {@link #ignored}, onde a linha não
+     * deveria existir. Aqui houve movimento, ele foi desfeito, e as duas linhas
+     * são legítimas.
+     */
+    @Column(nullable = false)
+    private boolean refunded;
+
+    /**
+     * No lado do CRÉDITO, a compra que ele estornou. Nulo no lado da compra.
+     *
+     * <p>É o que permite a tela dizer "estorno de Click M" em vez de só
+     * "estorno", e o que o desfazer usa para soltar as duas pernas juntas.
+     */
+    @Column(name = "refund_of_id")
+    private UUID refundOfId;
+
     /** Quem decidiu ignorar: a varredura de duplicatas, ou a pessoa. */
     @Enumerated(EnumType.STRING)
     @Column(name = "ignored_reason", length = 16)
@@ -151,6 +177,39 @@ public class BankTransaction {
      */
     public String displayDescription() {
         return displayAlias != null && !displayAlias.isBlank() ? displayAlias : description;
+    }
+
+    /**
+     * Por onde a linha entrou — EC-195.
+     *
+     * <p>DERIVADO, não gravado: quem tem conta de provedor veio pela conexão,
+     * quem tem arquivo veio por arquivo, e quem não tem nenhum dos dois é
+     * histórico anterior ao EC-113. Derivar mantém tudo consistente com o que
+     * já está no banco e não obriga a decidir o que escrever no passado.
+     *
+     * <p>A ordem é a regra: uma linha da conexão que também carrega
+     * {@code uploadId} é da CONEXÃO — o upload ali é o lote de gravação, não a
+     * procedência do dado.
+     */
+    public ImportSource importSource() {
+        if (accountId != null) return ImportSource.CONNECTION;
+        if (uploadId != null) return ImportSource.FILE;
+        return ImportSource.UNKNOWN;
+    }
+
+    /**
+     * <b>UNKNOWN não é falha</b>: é o histórico importado antes de a origem
+     * existir, e é a maioria do extrato de quem sempre importou arquivo na mão.
+     * Dizer "não sei de onde veio" é a resposta honesta, e é melhor do que
+     * atribuir uma procedência que ninguém registrou.
+     */
+    public enum ImportSource {
+        /** Sincronização com a instituição, pelo Open Finance. */
+        CONNECTION,
+        /** Arquivo que o usuário enviou (CSV, OFX, PDF, XLSX, TXT). */
+        FILE,
+        /** Anterior ao registro de origem. */
+        UNKNOWN
     }
 
     @PrePersist

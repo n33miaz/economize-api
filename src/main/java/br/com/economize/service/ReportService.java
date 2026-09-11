@@ -125,24 +125,17 @@ public class ReportService {
      */
     private String buildSummary(Report.Period period, BigDecimal income, BigDecimal expense, String dominant) {
         BigDecimal saldo = income.subtract(expense);
-        String entrou = brl(income);
-        String saiu = brl(expense);
+        String entrou = Money.brl(income);
+        String saiu = Money.brl(expense);
         if (saldo.signum() > 0) {
-            return "Entraram " + entrou + " e saíram " + saiu + ": sobraram " + brl(saldo) + ".";
+            return "Entraram " + entrou + " e saíram " + saiu + ": sobraram " + Money.brl(saldo) + ".";
         }
         if (saldo.signum() < 0) {
             // "Faltaram" e não "saldo negativo": o que aconteceu é que o
             // dinheiro acabou antes, e é assim que a pessoa conta o que viveu
-            return "Entraram " + entrou + " e saíram " + saiu + ": faltaram " + brl(saldo.abs()) + ".";
+            return "Entraram " + entrou + " e saíram " + saiu + ": faltaram " + Money.brl(saldo.abs()) + ".";
         }
         return "Entrou e saiu exatamente " + entrou + " — o período fechou no zero.";
-    }
-
-    /** "R$ 4.400,00" com o separador que o Brasil usa, sem casa sobrando. */
-    private String brl(BigDecimal value) {
-        return java.text.NumberFormat
-                .getCurrencyInstance(new java.util.Locale("pt", "BR"))
-                .format(value.setScale(2, java.math.RoundingMode.HALF_UP));
     }
 
     /**

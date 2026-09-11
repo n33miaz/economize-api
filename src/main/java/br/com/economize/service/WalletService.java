@@ -50,7 +50,7 @@ public class WalletService {
                     .build();
 
             Transaction saved = transactionRepository.save(transaction);
-            log.info("Transação salva com sucesso para o usuário: {}", email);
+            log.info("Transação salva para user={}", user.getId());
             return mapToResponse(saved);
         }).subscribeOn(Schedulers.boundedElastic());
     }
@@ -67,7 +67,7 @@ public class WalletService {
                     .orElseThrow(() -> new ResourceNotFoundException("Transação não encontrada"));
 
             transactionRepository.delete(transaction);
-            log.info("Transação {} deletada pelo usuário {}", transactionId, email);
+            log.info("Transação {} deletada por user={}", transactionId, user.getId());
         }).subscribeOn(Schedulers.boundedElastic()).then();
     }
 

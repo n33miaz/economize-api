@@ -31,7 +31,7 @@ class StatementHygieneListenerTest {
     void shouldRunHygieneForTheImportingUser() {
         UUID userId = UUID.randomUUID();
         when(hygieneService.runFor(userId))
-                .thenReturn(new StatementHygieneService.Outcome(2, 1, 3, 1, 0));
+                .thenReturn(new StatementHygieneService.Outcome(2, 4, 1, 3, 1, 1, 0));
 
         listener.onStatementImported(
                 new StatementImportedEvent(userId, StatementFormat.OFX, 12, UUID.randomUUID()));

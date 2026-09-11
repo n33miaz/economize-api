@@ -3,6 +3,8 @@ package br.com.economize.config;
 import io.github.bucket4j.Bandwidth;
 import io.github.bucket4j.Bucket;
 import io.github.bucket4j.ConsumptionProbe;
+import io.github.bucket4j.TimeMeter;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
@@ -87,12 +89,38 @@ public class RateLimitFilter implements WebFilter {
     private final long standardCapacity;
     private final long expensiveCapacity;
 
+    /**
+     * O relógio do balde.
+     *
+     * <p>Existe por causa do TESTE, e o motivo é concreto: o balde repõe fichas
+     * continuamente (uma por segundo, no teto padrão), então esgotá-lo exige
+     * gastar 60 fichas em menos de um segundo. Numa máquina ocupada o próprio
+     * laço do teste demora mais que isso, o balde repõe no meio do caminho, a
+     * requisição seguinte passa — e o teste reprova sem que nada no filtro
+     * esteja errado. Com um relógio parado, o teste mede o comportamento do
+     * balde em vez de medir a CPU da máquina.
+     *
+     * <p>Em produção é sempre o relógio de parede.
+     */
+    private final TimeMeter relogio;
+
+    // Com dois construtores o Spring nao escolhe sozinho: procura o vazio,
+    // nao acha, e NENHUM contexto sobe. O de producao e este.
+    @Autowired
     public RateLimitFilter(CorsConfigurationSource corsConfigurationSource,
                            @Value("${economize.rate-limit.standard-per-minute:60}") long standardCapacity,
                            @Value("${economize.rate-limit.expensive-per-minute:10}") long expensiveCapacity) {
+        this(corsConfigurationSource, standardCapacity, expensiveCapacity, TimeMeter.SYSTEM_MILLISECONDS);
+    }
+
+    RateLimitFilter(CorsConfigurationSource corsConfigurationSource,
+                    long standardCapacity,
+                    long expensiveCapacity,
+                    TimeMeter relogio) {
         this.corsConfigurationSource = corsConfigurationSource;
         this.standardCapacity = standardCapacity;
         this.expensiveCapacity = expensiveCapacity;
+        this.relogio = relogio;
     }
 
     @Override
@@ -157,6 +185,7 @@ public class RateLimitFilter implements WebFilter {
 
     private Bucket createBucket(long capacity, Duration window) {
         return Bucket.builder()
+                .withCustomTimePrecision(relogio)
                 .addLimit(Bandwidth.builder().capacity(capacity).refillGreedy(capacity, window).build())
                 .build();
     }

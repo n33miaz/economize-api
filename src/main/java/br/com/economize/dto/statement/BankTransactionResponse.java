@@ -56,7 +56,33 @@ public record BankTransactionResponse(
         // V28: dinheiro que ficou dentro da casa (Pix entre o casal, mesada).
         // Sai SÓ da soma da Casa — na análise pessoal do dono da linha o dinheiro
         // entrou mesmo, e escondê-lo dele seria mentir sobre o extrato
-        boolean familyTransfer
+        boolean familyTransfer,
+        // V29: uma das duas pernas de um estorno — a compra que saiu e o crédito
+        // que voltou. As duas existem no extrato e o saldo fecha com elas; o que
+        // estaria errado é somá-las. Sem este campo o app não consegue desenhar
+        // "estornado" nem explicar por que a linha não entra no total
+        boolean refunded,
+        // No lado do CRÉDITO, qual compra ele estornou. Nulo no lado da compra.
+        // É o que permite a tela dizer "estorno de <compra>" em vez de só
+        // "estorno"
+        UUID refundOfId,
+        /*
+         * EC-195: POR ONDE esta linha entrou e QUANDO. As duas perguntas que o
+         * usuário faz quando desconfia de um número, e que até aqui nenhuma
+         * resposta da API respondia.
+         *
+         * `source` é derivado, não gravado: quem tem conta veio de conexão, quem
+         * tem arquivo veio de arquivo, quem não tem nenhum dos dois é histórico
+         * anterior ao EC-113. Derivar mantém tudo consistente com o que já está
+         * gravado e não exige decidir o que fazer com o passado.
+         *
+         * `importedAt` é a hora em que a linha entrou no NOSSO banco, e é outra
+         * coisa que `date`: a compra foi no dia 3, o arquivo entrou no dia 20.
+         * Quando o número da tela não bate com o do banco, a diferença entre
+         * essas duas datas é quase sempre a explicação.
+         */
+        BankTransaction.ImportSource source,
+        OffsetDateTime importedAt
 ) {
     public static BankTransactionResponse from(BankTransaction tx) {
         return new BankTransactionResponse(
@@ -79,6 +105,10 @@ public record BankTransactionResponse(
                 tx.getAccountId(),
                 tx.isInternalTransfer(),
                 tx.isIgnored(),
-                tx.isFamilyTransfer());
+                tx.isFamilyTransfer(),
+                tx.isRefunded(),
+                tx.getRefundOfId(),
+                tx.importSource(),
+                tx.getCreatedAt());
     }
 }

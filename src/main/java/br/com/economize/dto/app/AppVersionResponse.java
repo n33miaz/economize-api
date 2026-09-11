@@ -16,6 +16,14 @@ public record AppVersionResponse(
         String latestVersion,
         /** Página do site com o APK/instruções. */
         String downloadUrl,
+        /**
+         * O arquivo em si, quando publicado. Nulo enquanto não houver.
+         *
+         * <p>A página {@code /baixar} só mostra o botão de download quando
+         * este campo vem preenchido — oferecer um link que dá 404 para quem
+         * acabou de ser bloqueado seria pior do que dizer "em breve".
+         */
+        String apkUrl,
         /** Loja, quando houver listagem; nulo hoje. */
         String storeUrl,
         /** Texto da tela de atualização, escrito pelo operador. */

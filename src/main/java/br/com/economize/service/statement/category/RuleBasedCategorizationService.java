@@ -79,7 +79,7 @@ public class RuleBasedCategorizationService {
             // Palavra inteira de propósito: "ifd" tem três letras e, solto,
             // casaria dentro de qualquer nome de estabelecimento.
             new Rule("FOOD_DELIVERY", "FOOD", BRAND, true,
-                    List.of("ifd", "99food", "99 food", "aiqfome", "zedelivery")),
+                    List.of("ifd", "99food", "99 food", "aiqfome", "zedelivery", "ubereats")),
             new Rule("FOOD_GROCERIES", "FOOD", List.of("supermercado", "mercadinho", "minimercado", "mercearia", "adega", "hortifruti", "sacolao", "sacolão", "atacadao", "atacadão", "assai", "assaí", "carrefour", "roldao", "roldão", "pao de acucar", "pão de açúcar", "big bompreco", "extra super")),
             new Rule("FOOD_COFFEE", "FOOD", List.of("padaria", "cafeteria", "starbucks", "confeitaria", "doceria")),
             // "restaurant"/"lanch" como prefixo cobrem restaurante(s), lanche(s) e
@@ -89,22 +89,36 @@ public class RuleBasedCategorizationService {
             // Transferências
             new Rule("FOOD_RESTAURANT", "FOOD", List.of("restaurant", "lanch", "pizzaria", "churrascaria", "hamburgueria", "bar e ", "burger", "mc donalds", "mcdonald", "burger king", "subway", "outback", "habibs", "habib's")),
             // Transporte
-            new Rule("TRANSPORT_RIDE", "TRANSPORT", List.of("uber", "99app", "99 pop", "99pop",
+            // "uber" por palavra inteira: como pedaco vive dentro de "HUBERTO" e de
+            // "UBERLANDIA", e o Pix para uma pessoa virava corrida. "UBEREATS"
+            // colado saiu daqui e entrou no delivery, que e onde ele sempre foi
+            new Rule("TRANSPORT_RIDE", "TRANSPORT", 0, true, List.of("uber")),
+            new Rule("TRANSPORT_RIDE", "TRANSPORT", List.of("99app", "99 pop", "99pop",
                     "99 tecnologia", "99tecnologia", "cabify", "indriver")),
-            new Rule("TRANSPORT_FUEL", "TRANSPORT", List.of("posto", "gasolina", "ipiranga", "shell", "petrobras", "combustivel", "combustível", "etanol")),
-            new Rule("TRANSPORT_PUBLIC", "TRANSPORT", List.of("autopass", "bilhete unico", "bilhete único", "meio de transporte", "metro ", "metrô", "cptm", "onibus", "ônibus", "sptrans", "riocard", "bom cartao", "bom cartão",
+            // "posto" por palavra inteira: como pedaco vive dentro de "IMPOSTO"
+            // (20 linhas do extrato do dono) e de "COMPOSTO". Hoje o resultado
+            // sai certo por sorte -- "imposto" tem 7 letras e vence "posto" no
+            // desempate por comprimento. Sorte nao e regra. O plural entra junto
+            // porque "REDE DE POSTOS" deixaria de casar
+            new Rule("TRANSPORT_FUEL", "TRANSPORT", 0, true, List.of("posto", "postos")),
+            new Rule("TRANSPORT_FUEL", "TRANSPORT", List.of("gasolina", "ipiranga", "shell", "petrobras", "combustivel", "combustível", "etanol")),
+            new Rule("TRANSPORT_PUBLIC", "TRANSPORT", 0, true, List.of("cptm", "metro", "metrô")),
+            new Rule("TRANSPORT_PUBLIC", "TRANSPORT", List.of("autopass", "bilhete unico", "bilhete único", "meio de transporte", "onibus", "ônibus", "sptrans", "riocard", "bom cartao", "bom cartão",
                     "prodata", "transporte e turismo", "recargapay *transport")),
             new Rule("TRANSPORT_PARKING", "TRANSPORT", List.of("estacionamento", "zona azul", "pedagio", "pedágio", "sem parar", "conectcar", "veloe", "parking")),
-            new Rule("TRANSPORT_VEHICLE", "TRANSPORT", List.of("ipva", "licenciamento", "detran", "oficina", "auto center", "pneu", "revisao veicular", "revisão veicular", "multa de transito", "multa de trânsito")),
+            // "pneus" entra ao lado de "pneu" porque palavra inteira nao flexiona
+            new Rule("TRANSPORT_VEHICLE", "TRANSPORT", 0, true, List.of("ipva", "pneu", "pneus")),
+            new Rule("TRANSPORT_VEHICLE", "TRANSPORT", List.of("licenciamento", "detran", "oficina", "auto center", "revisao veicular", "revisão veicular", "multa de transito", "multa de trânsito")),
             // Moradia
             new Rule("HOUSING_RENT", "HOUSING", List.of("aluguel", "imobiliaria", "imobiliária", "locacao imovel", "locação imóvel")),
             new Rule("HOUSING_CONDO", "HOUSING", List.of("condominio", "condomínio")),
-            new Rule("HOUSING_PROPERTY_TAX", "HOUSING", List.of("iptu")),
+            new Rule("HOUSING_PROPERTY_TAX", "HOUSING", 0, true, List.of("iptu")),
             new Rule("HOUSING_GOODS", "HOUSING", List.of("leroy merlin", "telhanorte", "casa e construcao", "casa e construção", "material de construcao", "material de construção",
                     "materiais para construcao", "materiais para construção",
                     "materiais de construcao", "materiais de construção", "tok stok", "mobly", "madeiramadeira")),
             // Contas e serviços
-            new Rule("UTILITIES_ELECTRICITY", "UTILITIES", List.of("energia", "eletropaulo", "enel", "cemig", "copel", "light servicos", "light serviços", "celesc", "coelba", "neoenergia", "cpfl")),
+            new Rule("UTILITIES_ELECTRICITY", "UTILITIES", 0, true, List.of("enel", "cpfl")),
+            new Rule("UTILITIES_ELECTRICITY", "UTILITIES", List.of("energia", "eletropaulo", "cemig", "copel", "light servicos", "light serviços", "celesc", "coelba", "neoenergia")),
             new Rule("UTILITIES_WATER", "UTILITIES", List.of("sabesp", "saneamento", "cedae", "copasa", "sanepar", "embasa", "agua e esgoto", "água e esgoto")),
             new Rule("UTILITIES_GAS", "UTILITIES", List.of("comgas", "comgás", "naturgy", "ultragaz", "liquigas", "liquigás")),
             new Rule("UTILITIES_INTERNET", "UTILITIES", List.of("internet", "banda larga", "net servicos", "net serviços", "sky ", "oi fibra", "vivo fibra", "telecomunicacoes", "telecomunicações")),
@@ -149,14 +163,20 @@ public class RuleBasedCategorizationService {
             new Rule("EDUCATION_BOOKS", "EDUCATION", List.of("livraria", "saraiva", "cultura livraria", "material escolar")),
             // Lazer
             new Rule("LEISURE_STREAMING", "LEISURE", List.of("netflix", "spotify", "disney plus", "hbo max", "prime video", "deezer", "youtube premium", "globoplay", "paramount", "apple music", "apple tv")),
-            new Rule("LEISURE_GAMES", "LEISURE", List.of("steam", "playstation", "xbox", "nintendo", "epic games", "riot games", "blizzard")),
+            new Rule("LEISURE_GAMES", "LEISURE", 0, true, List.of("xbox")),
+            new Rule("LEISURE_GAMES", "LEISURE", List.of("steam", "playstation", "nintendo", "epic games", "riot games", "blizzard")),
             new Rule("LEISURE_EVENTS", "LEISURE", List.of("cinema", "cinemark", "ingresso", "ticketmaster", "sympla", "teatro", "show ", "eventim")),
             new Rule("LEISURE_TRAVEL", "LEISURE", List.of("airbnb", "booking", "hotel", "pousada", "latam", "gol linhas", "azul linhas", "decolar", "cvc viagens", "hostel")),
             // Compras
-            new Rule("SHOPPING_ONLINE", "SHOPPING", List.of("mercado livre", "mercadolivre", "amazon", "shopee", "aliexpress", "shein", "magalu", "magazine luiza", "americanas", "temu")),
+            new Rule("SHOPPING_ONLINE", "SHOPPING", 0, true, List.of("temu")),
+            new Rule("SHOPPING_ONLINE", "SHOPPING", List.of("mercado livre", "mercadolivre", "amazon", "shopee", "aliexpress", "shein", "magalu", "magazine luiza", "americanas")),
             new Rule("SHOPPING_ELECTRONICS", "SHOPPING", List.of("kabum", "pichau", "terabyte", "fast shop", "apple store", "samsung")),
-            new Rule("SHOPPING_CLOTHING", "SHOPPING", List.of("renner", "riachuelo", "c&a", "zara", "hering", "centauro", "netshoes", "calcados", "calçados", "nike", "adidas")),
-            new Rule("SHOPPING_PET", "SHOPPING", List.of("petz", "cobasi", "pet shop", "petshop", "veterinar")),
+            // "zara" por palavra inteira: linha real do extrato do dono --
+            // "Pix enviado ALZARA Perfumaria E Cosmeticos" virava roupa
+            new Rule("SHOPPING_CLOTHING", "SHOPPING", 0, true, List.of("c&a", "zara", "nike")),
+            new Rule("SHOPPING_CLOTHING", "SHOPPING", List.of("renner", "riachuelo", "hering", "centauro", "netshoes", "calcados", "calçados", "adidas")),
+            new Rule("SHOPPING_PET", "SHOPPING", 0, true, List.of("petz")),
+            new Rule("SHOPPING_PET", "SHOPPING", List.of("cobasi", "pet shop", "petshop", "veterinar")),
             new Rule("SHOPPING_GIFTS", "SHOPPING", List.of("presente", "floricultura", "cacau show", "kopenhagen")),
             // Impostos e tarifas
             // por palavra inteira: "iof" solto acha "biofarma"
@@ -164,7 +184,8 @@ public class RuleBasedCategorizationService {
             new Rule("FEES_BANK", "FEES_TAXES", List.of("tarifa", "anuidade", "cesta de servicos", "cesta de serviços", "taxa de manutencao", "taxa de manutenção")),
             // "mora" por palavra inteira: como pedaço, achava "AMORA"
             new Rule("FEES_INTEREST", "FEES_TAXES", 0, true, List.of("juros", "multa por atraso", "encargos", "mora ")),
-            new Rule("FEES_TAX", "FEES_TAXES", List.of("imposto", "darf", "irrf", "tributo", "das simples")),
+            new Rule("FEES_TAX", "FEES_TAXES", 0, true, List.of("darf", "irrf")),
+            new Rule("FEES_TAX", "FEES_TAXES", List.of("imposto", "tributo", "das simples")),
             // Receitas
             // "liquido de vencimento" é como a folha de pagamento aparece no
             // extrato do Inter (com o CNPJ do empregador ao lado) e não casava
@@ -177,21 +198,28 @@ public class RuleBasedCategorizationService {
                     "liquido de vencimento", "líquido de vencimento", "vencimentos",
                     "remuneracao", "remuneração", "pro labore", "pró-labore")),
             new Rule("INCOME_CASHBACK", "INCOME", List.of("cashback", "estorno", "reembolso", "devolucao", "devolução")),
-            new Rule("INCOME_YIELDS", "INCOME", List.of("rendimento", "dividendo", "jcp", "juros sobre capital", "proventos")),
+            new Rule("INCOME_YIELDS", "INCOME", 0, true, List.of("jcp")),
+            new Rule("INCOME_YIELDS", "INCOME", List.of("rendimento", "dividendo", "juros sobre capital", "proventos")),
+            new Rule("INCOME_BENEFITS", "INCOME", 0, true, List.of("inss")),
             new Rule("INCOME_BENEFITS", "INCOME", List.of("bolsa familia", "bolsa família", "auxilio",
-                    "auxílio", "inss", "seguro desemprego", "pis pasep",
+                    "auxílio", "seguro desemprego", "pis pasep",
                     "flash tecnologia", "vale refeicao", "vale refeição",
                     "vale alimentacao", "vale alimentação", "ticket restaurante",
                     "sodexo", "alelo", "vr beneficios", "vr benefícios", "caju beneficios")),
             new Rule("INCOME_FREELANCE", "INCOME", List.of("freela", "prestacao de servico", "prestação de serviço", "nota fiscal recebida")),
             // Investimentos
-            new Rule("INVESTMENT_FIXED", "INVESTMENT", List.of("cdb", "rdb", "lci", "lca", "tesouro", "poupanca", "poupança", "aplicacao", "aplicação", "renda fixa", "cofrinho", "porquinho", "caixinha")),
+            // As siglas por palavra inteira: linhas reais do extrato do dono --
+            // "lca" mora dentro de "ManoeLCArdoso", "FaLCAo" e "ALCAtra";
+            // "lci" mora dentro de "ALCIdes"
+            new Rule("INVESTMENT_FIXED", "INVESTMENT", 0, true, List.of("cdb", "rdb", "lci", "lca")),
+            new Rule("INVESTMENT_FIXED", "INVESTMENT", List.of("tesouro", "poupanca", "poupança", "aplicacao", "aplicação", "renda fixa", "cofrinho", "porquinho", "caixinha")),
             new Rule("INVESTMENT_REDEMPTION", "INVESTMENT", List.of("resgate")),
             new Rule("INVESTMENT_CRYPTO", "INVESTMENT", List.of("bitcoin", "binance", "mercado bitcoin", "foxbit", "cripto")),
             // "clear" como pedaço acha "NUCLEAR"
             new Rule("INVESTMENT_VARIABLE", "INVESTMENT", 0, true, List.of("corretora", "clear ", "rico investimentos", "xp investimentos", "b3 ", "conta global de inv")),
             new Rule("INVESTMENT_FUNDS", "INVESTMENT", List.of("fundo de investimento", "fii ")),
-            new Rule("INVESTMENT_PENSION", "INVESTMENT", List.of("previdencia", "previdência", "pgbl", "vgbl")),
+            new Rule("INVESTMENT_PENSION", "INVESTMENT", 0, true, List.of("pgbl", "vgbl")),
+            new Rule("INVESTMENT_PENSION", "INVESTMENT", List.of("previdencia", "previdência")),
             // Transferências
             new Rule("TRANSFER_PIX", "TRANSFER", METHOD_PIX, true, List.of("pix")),
             // "ted" solto acha "limited"/"united"; "doc" acharia "documento"
@@ -256,6 +284,32 @@ public class RuleBasedCategorizationService {
                 .orElseGet(() -> "CREDIT".equalsIgnoreCase(type)
                         ? TransactionCategory.INCOME
                         : TransactionCategory.OTHER);
+    }
+
+    /**
+     * Exposto para teste (EC-197): cada termo e como ele casa.
+     *
+     * <p>A auditoria de 10/09/2026 varreu o vocabulário inteiro contra os
+     * extratos reais do dono procurando termo que começasse <b>no meio</b> de
+     * uma palavra. Achou seis casos, quatro deles errados de verdade —
+     * "lca" dentro de "ManoeLCArdoso", "lci" dentro de "ALCIdes", "zara"
+     * dentro de "ALZARA Perfumaria" e "posto" dentro de "IMPOSTO". Os outros
+     * dois estavam certos ("lanch" dentro de "HLALANCHONETE"), e é por isso
+     * que a correção não foi tornar tudo palavra inteira.
+     *
+     * <p>A regra que ficou, e que o teste cobra: <b>termo de até quatro
+     * caracteres, sem espaço, casa por palavra inteira</b>. Quatro letras
+     * dentro de um nome de trinta é cara ou coroa, e já tínhamos consertado
+     * quatro desses um a um (amil em CAMILA, iof em biofarma, ted em limited,
+     * mora em AMORA) antes de alguém olhar para o conjunto.
+     */
+    record VocabularyTerm(String keyword, boolean wholeWord) {
+    }
+
+    static List<VocabularyTerm> vocabulary() {
+        return TERMS.stream()
+                .map(term -> new VocabularyTerm(term.literal(), term.pattern() != null))
+                .toList();
     }
 
     /** Exposto para teste: garante que todo alvo do vocabulário existe no catálogo. */

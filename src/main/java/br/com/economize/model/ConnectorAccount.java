@@ -3,6 +3,7 @@ package br.com.economize.model;
 import jakarta.persistence.*;
 import lombok.*;
 
+import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.util.UUID;
 
@@ -72,6 +73,24 @@ public class ConnectorAccount {
 
     @Column(name = "statement_due_day")
     private Integer statementDueDay;
+
+    /**
+     * O saldo que a INSTITUIÇÃO informou na última leitura — a segunda fonte.
+     *
+     * <p>Todo número de saldo do app nasce da soma dos lançamentos importados.
+     * Quando falta um lançamento, o número fica errado e nada no sistema sabe
+     * disso, porque não há com quem discordar. Esta coluna é esse alguém.
+     *
+     * <p>Nulo é estado legítimo: nem todo provedor informa, e conta que ainda
+     * não sincronizou depois do EC-196 não tem leitura nenhuma. Inventar zero
+     * aqui seria criar exatamente a mentira que a coluna existe para denunciar.
+     */
+    @Column(name = "reported_balance", precision = 19, scale = 4)
+    private BigDecimal reportedBalance;
+
+    /** Quando esse saldo foi lido. Sem a hora, o valor não serve de prova. */
+    @Column(name = "reported_balance_at")
+    private OffsetDateTime reportedBalanceAt;
 
     @Column(name = "created_at", updatable = false)
     private OffsetDateTime createdAt;

@@ -7,6 +7,7 @@ import br.com.economize.model.StatementUpload;
 import br.com.economize.model.User;
 import br.com.economize.repository.BankTransactionRepository;
 import br.com.economize.repository.CategoryRepository;
+import br.com.economize.dto.statement.ImportSourceResponse;
 import br.com.economize.repository.StatementUploadRepository;
 import br.com.economize.repository.UserRepository;
 import br.com.economize.service.event.DomainEventPublisher;
@@ -343,7 +344,7 @@ public class BankStatementService {
 
         eventPublisher.publish(new StatementImportedEvent(user.getId(), format, toSave.size(), upload.getId()));
         log.info("Importadas {} novas transações ({}): {} sugeridas, {} sem categoria, {} reconciliadas, user={}",
-                toSave.size(), format, suggested, uncategorized, reconciled, user.getEmail());
+                toSave.size(), format, suggested, uncategorized, reconciled, user.getId());
         return new ImportResult(upload.getId(), toSave.size(), suggested, uncategorized, reconciled, false, format.name());
     }
 
@@ -380,7 +381,8 @@ public class BankStatementService {
             }
         }
         if (marked > 0) {
-            log.info("Origem carimbada em {} lançamento(s) já existentes, user={}", marked, user.getEmail());
+            log.info("Origem carimbada em {} lançamento(s) já existentes, user={}",
+                    marked, user.getId());
         }
     }
 
@@ -435,7 +437,7 @@ public class BankStatementService {
         existing.stream().filter(tx -> toMark.contains(tx.getId()))
                 .forEach(tx -> tx.setInternalTransfer(true));
         log.info("Movimentação entre contas do titular: {} lançamento(s) já existentes remarcados, user={}",
-                toMark.size(), user.getEmail());
+                toMark.size(), user.getId());
     }
 
     /** Caminho (1): a duplicata pulada empresta a marca à linha que ficou. */
@@ -645,6 +647,23 @@ public class BankStatementService {
             tx.setCategorizedBy(BankTransaction.CategorizedBy.AI);
             tx.setConfidence(CONF_AI);
         }
+    }
+
+    /**
+     * Os arquivos que este usuário já importou, do mais novo para o mais velho.
+     *
+     * <p>EC-195: a listagem de transações devolve só o {@code uploadId}; é esta
+     * lista que dá nome e data a ele. Carregada uma vez pelo app e casada em
+     * memória, como o mapa de contas — repetir o nome do arquivo em cada uma de
+     * 1.682 linhas seria pagar mil vezes pelo mesmo texto.
+     */
+    @Transactional(readOnly = true)
+    public List<ImportSourceResponse> listImportSources(String email) {
+        User user = userRepository.findByEmail(email)
+                .orElseThrow(() -> new ResourceNotFoundException("Usuário não encontrado"));
+        return statementUploadRepository.findAllByUserIdOrderByCreatedAtDesc(user.getId()).stream()
+                .map(ImportSourceResponse::from)
+                .toList();
     }
 
     public List<BankTransaction> listTransactions(String email) {

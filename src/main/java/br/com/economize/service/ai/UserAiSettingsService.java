@@ -115,7 +115,8 @@ public class UserAiSettingsService {
 
         UserAiSettings saved = repository.save(settings);
         // o log diz O QUE mudou, nunca com o quê
-        log.info("Configuração de IA salva: provedor={} modelo={} user={}", provider, model, email);
+        log.info("Configuração de IA salva: provedor={} modelo={} user={}",
+                provider, model, user.getId());
         return describe(user, saved);
     }
 
@@ -126,7 +127,8 @@ public class UserAiSettingsService {
         UserAiSettings settings = repository.findByUserId(user.getId())
                 .orElseThrow(() -> new ResourceNotFoundException("Nenhuma configuração de IA cadastrada"));
         repository.delete(settings);
-        log.info("Configuração de IA removida; a conta volta à chave do servidor. user={}", email);
+        log.info("Configuração de IA removida; a conta volta à chave do servidor. user={}",
+                user.getId());
     }
 
     /**
@@ -208,7 +210,8 @@ public class UserAiSettingsService {
         try {
             cipher.decrypt(settings.getApiKeyCipher(), user.getId().toString());
         } catch (SecretCipher.Unreadable e) {
-            log.warn("Chave de IA cadastrada está ilegível para user={}: {}", user.getEmail(), e.getMessage());
+            log.warn("Chave de IA cadastrada está ilegível para user={}: {}",
+                    user.getId(), e.getMessage());
             keyStatus = AiSettingsResponse.KEY_UNREADABLE;
         }
         return new AiSettingsResponse(AiSettingsResponse.SOURCE_USER, settings.getProvider().name(),

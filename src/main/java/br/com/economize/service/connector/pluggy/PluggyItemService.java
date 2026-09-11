@@ -90,7 +90,8 @@ public class PluggyItemService {
             // virar 409. Deixada para o flush do commit, ela aconteceria fora do
             // alcance deste catch e o cliente veria 500 (mesmo padrão do EC-096)
             PluggyItem saved = pluggyItemRepository.saveAndFlush(fromPluggy(user, itemId, item));
-            log.info("Item Pluggy registrado: conector \"{}\" para user={}", saved.getConnectorName(), email);
+            log.info("Item Pluggy registrado: conector \"{}\" para user={}",
+                    saved.getConnectorName(), user.getId());
             return PluggyItemResponse.from(saved);
         } catch (DataIntegrityViolationException race) {
             // duplo toque no onSuccess do widget dispara dois POST /items com o
@@ -165,7 +166,7 @@ public class PluggyItemService {
             try {
                 PluggyItem saved = pluggyItemRepository.saveAndFlush(fromPluggy(user, itemId, item));
                 log.info("Item de env semeado para user={}: conector \"{}\"",
-                        user.getEmail(), saved.getConnectorName());
+                        user.getId(), saved.getConnectorName());
             } catch (DataIntegrityViolationException race) {
                 // duas syncs simultâneas do dono semeiam o mesmo id: quem perde
                 // a corrida apenas segue em frente. A semente é idempotente e
@@ -221,7 +222,8 @@ public class PluggyItemService {
         Object clientUserId = item.get("clientUserId");
         if (clientUserId == null || String.valueOf(clientUserId).isBlank()) {
             log.warn("Item sem clientUserId — registro negado. O item não foi criado pelo widget desta "
-                    + "aplicação, ou a resposta do Pluggy deixou de trazer o campo. user={}", user.getEmail());
+                    + "aplicação, ou a resposta do Pluggy deixou de trazer o campo. user={}",
+                    user.getId());
             return false;
         }
         return String.valueOf(clientUserId).equals(user.getId().toString());

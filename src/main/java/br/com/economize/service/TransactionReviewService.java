@@ -174,7 +174,7 @@ public class TransactionReviewService {
         int stillPending = pending.size() - resolved;
         log.info("Recategorização: {} pendentes revistas, {} ganharam sugestão ({} pela IA), "
                         + "{} seguem sem, user={}",
-                pending.size(), resolved, byAi, stillPending, email);
+                pending.size(), resolved, byAi, stillPending, user.getId());
         return new RecategorizeOutcome(pending.size(), resolved, stillPending, byAi);
     }
 
@@ -262,7 +262,8 @@ public class TransactionReviewService {
                 rulesSaved++;
             }
         }
-        log.info("Revisão aplicada: {} transações confirmadas, {} padrões salvos, user={}", confirmed, rulesSaved, email);
+        log.info("Revisão aplicada: {} transações confirmadas, {} padrões salvos, user={}",
+                confirmed, rulesSaved, user.getId());
         return new ReviewOutcome(confirmed, rulesSaved);
     }
 
@@ -296,7 +297,8 @@ public class TransactionReviewService {
             upsertLearnedRule(user, entry.getKey(), entry.getValue());
             rulesSaved++;
         }
-        log.info("Confirmação em lote: {} transações, {} padrões, user={}", pending.size(), rulesSaved, email);
+        log.info("Confirmação em lote: {} transações, {} padrões, user={}",
+                pending.size(), rulesSaved, user.getId());
         return new ReviewOutcome(pending.size(), rulesSaved);
     }
 
