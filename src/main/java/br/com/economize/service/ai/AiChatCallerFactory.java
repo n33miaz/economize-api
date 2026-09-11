@@ -47,19 +47,42 @@ public class AiChatCallerFactory {
     private final OpenAiCompatibleChatClient httpClient;
     private final ChatClient serverChatClient;
     private final String serverModel;
+    private final boolean serverKeyConfigured;
+
+    /**
+     * O valor que {@code spring.ai.openai.api-key} assume quando a variável de
+     * ambiente não existe. Não é segredo, é sentinela: a autoconfiguração do
+     * Spring AI recusa chave vazia e derrubava o boot de um ambiente sem
+     * {@code GEMINI_API_KEY} — foi o que manteve a homologação fora do ar. Com
+     * a sentinela o contexto sobe, e esta classe garante que ninguém chama o
+     * provedor com ela.
+     */
+    public static final String SERVER_KEY_PLACEHOLDER = "nao-configurada";
 
     public AiChatCallerFactory(UserAiSettingsRepository repository,
                                SecretCipher cipher,
                                AiProviderProperties properties,
                                OpenAiCompatibleChatClient httpClient,
                                ChatClient.Builder serverChatClientBuilder,
-                               @Value("${spring.ai.openai.chat.options.model:}") String serverModel) {
+                               @Value("${spring.ai.openai.chat.options.model:}") String serverModel,
+                               @Value("${spring.ai.openai.api-key:}") String serverApiKey) {
         this.repository = repository;
         this.cipher = cipher;
         this.properties = properties;
         this.httpClient = httpClient;
         this.serverChatClient = serverChatClientBuilder.build();
         this.serverModel = serverModel;
+        this.serverKeyConfigured = serverApiKey != null
+                && !serverApiKey.isBlank()
+                && !SERVER_KEY_PLACEHOLDER.equals(serverApiKey.trim());
+        if (!serverKeyConfigured) {
+            log.warn("Sem chave de IA do servidor: o assistente só responde a quem cadastrar a própria chave");
+        }
+    }
+
+    /** O deploy tem chave própria para o provedor? Sem ela, só o caminho BYOK existe. */
+    public boolean serverKeyConfigured() {
+        return serverKeyConfigured;
     }
 
     /**
@@ -85,7 +108,12 @@ public class AiChatCallerFactory {
         }
         Optional<UserAiSettings> settings = repository.findByUserId(user.getId());
         if (settings.isEmpty()) {
-            return serverFallbackAllowed ? Optional.of(serverCaller()) : Optional.empty();
+            // A chave do servidor só é caminho quando existe de fato: com a
+            // sentinela no lugar dela, chamar o provedor renderia um 401 vestido
+            // de resposta do assistente
+            return serverFallbackAllowed && serverKeyConfigured
+                    ? Optional.of(serverCaller())
+                    : Optional.empty();
         }
         return Optional.of(new ByokCaller(targetFor(user, settings.get())));
     }

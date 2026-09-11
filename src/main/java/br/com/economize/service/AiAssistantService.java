@@ -9,6 +9,7 @@ import br.com.economize.repository.BankTransactionRepository;
 import br.com.economize.repository.CategoryRepository;
 import br.com.economize.repository.TransactionRepository;
 import br.com.economize.repository.UserRepository;
+import br.com.economize.exception.ServiceUnavailableException;
 import br.com.economize.service.ai.AiChatCaller;
 import br.com.economize.service.ai.AiChatCallerFactory;
 import br.com.economize.service.ai.AssistantContext;
@@ -120,9 +121,14 @@ public class AiAssistantService {
 
             // O assistente ACEITA cair na chave do servidor: é o comportamento
             // que o APK publicado conhece e não pode mudar para quem não
-            // configurou nada. Por isso resolve(..., true) sempre traz um caller.
+            // configurou nada. O único caso sem caller é o deploy SEM chave do
+            // servidor (GEMINI_API_KEY ausente) para quem não cadastrou a
+            // própria — e aí a resposta honesta é 503 com o caminho de saída,
+            // não um 500 genérico
             AiChatCaller caller = chatCallerFactory.resolve(user, true)
-                    .orElseThrow(() -> new IllegalStateException("Nenhum caminho de IA disponível"));
+                    .orElseThrow(() -> new ServiceUnavailableException(
+                            "O assistente não está configurado neste ambiente. "
+                                    + "Cadastre sua própria chave nas Opções de IA para usá-lo."));
 
             // O id, e não o e-mail: este log escapou da troca anterior porque a
             // frase não seguia o padrão `user={}`, e era o único ponto que ainda
