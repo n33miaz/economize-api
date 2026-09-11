@@ -34,7 +34,12 @@ jobs:
           # vazado, mesmo que o arquivo já tenha sido removido depois
           fetch-depth: 0
       - name: gitleaks
-        uses: gitleaks/gitleaks-action@v3
+        # Preso ao COMMIT, e nao a tag: `gitleaks-action` e de terceiro, e uma
+        # tag e movel -- quem controla o repositorio dela pode apontar `v3`
+        # para outro codigo, que roda na nossa esteira com os nossos segredos.
+        # Este SHA e o v3.0.0. Subir de versao passa a ser trocar o hash, de
+        # proposito, num PR que se le.
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
