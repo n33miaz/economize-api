@@ -1,5 +1,6 @@
 package br.com.economize.config;
 
+import io.github.bucket4j.TimeMeter;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -38,6 +39,19 @@ class RateLimitFilterTest {
     /** Mesma capacidade do balde padrão do filtro. */
     private static final int STANDARD_CAPACITY = 60;
 
+    /** Relógio que não anda: nenhuma ficha é reposta no meio do teste. */
+    private static final TimeMeter RELOGIO_PARADO = new TimeMeter() {
+        @Override
+        public long currentTimeNanos() {
+            return 0L;
+        }
+
+        @Override
+        public boolean isWallClockBased() {
+            return false;
+        }
+    };
+
     private RateLimitFilter filter;
     private AtomicInteger chainCalls;
     private WebFilterChain chain;
@@ -46,8 +60,14 @@ class RateLimitFilterTest {
     void setUp() {
         // Os mesmos tetos do padrao de producao: esta suite existe para
         // travar o COMPORTAMENTO do filtro, e ele precisa ser medido nos
-        // numeros que valem no ar
-        filter = new RateLimitFilter(corsSource(), 60, 10);
+        // numeros que valem no ar.
+        //
+        // O relogio PARADO nao e detalhe: o balde repoe uma ficha por segundo,
+        // entao esgotar 60 exige gastar as 60 em menos de um segundo. Numa
+        // maquina ocupada o proprio laco demora mais que isso, o balde repoe no
+        // meio e a requisicao seguinte passa -- o teste reprovava medindo a CPU
+        // da maquina, e nao o filtro. Foi o que aconteceu em 09/09/2026.
+        filter = new RateLimitFilter(corsSource(), 60, 10, RELOGIO_PARADO);
         chainCalls = new AtomicInteger();
         chain = exchange -> {
             chainCalls.incrementAndGet();

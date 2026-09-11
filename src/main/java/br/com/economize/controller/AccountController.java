@@ -1,6 +1,7 @@
 package br.com.economize.controller;
 
 import br.com.economize.dto.account.AccountResponse;
+import br.com.economize.service.BalanceReconciliationService;
 import br.com.economize.dto.account.CreateAccountRequest;
 import br.com.economize.dto.account.CardInvoicesResponse;
 import br.com.economize.dto.account.UpsertInvoiceReserveRequest;
@@ -38,6 +39,7 @@ import java.util.UUID;
 public class AccountController {
 
     private final ConnectorAccountService accountService;
+    private final BalanceReconciliationService balanceReconciliationService;
     private final CardInvoiceService cardInvoiceService;
     private final InvoiceReserveService invoiceReserveService;
 
@@ -51,6 +53,23 @@ public class AccountController {
     @GetMapping
     public Mono<List<AccountResponse>> list(@AuthenticationPrincipal String email) {
         return Mono.fromCallable(() -> accountService.list(email))
+                .subscribeOn(Schedulers.boundedElastic());
+    }
+
+    @Operation(summary = "Conferir o saldo informado pelo banco com o que o app mostra",
+            description = "Devolve só o que dá para PROVAR, e cada aviso diz o que exatamente está "
+                    + "errado — nunca \"os números não batem\". `SEM_SALDO_INFORMADO`: a instituição "
+                    + "nunca informou saldo, então o número da tela não tem segunda fonte. "
+                    + "`ZERO_COM_MOVIMENTO`: saldo R$ 0,00 numa conta com movimento nos últimos 30 dias "
+                    + "— leitura que falhou, não saldo. `SALDO_VELHO`: a leitura tem mais de 48 h e a "
+                    + "sincronização é diária. `MOVIMENTO_APOS_LEITURA`: entraram lançamentos depois da "
+                    + "leitura, com a soma do que o saldo informado ainda não inclui. NÃO compara a soma "
+                    + "dos lançamentos com o saldo do banco: o provedor devolve ~12 meses e a conta é "
+                    + "mais velha, então essa diferença tocaria sempre.")
+    @GetMapping("/balance-check")
+    public Mono<BalanceReconciliationService.Report> balanceCheck(
+            @AuthenticationPrincipal String email) {
+        return Mono.fromCallable(() -> balanceReconciliationService.checkFor(email))
                 .subscribeOn(Schedulers.boundedElastic());
     }
 

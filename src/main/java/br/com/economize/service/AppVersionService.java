@@ -24,6 +24,18 @@ import java.util.stream.Stream;
  * Versões anunciadas ao app: a mínima aceita, a mais recente, e a identidade
  * da API e do banco que estão no ar.
  *
+ * <p><b>A mínima é a versão publicada, sempre.</b> Não existe um segundo
+ * número configurável: quem está atrás da versão atual não usa o app, e é
+ * levado à página de download. Dois números que podem divergir são dois
+ * números que UM DIA divergem — e o modo de falha é silencioso (aparelho
+ * velho continua chamando a API e recebendo dado que ele não sabe ler).
+ *
+ * <p><b>Consequência operacional, e ela importa:</b> subir
+ * {@code APP_LATEST_VERSION} bloqueia todo mundo que ainda não atualizou. A
+ * ordem é publicar o APK novo em {@code /baixar} PRIMEIRO e só então subir o
+ * número aqui — nunca o contrário, ou o app manda o usuário buscar uma versão
+ * que ainda não existe.
+ *
  * <p>A versão do schema não é uma constante escrita à mão — seria o primeiro
  * número a ficar para trás na próxima migration. Ela é lida dos nomes dos
  * arquivos {@code db/migration/V*.sql} na subida, exatamente o que o Flyway
@@ -43,25 +55,28 @@ public class AppVersionService {
     // V23__users_plan_and_app_version.sql -> 23
     private static final Pattern MIGRATION_NAME = Pattern.compile("^V(\\d+)__.*\\.sql$");
 
-    private final String minVersion;
+    /** A publicada. É também a mínima — ver o javadoc da classe. */
     private final String latestVersion;
     private final String downloadUrl;
+    private final String apkUrl;
     private final String storeUrl;
     private final String updateMessage;
     private final String apiVersion;
     private final String schemaVersion;
 
     public AppVersionService(ObjectProvider<BuildProperties> buildProperties,
-                             @Value("${economize.app.min-version:2.2.0}") String minVersion,
                              @Value("${economize.app.latest-version:2.2.0}") String latestVersion,
                              @Value("${economize.app.download-url:https://economize-web.onrender.com/baixar}")
                              String downloadUrl,
+                             @Value("${economize.app.apk-url:}") String apkUrl,
                              @Value("${economize.app.store-url:}") String storeUrl,
                              @Value("${economize.app.update-message:" + AppVersionFilter.DEFAULT_MESSAGE + "}")
                              String updateMessage) {
-        this.minVersion = minVersion;
         this.latestVersion = latestVersion;
         this.downloadUrl = downloadUrl;
+        // Vazio vira null, e não string vazia: é o estado "ainda não publiquei"
+        // que a página /baixar sabe ler
+        this.apkUrl = apkUrl == null || apkUrl.isBlank() ? null : apkUrl.trim();
         this.storeUrl = storeUrl == null || storeUrl.isBlank() ? null : storeUrl.trim();
         this.updateMessage = updateMessage;
         // BuildProperties só existe quando o jar carrega o build-info gerado
@@ -71,13 +86,14 @@ public class AppVersionService {
         this.apiVersion = build == null || build.getVersion() == null ? DEV_VERSION : build.getVersion();
         this.schemaVersion = resolveSchemaVersion(
                 new PathMatchingResourcePatternResolver(AppVersionService.class.getClassLoader()));
-        log.info("Versões anunciadas: app mínima={} recente={} api={} schema={}",
-                minVersion, latestVersion, apiVersion, schemaVersion);
+        log.info("Versões anunciadas: app mínima=recente={} api={} schema={}",
+                latestVersion, apiVersion, schemaVersion);
     }
 
     public AppVersionResponse describe() {
-        return new AppVersionResponse(minVersion, latestVersion, downloadUrl, storeUrl, updateMessage,
-                apiVersion, schemaVersion);
+        // minVersion == latestVersion: a regra da classe, expressa onde o app lê
+        return new AppVersionResponse(latestVersion, latestVersion, downloadUrl, apkUrl, storeUrl,
+                updateMessage, apiVersion, schemaVersion);
     }
 
     public String schemaVersion() {

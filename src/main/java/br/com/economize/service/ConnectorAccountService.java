@@ -11,6 +11,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 
+import java.math.BigDecimal;
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
@@ -34,11 +36,27 @@ public class ConnectorAccountService {
     private final ConnectorAccountRepository accountRepository;
     private final UserRepository userRepository;
 
-    /** Origem já traduzida do provedor, pronta para virar linha. */
+    /**
+     * Origem já traduzida do provedor, pronta para virar linha.
+     *
+     * @param reportedBalance   saldo informado pela instituição; nulo quando ela
+     *                          não informou (EC-196)
+     * @param reportedBalanceAt quando esse saldo foi lido
+     */
     public record AccountSnapshot(String providerAccountId, String name, String institution,
                                   ConnectorAccount.AccountType type,
                                   Integer statementClosingDay, Integer statementDueDay,
-                                  UUID pluggyItemId) {
+                                  UUID pluggyItemId,
+                                  BigDecimal reportedBalance, OffsetDateTime reportedBalanceAt) {
+
+        /** Sem saldo informado — é como as fontes que não têm essa noção chamam. */
+        public AccountSnapshot(String providerAccountId, String name, String institution,
+                               ConnectorAccount.AccountType type,
+                               Integer statementClosingDay, Integer statementDueDay,
+                               UUID pluggyItemId) {
+            this(providerAccountId, name, institution, type, statementClosingDay,
+                    statementDueDay, pluggyItemId, null, null);
+        }
     }
 
     public List<AccountResponse> list(String email) {
@@ -134,6 +152,14 @@ public class ConnectorAccountService {
         account.setStatementClosingDay(validDay(snapshot.statementClosingDay()));
         account.setStatementDueDay(validDay(snapshot.statementDueDay()));
         account.setPluggyItemId(snapshot.pluggyItemId());
+        // Saldo informado só é sobrescrito quando VEIO um: uma sincronização em
+        // que o provedor não devolveu balance não pode apagar a última leitura
+        // boa — perder a segunda fonte é pior do que tê-la velha, e a hora
+        // gravada junto já denuncia que ela é velha (EC-196)
+        if (snapshot.reportedBalance() != null) {
+            account.setReportedBalance(snapshot.reportedBalance());
+            account.setReportedBalanceAt(snapshot.reportedBalanceAt());
+        }
         return accountRepository.save(account);
     }
 
@@ -184,6 +210,8 @@ public class ConnectorAccountService {
                     .type(snapshot.type())
                     .statementClosingDay(validDay(snapshot.statementClosingDay()))
                     .statementDueDay(validDay(snapshot.statementDueDay()))
+                    .reportedBalance(snapshot.reportedBalance())
+                    .reportedBalanceAt(snapshot.reportedBalanceAt())
                     .build());
         } catch (DataIntegrityViolationException race) {
             log.info("Conta de origem já registrada por uma sincronização concorrente — reaproveitando");

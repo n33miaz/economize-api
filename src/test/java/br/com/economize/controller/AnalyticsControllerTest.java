@@ -10,6 +10,9 @@ import br.com.economize.dto.analytics.CycleCaveat;
 import br.com.economize.dto.analytics.DebtOverviewResponse;
 import br.com.economize.service.AnalyticsService;
 import br.com.economize.service.DebtInsightService;
+import br.com.economize.service.InstallmentProjectionService;
+import br.com.economize.service.CategoryBudgetService;
+import br.com.economize.service.SubscriptionHunterService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -52,6 +55,15 @@ class AnalyticsControllerTest {
     // precisa existir no contexto, mesmo quando o teste não a exercita
     @MockitoBean
     private DebtInsightService debtInsightService;
+
+    @MockitoBean
+    private InstallmentProjectionService installmentProjectionService;
+
+    @MockitoBean
+    private SubscriptionHunterService subscriptionHunterService;
+
+    @MockitoBean
+    private CategoryBudgetService categoryBudgetService;
 
     @Test
     @DisplayName("GET /monthly - month continua funcionando igual (retrocompatibilidade)")

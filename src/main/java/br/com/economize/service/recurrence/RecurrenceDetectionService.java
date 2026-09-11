@@ -272,7 +272,7 @@ public class RecurrenceDetectionService {
         linkRepository.flush();
 
         log.info("Detecção de recorrência: {} séries novas, {} atualizadas, {} vínculos, user={}",
-                created, updated, linksCreated, user.getEmail());
+                created, updated, linksCreated, user.getId());
         return new DetectionSummary(created, updated, linksCreated);
     }
 

@@ -9,6 +9,7 @@ import br.com.economize.model.ConnectorAccount;
 import br.com.economize.security.JwtAuthenticationFilter;
 import br.com.economize.security.JwtUtil;
 import br.com.economize.security.SecurityConfig;
+import br.com.economize.service.BalanceReconciliationService;
 import br.com.economize.service.CardInvoiceService;
 import br.com.economize.service.InvoiceReserveService;
 import br.com.economize.service.ConnectorAccountService;
@@ -53,13 +54,18 @@ class AccountControllerTest {
     @MockitoBean
     private InvoiceReserveService invoiceReserveService;
 
+    @MockitoBean
+    private BalanceReconciliationService balanceReconciliationService;
+
     @Test
     @DisplayName("GET /accounts - lista as origens com nome, tipo e metadados de fatura")
     void listReturnsAccounts() {
         UUID id = UUID.randomUUID();
         when(accountService.list(EMAIL)).thenReturn(List.of(new AccountResponse(
                 id, "Ultravioleta ····1234", ConnectorAccount.AccountType.CREDIT_CARD,
-                "Nubank", 10, 17, true)));
+                "Nubank", 10, 17, true,
+                new java.math.BigDecimal("742.19"),
+                java.time.OffsetDateTime.parse("2026-09-10T09:00:00Z"))));
 
         webTestClient.get()
                 .uri("/api/v1/accounts")
@@ -72,7 +78,10 @@ class AccountControllerTest {
                 .jsonPath("$[0].type").isEqualTo("CREDIT_CARD")
                 .jsonPath("$[0].institution").isEqualTo("Nubank")
                 .jsonPath("$[0].statementClosingDay").isEqualTo(10)
-                .jsonPath("$[0].linked").isEqualTo(true);
+                .jsonPath("$[0].linked").isEqualTo(true)
+                // o saldo informado pela instituicao viaja no contrato (EC-196):
+                // sem ele o app nao tem com que conferir o proprio numero
+                .jsonPath("$[0].reportedBalance").isEqualTo(742.19);
     }
 
     @Test
@@ -215,5 +224,29 @@ class AccountControllerTest {
 
     private String bearerToken() {
         return "Bearer " + jwtUtil.generateToken(EMAIL);
+    }
+
+    @Test
+    @DisplayName("GET /accounts/balance-check - o aviso diz o que exatamente esta errado")
+    void balanceCheckReportsWhatIsWrong() {
+        UUID contaId = UUID.randomUUID();
+        when(balanceReconciliationService.checkFor(EMAIL)).thenReturn(
+                new BalanceReconciliationService.Report(2, List.of(
+                        new BalanceReconciliationService.Finding(contaId, "Inter ····2750",
+                                BalanceReconciliationService.Kind.ZERO_COM_MOVIMENTO,
+                                java.math.BigDecimal.ZERO,
+                                java.time.OffsetDateTime.parse("2026-09-10T11:55:00Z"), null,
+                                "A institui\u00e7\u00e3o informou saldo R$ 0,00, mas esta conta teve "
+                                        + "movimento nos \u00faltimos 30 dias."))));
+
+        webTestClient.get()
+                .uri("/api/v1/accounts/balance-check")
+                .header(HttpHeaders.AUTHORIZATION, bearerToken())
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.accountsChecked").isEqualTo(2)
+                .jsonPath("$.findings[0].kind").isEqualTo("ZERO_COM_MOVIMENTO")
+                .jsonPath("$.findings[0].accountName").isEqualTo("Inter ····2750");
     }
 }

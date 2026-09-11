@@ -4,6 +4,7 @@ import br.com.economize.model.BankTransaction;
 import br.com.economize.dto.ai.ChatTurn;
 import br.com.economize.model.User;
 import br.com.economize.repository.BankTransactionRepository;
+import br.com.economize.repository.CategoryRepository;
 import br.com.economize.repository.TransactionRepository;
 import br.com.economize.repository.UserRepository;
 import br.com.economize.service.ai.AiChatCaller;
@@ -16,12 +17,14 @@ import org.mockito.ArgumentCaptor;
 
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -46,6 +49,7 @@ class AiAssistantServiceTest {
     private UserRepository userRepository;
     private BankTransactionRepository bankTransactionRepository;
     private TransactionRepository transactionRepository;
+    private CategoryRepository categoryRepository;
     private AiChatCaller caller;
     private User user;
 
@@ -57,22 +61,29 @@ class AiAssistantServiceTest {
         userRepository = mock(UserRepository.class);
         bankTransactionRepository = mock(BankTransactionRepository.class);
         transactionRepository = mock(TransactionRepository.class);
+        categoryRepository = mock(CategoryRepository.class);
         caller = mock(AiChatCaller.class);
 
         user = User.builder().id(UUID.randomUUID()).email(EMAIL).name("Dono").build();
         when(userRepository.findByEmail(EMAIL)).thenReturn(Optional.of(user));
-        when(bankTransactionRepository.findAllByUserIdOrderByDateDesc(user.getId())).thenReturn(List.of(
-                BankTransaction.builder()
-                        .id(UUID.randomUUID())
-                        .type("DEBIT")
-                        .amount(new BigDecimal("-120.50"))
-                        .description("PAG*FITMAX 4321 SAO PAULO BRA")
-                        .date(OffsetDateTime.parse("2026-08-10T12:00:00Z"))
-                        .build()));
+        // Dentro da janela de contexto (EC-200): datas fixas ficariam para trás
+        // do relógio e a linha sumiria do prompt com o tempo
+        when(bankTransactionRepository
+                .findAllByUserIdAndDateGreaterThanEqualAndDateLessThanOrderByDateDesc(
+                        eq(user.getId()), any(), any()))
+                .thenReturn(List.of(
+                        BankTransaction.builder()
+                                .id(UUID.randomUUID())
+                                .type("DEBIT")
+                                .amount(new BigDecimal("-120.50"))
+                                .description("PAG*FITMAX 4321 SAO PAULO BRA")
+                                .date(OffsetDateTime.now(ZoneOffset.UTC).minusDays(3))
+                                .build()));
         when(transactionRepository.findAllByUserIdOrderByTransactionDateDesc(user.getId())).thenReturn(List.of());
+        when(categoryRepository.findVisibleTo(user.getId())).thenReturn(List.of());
 
         service = new AiAssistantService(factory, userRepository,
-                bankTransactionRepository, transactionRepository);
+                bankTransactionRepository, transactionRepository, categoryRepository);
     }
 
     @Test
@@ -116,7 +127,9 @@ class AiAssistantServiceTest {
         verify(caller).complete(system.capture(), anyList(), pergunta.capture());
         assertThat(system.getValue())
                 .contains("Nino")
-                .contains("RESUMO BANCÁRIO")
+                .contains("PERÍODO")
+                .contains("TOTAIS DO PERÍODO")
+                .contains("GASTOS POR CATEGORIA")
                 .contains("PAG*FITMAX 4321 SAO PAULO BRA");
         assertThat(pergunta.getValue()).isEqualTo("e o cartão?");
     }

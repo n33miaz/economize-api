@@ -11,4 +11,12 @@ public interface StatementUploadRepository extends JpaRepository<StatementUpload
 
     /** Dono como filtro: importacao de outra pessoa responde igual a inexistente. */
     Optional<StatementUpload> findByIdAndUserId(UUID id, UUID userId);
+
+    /**
+     * Os arquivos que o usuário já importou, do mais novo para o mais velho.
+     *
+     * <p>EC-195: a listagem de transações devolve só o {@code uploadId}, e o app
+     * casa o nome do arquivo em memória — mesmo padrão de {@code /accounts}.
+     */
+    java.util.List<StatementUpload> findAllByUserIdOrderByCreatedAtDesc(UUID userId);
 }

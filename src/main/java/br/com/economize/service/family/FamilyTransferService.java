@@ -94,7 +94,7 @@ public class FamilyTransferService {
             outros.add(tokens);
         }
         if (outros.isEmpty()) {
-            log.info("Varredura da casa sem outro membro com nome completo, user={}", email);
+            log.info("Varredura da casa sem outro membro com nome completo, user={}", user.getId());
             return new Outcome(0, 0, 0);
         }
 
@@ -115,8 +115,8 @@ public class FamilyTransferService {
             bankTransactionRepository.markAsFamilyTransfer(user.getId(), marcar);
         }
         log.info("Varredura da casa: {} de {} lançamento(s) marcados, user={}",
-                marcar.size(), all.size(), email);
-        return new Outcome(all.size(), marcar.size(), outros.size());
+                marcar.size(), all.size(), user.getId());
+        return new Outcome(all.size(), marcar.size(), outros.size(), List.copyOf(marcar));
     }
 
     /**
@@ -139,6 +139,11 @@ public class FamilyTransferService {
      * @param against contra quantos outros membros a varredura teve nome
      *                completo para comparar — zero explica um resultado zerado
      */
-    public record Outcome(int scanned, int marked, int against) {
+    public record Outcome(int scanned, int marked, int against, List<UUID> markedIds) {
+
+        /** Para quem só quer os números. */
+        public Outcome(int scanned, int marked, int against) {
+            this(scanned, marked, against, List.of());
+        }
     }
 }

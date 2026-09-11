@@ -57,11 +57,12 @@ public class PlanService {
         }
         try {
             interestRepository.saveAndFlush(PlanInterest.builder().user(user).plan(plan).build());
-            log.info("Interesse no plano {} registrado para user={}", plan, email);
+            log.info("Interesse no plano {} registrado para user={}", plan, user.getId());
         } catch (DataIntegrityViolationException race) {
             // dois toques simultâneos: o outro gravou entre o exists e o insert.
             // Mesmo resultado para quem chamou — o interesse está registrado
-            log.debug("Interesse no plano {} já registrado por requisição concorrente (user={})", plan, email);
+            log.debug("Interesse no plano {} já registrado por requisição concorrente (user={})",
+                    plan, user.getId());
         }
     }
 

@@ -73,7 +73,8 @@ public class TrustedDeviceService {
         if (!device.getUser().getId().equals(user.getId())) {
             // segredo válido apresentado na conta errada: além de negar, é o
             // tipo de coisa que se quer saber que aconteceu
-            log.warn("Segredo de aparelho apresentado por outra conta — negado. user={}", user.getEmail());
+            log.warn("Segredo de aparelho apresentado por outra conta — negado. user={}",
+                    user.getId());
             return false;
         }
         if (device.getExpiresAt().isBefore(OffsetDateTime.now())) return false;
@@ -111,7 +112,7 @@ public class TrustedDeviceService {
                 .lastUsedAt(OffsetDateTime.now())
                 .expiresAt(OffsetDateTime.now().plusDays(TRUST_DAYS))
                 .build());
-        log.info("Aparelho lembrado para user={} por {} dias", user.getEmail(), TRUST_DAYS);
+        log.info("Aparelho lembrado para user={} por {} dias", user.getId(), TRUST_DAYS);
         return token;
     }
 
@@ -136,7 +137,7 @@ public class TrustedDeviceService {
     public void forgetAll(String email) {
         User user = requireUser(email);
         deviceRepository.deleteAllByUserId(user.getId());
-        log.info("Todos os aparelhos esquecidos para user={}", user.getEmail());
+        log.info("Todos os aparelhos esquecidos para user={}", user.getId());
     }
 
     /**

@@ -147,7 +147,7 @@ public class InvestmentService {
             throw lastFailure;
         }
         log.info("Sync de investimentos: {} criadas, {} atualizadas em {} conexão(ões) para user={}",
-                created, updated, itemsRead, email);
+                created, updated, itemsRead, user.getId());
         return new InvestmentResponses.SyncResult(created + updated, created, updated, itemsRead,
                 skippedItems, skippedPositions);
     }
