@@ -344,7 +344,7 @@ public class BankStatementService {
 
         eventPublisher.publish(new StatementImportedEvent(user.getId(), format, toSave.size(), upload.getId()));
         log.info("Importadas {} novas transações ({}): {} sugeridas, {} sem categoria, {} reconciliadas, user={}",
-                toSave.size(), format, suggested, uncategorized, reconciled, user.getEmail());
+                toSave.size(), format, suggested, uncategorized, reconciled, user.getId());
         return new ImportResult(upload.getId(), toSave.size(), suggested, uncategorized, reconciled, false, format.name());
     }
 
@@ -381,7 +381,8 @@ public class BankStatementService {
             }
         }
         if (marked > 0) {
-            log.info("Origem carimbada em {} lançamento(s) já existentes, user={}", marked, user.getEmail());
+            log.info("Origem carimbada em {} lançamento(s) já existentes, user={}",
+                    marked, user.getId());
         }
     }
 
@@ -436,7 +437,7 @@ public class BankStatementService {
         existing.stream().filter(tx -> toMark.contains(tx.getId()))
                 .forEach(tx -> tx.setInternalTransfer(true));
         log.info("Movimentação entre contas do titular: {} lançamento(s) já existentes remarcados, user={}",
-                toMark.size(), user.getEmail());
+                toMark.size(), user.getId());
     }
 
     /** Caminho (1): a duplicata pulada empresta a marca à linha que ficou. */

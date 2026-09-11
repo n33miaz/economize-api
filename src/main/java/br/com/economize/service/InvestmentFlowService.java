@@ -152,7 +152,7 @@ public class InvestmentFlowService {
         }
         log.info("Varredura de aplicação/resgate: {} de {} linha(s), aplicado {}, resgatado {}, "
                         + "dryRun={}, user={}",
-                marcar.size(), todas.size(), aplicado, resgatado, dryRun, email);
+                marcar.size(), todas.size(), aplicado, resgatado, dryRun, user.getId());
         return new Outcome(todas.size(), marcar.size(), aplicado, resgatado, dryRun, detalhes);
     }
 

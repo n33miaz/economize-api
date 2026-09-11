@@ -139,7 +139,7 @@ public class StatementHygieneService {
                         + "{} duplicata(s), {} estorno(s), {} série(s) nova(s), {} atualizada(s), user={}",
                 resultado.internalMarked(), resultado.investmentMarked(), resultado.familyMarked(),
                 resultado.duplicatesMarked(), resultado.refundsMarked(), resultado.seriesCreated(),
-                resultado.seriesUpdated(), email);
+                resultado.seriesUpdated(), user.getId());
         return resultado;
     }
 

@@ -146,7 +146,7 @@ public class DuplicateTransactionService {
                 .map(p -> p.amount().abs())
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
         log.info("Varredura de duplicatas: {} par(es), volume {}, dryRun={}, user={}",
-                pares.size(), volume, dryRun, email);
+                pares.size(), volume, dryRun, user.getId());
         return new Outcome(all.size(), pares.size(), volume, dryRun, pares);
     }
 

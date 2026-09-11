@@ -55,7 +55,7 @@ public class TransactionAliasService {
         bankTransactionRepository.save(transaction);
 
         log.info("Apelido de transação {}: tx={}, user={}",
-                sanitized == null ? "removido" : "atualizado", transactionId, email);
+                sanitized == null ? "removido" : "atualizado", transactionId, user.getId());
         return transaction;
     }
 

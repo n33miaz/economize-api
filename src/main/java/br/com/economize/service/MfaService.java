@@ -167,7 +167,7 @@ public class MfaService {
         mfa.setConfirmedAt(OffsetDateTime.now(clock));
         mfa.setLastUsedStep(step);
         mfaRepository.save(mfa);
-        log.info("Segundo fator ativado para user={}", email);
+        log.info("Segundo fator ativado para user={}", user.getId());
         return new MfaRecoveryCodesResponse(regenerateRecoveryCodes(user));
     }
 
@@ -190,7 +190,7 @@ public class MfaService {
             // códigos de recuperação são hash e não dependem de chave nenhuma —
             // é exatamente para isto que eles existem
             log.warn("Segredo TOTP ilegível para user={} — só os códigos de recuperação entram. {}",
-                    user.getEmail(), e.getMessage());
+                    user.getId(), e.getMessage());
             return consumeRecoveryCode(user, code);
         }
 
@@ -226,7 +226,7 @@ public class MfaService {
         // Os aparelhos conhecidos só existiam para dispensar ESTE fator: sem
         // ele, guardá-los é manter um segredo que não abre mais nada
         deviceRepository.deleteAllByUserId(user.getId());
-        log.info("Segundo fator desligado para user={}", email);
+        log.info("Segundo fator desligado para user={}", user.getId());
     }
 
     public boolean isEnabledFor(User user) {
@@ -259,7 +259,7 @@ public class MfaService {
                 candidate.setUsedAt(OffsetDateTime.now(clock));
                 recoveryCodeRepository.save(candidate);
                 log.info("Entrada por código de recuperação para user={} — restam {}",
-                        user.getEmail(),
+                        user.getId(),
                         recoveryCodeRepository.countByUserIdAndUsedAtIsNull(user.getId()));
                 return true;
             }

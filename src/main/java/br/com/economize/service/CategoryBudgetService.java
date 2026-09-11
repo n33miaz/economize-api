@@ -74,7 +74,7 @@ public class CategoryBudgetService {
         teto.setMonthlyLimit(monthlyLimit);
         budgetRepository.save(teto);
         log.info("Teto de categoria definido: {} = R$ {}, user={}",
-                categoria.getName(), monthlyLimit, email);
+                categoria.getName(), monthlyLimit, user.getId());
         return new Budget(categoryId, categoria.getName(), monthlyLimit);
     }
 
@@ -155,7 +155,7 @@ public class CategoryBudgetService {
         int estourados = (int) linhas.stream().filter(Line::exceeded).count();
         int emRisco = (int) linhas.stream().filter(Line::abovePace).count();
         log.info("Tetos de categoria: {} teto(s), {} estourado(s), {} acima do ritmo, user={}",
-                linhas.size(), estourados, emRisco, email);
+                linhas.size(), estourados, emRisco, user.getId());
         return new Status(estourados, emRisco, linhas);
     }
 

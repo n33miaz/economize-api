@@ -116,7 +116,8 @@ public class WatchmanService {
         }
         run.setUndoneAt(OffsetDateTime.now());
         sweepRunRepository.save(run);
-        log.info("Passada desfeita: {} com {} linha(s), user={}", run.getKind(), ids.size(), email);
+        log.info("Passada desfeita: {} com {} linha(s), user={}",
+                run.getKind(), ids.size(), user.getId());
         return new Note(run.getId(), run.getKind(), nameOf(run.getKind()), roleOf(run.getKind()),
                 message(run), run.getAffected(), run.getVolume(), run.getRanAt(), true, false);
     }

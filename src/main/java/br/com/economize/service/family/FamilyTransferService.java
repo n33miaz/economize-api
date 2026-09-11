@@ -94,7 +94,7 @@ public class FamilyTransferService {
             outros.add(tokens);
         }
         if (outros.isEmpty()) {
-            log.info("Varredura da casa sem outro membro com nome completo, user={}", email);
+            log.info("Varredura da casa sem outro membro com nome completo, user={}", user.getId());
             return new Outcome(0, 0, 0);
         }
 
@@ -115,7 +115,7 @@ public class FamilyTransferService {
             bankTransactionRepository.markAsFamilyTransfer(user.getId(), marcar);
         }
         log.info("Varredura da casa: {} de {} lançamento(s) marcados, user={}",
-                marcar.size(), all.size(), email);
+                marcar.size(), all.size(), user.getId());
         return new Outcome(all.size(), marcar.size(), outros.size(), List.copyOf(marcar));
     }
 

@@ -208,7 +208,7 @@ public class PluggySyncService {
             }
         }
         log.info("Pluggy sync: {} transações na janela {}..{} em {} item(ns) para user={}",
-                parsed.size(), from, to, items.size(), email);
+                parsed.size(), from, to, items.size(), user.getId());
         BankStatementService.ImportResult result =
                 bankStatementService.importFromConnector(user, "Meu Pluggy", StatementFormat.PLUGGY, parsed);
 

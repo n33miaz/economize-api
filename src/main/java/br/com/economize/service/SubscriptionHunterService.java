@@ -119,7 +119,7 @@ public class SubscriptionHunterService {
         long paradas = assinaturas.stream().filter(Subscription::silent).count();
 
         log.info("Caça-assinaturas: {} de {} série(s) são assinatura, R$ {}/ano, {} parada(s), user={}",
-                assinaturas.size(), examinadas, totalAnual, paradas, email);
+                assinaturas.size(), examinadas, totalAnual, paradas, user.getId());
         return new Report(examinadas, assinaturas.size(), totalAnual, (int) paradas, assinaturas);
     }
 

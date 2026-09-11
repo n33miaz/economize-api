@@ -107,7 +107,7 @@ public class InstallmentProjectionService {
         BigDecimal aVencer = abertas.stream().map(Series::remainingAmount)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
         log.info("Parcelamentos: {} série(s), {} em aberto, R$ {} a vencer, user={}",
-                series.size(), abertas.size(), aVencer, email);
+                series.size(), abertas.size(), aVencer, user.getId());
         return new Overview(series.size(), abertas.size(), aVencer, series);
     }
 

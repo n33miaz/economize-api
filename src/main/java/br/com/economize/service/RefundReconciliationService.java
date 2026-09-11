@@ -245,7 +245,7 @@ public class RefundReconciliationService {
         BigDecimal volume = pares.stream().map(Pair::amount)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
         log.info("Varredura de estornos: {} par(es), volume {}, dryRun={}, user={}",
-                pares.size(), volume, dryRun, email);
+                pares.size(), volume, dryRun, user.getId());
         return new Outcome(todas.size(), pares.size(), volume, dryRun, pares, parciais);
     }
 

@@ -89,7 +89,7 @@ public class BalanceReconciliationService {
         }
         log.info("Conferência de saldo: {} conta(s) ligada(s), {} aviso(s), user={}",
                 contas.stream().filter(c -> c.getPluggyItemId() != null).count(),
-                achados.size(), email);
+                achados.size(), user.getId());
         return new Report(contas.size(), achados);
     }
 

@@ -71,7 +71,7 @@ public class InternalTransferService {
         if (tokens.size() < 2) {
             // Sem nome completo no cadastro não há sinal: responder "zero" é
             // honesto, inventar um casamento por primeiro nome não é
-            log.info("Varredura de movimentação própria sem nome completo, user={}", email);
+            log.info("Varredura de movimentação própria sem nome completo, user={}", user.getId());
             return new Outcome(0, 0, false);
         }
 
@@ -90,7 +90,7 @@ public class InternalTransferService {
             bankTransactionRepository.markAsInternalTransfer(user.getId(), toMark);
         }
         log.info("Varredura de movimentação própria: {} de {} lançamento(s) marcados, user={}",
-                toMark.size(), all.size(), email);
+                toMark.size(), all.size(), user.getId());
         return new Outcome(all.size(), toMark.size(), true, List.copyOf(toMark));
     }
 
