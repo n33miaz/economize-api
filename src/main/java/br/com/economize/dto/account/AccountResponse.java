@@ -2,6 +2,8 @@ package br.com.economize.dto.account;
 
 import br.com.economize.model.ConnectorAccount;
 
+import java.math.BigDecimal;
+import java.time.OffsetDateTime;
 import java.util.UUID;
 
 /**
@@ -23,7 +25,13 @@ public record AccountResponse(
         Integer statementDueDay,
         // A conexão que traz esta conta ainda está vinculada? Falso = origem
         // histórica: os lançamentos continuam, mas nada novo entra por ela
-        boolean linked
+        boolean linked,
+        // O saldo que a INSTITUIÇÃO informou, e quando (EC-196). Nulos quando
+        // ela não informou — e nulo é informação: quer dizer que o número da
+        // tela não tem segunda fonte para conferir. No cartão este campo é o
+        // valor DEVIDO, não um saldo
+        BigDecimal reportedBalance,
+        OffsetDateTime reportedBalanceAt
 ) {
     public static AccountResponse from(ConnectorAccount account) {
         return new AccountResponse(
@@ -33,6 +41,8 @@ public record AccountResponse(
                 account.getInstitution(),
                 account.getStatementClosingDay(),
                 account.getStatementDueDay(),
-                account.getPluggyItemId() != null);
+                account.getPluggyItemId() != null,
+                account.getReportedBalance(),
+                account.getReportedBalanceAt());
     }
 }

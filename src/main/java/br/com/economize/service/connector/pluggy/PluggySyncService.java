@@ -277,6 +277,13 @@ public class PluggySyncService {
      * serve de rede. Os últimos dígitos entram porque quem tem dois cartões do
      * mesmo banco não distingue um do outro por nome nenhum.
      *
+     * <p><b>Saldo informado.</b> O provedor devolve {@code balance} em toda
+     * conta e nós o jogávamos fora — todo saldo do app nascia da soma dos
+     * lançamentos, sem segunda fonte para discordar quando faltasse um. Agora
+     * ele viaja junto (EC-196). No cartão o campo é o valor DEVIDO, não um
+     * saldo; ele é guardado do mesmo jeito e quem confere sabe distinguir pelo
+     * tipo da conta.
+     *
      * <p><b>Fechamento e vencimento.</b> Só existem no cartão, e são lidos das
      * datas que o provedor devolve na conta ({@code balanceCloseDate} /
      * {@code balanceDueDate}) — delas guardamos apenas o DIA DO MÊS, que é o que
@@ -296,7 +303,11 @@ public class PluggySyncService {
                 creditCard ? ConnectorAccount.AccountType.CREDIT_CARD : ConnectorAccount.AccountType.BANK,
                 creditCard ? dayOfMonth(creditData.get("balanceCloseDate")) : null,
                 creditCard ? dayOfMonth(creditData.get("balanceDueDate")) : null,
-                item.getId());
+                item.getId(),
+                decimalOrNull(account.get("balance")),
+                // A hora é a da leitura: o provedor não carimba o saldo, e sem
+                // hora o valor não serve de prova contra nada
+                OffsetDateTime.now());
     }
 
     private String accountLabel(Map<String, Object> account) {
@@ -331,6 +342,22 @@ public class PluggySyncService {
         } catch (Exception e) {
             // data de terceiro em formato inesperado não pode derrubar a sync
             // inteira: sem o metadado, a fatura cai no ciclo do calendário
+            return null;
+        }
+    }
+
+    /**
+     * Número do provedor, ou nulo. Campo de terceiro chega como Double, Integer,
+     * String ou ausente, e um valor ilegível não pode derrubar a sincronização
+     * inteira — nulo é o estado previsto de "não informou".
+     */
+    private static BigDecimal decimalOrNull(Object value) {
+        String raw = text(value);
+        if (raw == null) return null;
+        try {
+            return new BigDecimal(raw);
+        } catch (NumberFormatException e) {
+            log.warn("Saldo informado ilegível ('{}') — conta segue sem segunda fonte", raw);
             return null;
         }
     }
