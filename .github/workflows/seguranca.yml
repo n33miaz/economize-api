@@ -28,13 +28,18 @@ jobs:
     name: Segredos no histórico
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # Histórico inteiro: segredo que vazou há vinte commits continua
           # vazado, mesmo que o arquivo já tenha sido removido depois
           fetch-depth: 0
       - name: gitleaks
-        uses: gitleaks/gitleaks-action@v2
+        # Preso ao COMMIT, e nao a tag: `gitleaks-action` e de terceiro, e uma
+        # tag e movel -- quem controla o repositorio dela pode apontar `v3`
+        # para outro codigo, que roda na nossa esteira com os nossos segredos.
+        # Este SHA e o v3.0.0. Subir de versao passa a ser trocar o hash, de
+        # proposito, num PR que se le.
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -45,8 +50,8 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/dependency-review-action@v4
+      - uses: actions/checkout@v7
+      - uses: actions/dependency-review-action@v5
         with:
           # Alta e crítica barram o PR; média e baixa entram como comentário
           fail-on-severity: high
@@ -59,14 +64,14 @@ jobs:
       contents: read
       security-events: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           java-version: "17"
           distribution: temurin
           cache: maven
-      - uses: github/codeql-action/init@v3
+      - uses: github/codeql-action/init@v4
         with:
           languages: java-kotlin
           # O pacote de segurança estendido acha coisa que o padrão não acha
@@ -81,7 +86,7 @@ jobs:
           DB_PASSWORD: sa
           JWT_SECRET: ci_secret_ci_secret_ci_secret_ci_secret_
         run: ./mvnw -B compile -DskipTests
-      - uses: github/codeql-action/analyze@v3
+      - uses: github/codeql-action/analyze@v4
         with:
           category: "/language:java-kotlin"
 
@@ -97,11 +102,11 @@ jobs:
       contents: read
       security-events: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: github/codeql-action/init@v3
+      - uses: actions/checkout@v7
+      - uses: github/codeql-action/init@v4
         with:
           languages: actions
           queries: security-extended
-      - uses: github/codeql-action/analyze@v3
+      - uses: github/codeql-action/analyze@v4
         with:
           category: "/language:actions"
