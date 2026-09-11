@@ -61,6 +61,22 @@ public class User implements UserDetails {
     @Column(name = "plan_until")
     private OffsetDateTime planUntil;
 
+    /**
+     * Quando a pessoa pediu para sair do plano pago (V34). Nulo = nao pediu.
+     *
+     * <p>Cancelado NAO e um estado ao lado de FREE e PLUS: e PLUS com data de
+     * fim e sem renovacao. Por isso uma coluna, e nao um valor novo no enum —
+     * a primeira checagem de {@link #isPlus()} que esquecesse do terceiro
+     * valor tiraria o acesso de quem ainda pagou pelo mes.
+     *
+     * <p>Ela existe para o app responder "entao ta cancelado mesmo?". Sem ela,
+     * a tela diria "Plus ativo" ate a data virar — o que e verdade, e e
+     * exatamente o que faz alguem cancelar duas vezes e desconfiar da cobranca
+     * seguinte.
+     */
+    @Column(name = "plan_cancelled_at")
+    private OffsetDateTime planCancelledAt;
+
     @PrePersist
     protected void onCreate() {
         this.createdAt = OffsetDateTime.now();

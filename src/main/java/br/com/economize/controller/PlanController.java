@@ -47,4 +47,18 @@ public class PlanController {
             return ResponseEntity.noContent().<Void>build();
         }).subscribeOn(Schedulers.boundedElastic());
     }
+
+    @Operation(summary = "Cancelar a renovação do plano pago",
+            description = "EC-208: um toque, e a resposta diz a DATA em que a cobrança para. O "
+                    + "acesso não é cortado na hora — quem pagou até o dia 20 usa até o dia 20; "
+                    + "cancelar encerra a renovação, não o que já foi pago. Idempotente: cancelar "
+                    + "de novo devolve a mesma resposta, porque quem toca duas vezes está inseguro "
+                    + "e um erro na segunda confirma exatamente o medo que motivou o segundo "
+                    + "toque. Conta no plano gratuito responde 400 — não há assinatura para "
+                    + "cancelar.")
+    @PostMapping("/cancel")
+    public Mono<PlanService.CancelOutcome> cancel(@AuthenticationPrincipal String email) {
+        return Mono.fromCallable(() -> planService.cancel(email))
+                .subscribeOn(Schedulers.boundedElastic());
+    }
 }

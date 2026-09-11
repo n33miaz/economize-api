@@ -11,7 +11,9 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
+import java.time.OffsetDateTime;
 import java.util.List;
 
 /**
@@ -41,7 +43,9 @@ public class PlanService {
                 current,
                 List.of(option(Plan.FREE, properties.getFree()), option(Plan.PLUS, properties.getPlus())),
                 properties.isCheckoutAvailable(),
-                interested);
+                interested,
+                user.getPlanUntil(),
+                user.getPlanCancelledAt());
     }
 
     /**
@@ -64,6 +68,65 @@ public class PlanService {
             log.debug("Interesse no plano {} já registrado por requisição concorrente (user={})",
                     plan, user.getId());
         }
+    }
+
+    /**
+     * Cancela a renovação do plano pago — EC-208.
+     *
+     * <p><b>O acesso NÃO é cortado na hora.</b> Quem pagou até o dia 20 usa
+     * até o dia 20: cancelar encerra a renovação, não o que já foi pago.
+     * Cortar na hora seria ficar com o dinheiro e tirar o serviço.
+     *
+     * <p><b>Idempotente.</b> Cancelar de novo devolve a mesma resposta em vez
+     * de erro — quem toca duas vezes está inseguro, e um erro na segunda
+     * confirma exatamente o medo que motivou o segundo toque.
+     *
+     * <p><b>Sem prazo conhecido, a frase é outra.</b> Um PLUS concedido à mão
+     * não tem cobrança para parar. Dizer "cancelado, a cobrança para em X"
+     * seria inventar uma data e uma cobrança que não existem.
+     */
+    @Transactional
+    public CancelOutcome cancel(String email) {
+        User user = requireUser(email);
+
+        if (!user.isPlus()) {
+            throw new IllegalArgumentException(
+                    "Sua conta já está no plano gratuito — não há assinatura para cancelar");
+        }
+
+        if (user.getPlanCancelledAt() == null) {
+            user.setPlanCancelledAt(OffsetDateTime.now());
+            userRepository.save(user);
+            log.info("Plano cancelado pelo usuário, acesso até {}, user={}",
+                    user.getPlanUntil(), user.getId());
+        }
+
+        return new CancelOutcome(user.getPlanCancelledAt(), user.getPlanUntil(),
+                mensagemDoCancelamento(user));
+    }
+
+    /**
+     * A frase que a tela mostra. Ela existe no servidor porque depende de
+     * regras de plano que o app não deve reimplementar — e porque a diferença
+     * entre "a cobrança para em 20/10" e "não há cobrança" é a diferença entre
+     * um usuário tranquilo e um e-mail de suporte.
+     */
+    private static String mensagemDoCancelamento(User user) {
+        if (user.getPlanUntil() == null) {
+            return "Cancelado. Este acesso não tinha cobrança associada, então não há nada "
+                    + "para parar — e ele continua valendo.";
+        }
+        return "Cancelado. Nenhuma cobrança nova será feita, e o Plus continua valendo até "
+                + user.getPlanUntil().toLocalDate() + ".";
+    }
+
+    /**
+     * @param activeUntil até quando o acesso pago continua valendo; nulo quando
+     *                    não havia prazo
+     * @param message     a frase pronta, para a tela não recompor a regra
+     */
+    public record CancelOutcome(OffsetDateTime cancelledAt, OffsetDateTime activeUntil,
+                                String message) {
     }
 
     private static PlansResponse.PlanOption option(Plan plan, PlanProperties.Option option) {

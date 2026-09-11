@@ -54,7 +54,10 @@ class PlanControllerTest {
                                 List.of("Sem anúncios", "Conexão bancária ilimitada", "Relatórios em PDF",
                                         "Prioridade no assistente"))),
                 false,
-                true));
+                true,
+                // Conta gratuita: sem prazo e sem cancelamento (EC-208)
+                null,
+                null));
 
         webTestClient.get()
                 .uri("/api/v1/plans")
