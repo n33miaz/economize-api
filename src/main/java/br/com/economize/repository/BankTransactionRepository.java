@@ -94,6 +94,7 @@ public interface BankTransactionRepository extends JpaRepository<BankTransaction
             from BankTransaction t
             where t.user.id = :userId and t.date >= :start and t.date < :end
               and t.internalTransfer = false
+              and t.refunded = false
               and t.ignored = false
             group by t.categoryId, t.type
             """)
@@ -133,6 +134,7 @@ public interface BankTransactionRepository extends JpaRepository<BankTransaction
             from BankTransaction t
             where t.user.id = :userId and t.date >= :start and t.date < :end
               and t.internalTransfer = false
+              and t.refunded = false
               and t.ignored = false
               and t.familyTransfer = false
               and (t.categoryId is null or t.categoryId not in :hiddenCategoryIds)
@@ -153,6 +155,7 @@ public interface BankTransactionRepository extends JpaRepository<BankTransaction
             select t from BankTransaction t
             where t.user.id = :userId and t.date >= :start and t.date < :end
               and t.internalTransfer = false
+              and t.refunded = false
               and t.ignored = false
               and t.familyTransfer = false
               and (t.categoryId is null or t.categoryId not in :hiddenCategoryIds)
@@ -214,6 +217,7 @@ public interface BankTransactionRepository extends JpaRepository<BankTransaction
             where t.user.id = :userId
               and t.amount = :amount
               and t.internalTransfer = false
+              and t.refunded = false
               and t.ignored = false
               and t.date >= :start and t.date < :end
             order by t.date asc
@@ -242,6 +246,64 @@ public interface BankTransactionRepository extends JpaRepository<BankTransaction
     @Query("update BankTransaction t set t.familyTransfer = true "
             + "where t.user.id = :userId and t.id in :ids")
     int markAsFamilyTransfer(@Param("userId") UUID userId, @Param("ids") Collection<UUID> ids);
+
+    /**
+     * Marca as DUAS pernas de um estorno (V29). O crédito guarda de quem é o
+     * estorno; a compra só recebe a marca — quem quiser o caminho de volta
+     * chega por {@code refundOfId}.
+     */
+    @Modifying
+    @Transactional
+    @Query("update BankTransaction t set t.refunded = true "
+            + "where t.user.id = :userId and t.id in :ids")
+    int markAsRefundPair(@Param("userId") UUID userId, @Param("ids") Collection<UUID> ids);
+
+    // ------------------------------------------------------------------
+    // EC-202: o DESFAZER de uma passada de vigia. Soltam exatamente os ids
+    // que aquela passada marcou — nunca uma varredura inteira. Uma linha que
+    // o usuário marcou à mão depois continua marcada, porque decisão de gente
+    // vence varredura em qualquer direção, e o conjunto de ids gravado na
+    // passada é o que garante isso.
+    // ------------------------------------------------------------------
+
+    @Modifying
+    @Transactional
+    @Query("update BankTransaction t set t.internalTransfer = false "
+            + "where t.user.id = :userId and t.id in :ids")
+    int clearInternalTransfer(@Param("userId") UUID userId, @Param("ids") Collection<UUID> ids);
+
+    @Modifying
+    @Transactional
+    @Query("update BankTransaction t set t.familyTransfer = false "
+            + "where t.user.id = :userId and t.id in :ids")
+    int clearFamilyTransfer(@Param("userId") UUID userId, @Param("ids") Collection<UUID> ids);
+
+    /**
+     * Solta a marca de descarte E o motivo. Sem limpar o motivo, a linha
+     * voltaria para as somas carregando "descartada porque duplicada", e a
+     * próxima varredura leria isso como decisão já tomada.
+     */
+    @Modifying
+    @Transactional
+    @Query("update BankTransaction t set t.ignored = false, t.ignoredReason = null "
+            + "where t.user.id = :userId and t.id in :ids")
+    int clearIgnored(@Param("userId") UUID userId, @Param("ids") Collection<UUID> ids);
+
+    /** Solta as duas pernas do par e o vínculo entre elas. */
+    @Modifying
+    @Transactional
+    @Query("update BankTransaction t set t.refunded = false, t.refundOfId = null "
+            + "where t.user.id = :userId and t.id in :ids")
+    int clearRefund(@Param("userId") UUID userId, @Param("ids") Collection<UUID> ids);
+
+    /** Liga o crédito à compra que ele estornou. Uma linha por par. */
+    @Modifying
+    @Transactional
+    @Query("update BankTransaction t set t.refundOfId = :compraId "
+            + "where t.user.id = :userId and t.id = :creditoId")
+    int linkRefund(@Param("userId") UUID userId,
+                   @Param("creditoId") UUID creditoId,
+                   @Param("compraId") UUID compraId);
 
     /**
      * Marca em bloco o lado descartado de pares duplicados (V26). O motivo viaja
