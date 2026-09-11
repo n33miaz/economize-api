@@ -1,6 +1,7 @@
 package br.com.economize.controller;
 
 import br.com.economize.dto.statement.BankTransactionResponse;
+import br.com.economize.dto.statement.ImportSourceResponse;
 import br.com.economize.service.BankStatementService;
 import br.com.economize.service.statement.parser.StatementFormat;
 import io.swagger.v3.oas.annotations.Operation;
@@ -72,6 +73,17 @@ public class BankStatementController {
             @RequestParam UUID accountId) {
         return Mono.fromCallable(() -> Map.<String, Object>of(
                         "updated", bankStatementService.assignUploadAccount(email, uploadId, accountId)))
+                .subscribeOn(Schedulers.boundedElastic());
+    }
+
+    @Operation(summary = "Listar os arquivos já importados",
+            description = "EC-195: cada linha do extrato devolve `uploadId`, e é esta listagem que dá "
+                    + "nome, formato, data de importação e contagem a esse id — o app carrega uma vez e "
+                    + "casa em memória, como faz com /accounts. Sem isto, a resposta à pergunta \"de onde "
+                    + "veio este número?\" era um UUID.")
+    @GetMapping("/sources")
+    public Mono<List<ImportSourceResponse>> listSources(@AuthenticationPrincipal String email) {
+        return Mono.fromCallable(() -> bankStatementService.listImportSources(email))
                 .subscribeOn(Schedulers.boundedElastic());
     }
 

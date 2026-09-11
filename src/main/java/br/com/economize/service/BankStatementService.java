@@ -7,6 +7,7 @@ import br.com.economize.model.StatementUpload;
 import br.com.economize.model.User;
 import br.com.economize.repository.BankTransactionRepository;
 import br.com.economize.repository.CategoryRepository;
+import br.com.economize.dto.statement.ImportSourceResponse;
 import br.com.economize.repository.StatementUploadRepository;
 import br.com.economize.repository.UserRepository;
 import br.com.economize.service.event.DomainEventPublisher;
@@ -645,6 +646,23 @@ public class BankStatementService {
             tx.setCategorizedBy(BankTransaction.CategorizedBy.AI);
             tx.setConfidence(CONF_AI);
         }
+    }
+
+    /**
+     * Os arquivos que este usuário já importou, do mais novo para o mais velho.
+     *
+     * <p>EC-195: a listagem de transações devolve só o {@code uploadId}; é esta
+     * lista que dá nome e data a ele. Carregada uma vez pelo app e casada em
+     * memória, como o mapa de contas — repetir o nome do arquivo em cada uma de
+     * 1.682 linhas seria pagar mil vezes pelo mesmo texto.
+     */
+    @Transactional(readOnly = true)
+    public List<ImportSourceResponse> listImportSources(String email) {
+        User user = userRepository.findByEmail(email)
+                .orElseThrow(() -> new ResourceNotFoundException("Usuário não encontrado"));
+        return statementUploadRepository.findAllByUserIdOrderByCreatedAtDesc(user.getId()).stream()
+                .map(ImportSourceResponse::from)
+                .toList();
     }
 
     public List<BankTransaction> listTransactions(String email) {
