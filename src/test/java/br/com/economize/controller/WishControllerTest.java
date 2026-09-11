@@ -6,6 +6,7 @@ import br.com.economize.dto.wish.WishResponses;
 import br.com.economize.security.JwtAuthenticationFilter;
 import br.com.economize.security.JwtUtil;
 import br.com.economize.security.SecurityConfig;
+import br.com.economize.service.wish.WishContributionService;
 import br.com.economize.service.wish.WishService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -49,6 +50,9 @@ class WishControllerTest {
 
     @MockitoBean
     private WishService wishService;
+
+    @MockitoBean
+    private WishContributionService contributionService;
 
     private String bearer() {
         return "Bearer " + jwtUtil.generateToken(EMAIL);
