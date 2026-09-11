@@ -36,9 +36,14 @@ public final class LogSafe {
      */
     public static String value(String bruto) {
         if (bruto == null) return null;
-        // Tudo que não é imprimível vira espaço: quebra de linha, tab, retorno
-        // de carro e os controles ASCII que um terminal interpreta
-        String limpo = bruto.replaceAll("[\\p{Cntrl}]", " ");
+        // Primeiro a quebra de linha, em duas passadas de propósito: `\R` é
+        // qualquer quebra (LF, CRLF, os separadores Unicode) e é a forma que a
+        // análise estática reconhece como barreira — uma classe de caracteres
+        // maior, mesmo cobrindo os mesmos bytes, passa despercebida e o achado
+        // continua aberto. Depois, o resto do controle ASCII (tab, backspace,
+        // o escape que um terminal interpreta) vira espaço também.
+        String umaLinha = bruto.replaceAll("\\R", " ");
+        String limpo = umaLinha.replaceAll("\\p{Cntrl}", " ");
         if (limpo.length() > TETO) {
             return limpo.substring(0, TETO - 1) + "…";
         }
