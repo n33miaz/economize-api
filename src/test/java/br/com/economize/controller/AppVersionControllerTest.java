@@ -49,10 +49,11 @@ class AppVersionControllerTest {
                 .expectStatus().isOk()
                 .expectHeader().valueEquals(HttpHeaders.CACHE_CONTROL, "public, max-age=300")
                 .expectBody()
-                // Os dois numeros sao independentes: a publicada anda a cada
-                // release, a minima so quando o contrato quebra
-                .jsonPath("$.minVersion").isEqualTo("2.2.0")
-                .jsonPath("$.latestVersion").isEqualTo("2.3.1")
+                // Independentes, e a minima fica UMA versao atras de
+                // proposito: igualadas, quem esta atras e bloqueado em vez de
+                // avisado, e a folha de aviso nunca teria janela para aparecer
+                .jsonPath("$.minVersion").isEqualTo("2.3.1")
+                .jsonPath("$.latestVersion").isEqualTo("2.3.2")
                 .jsonPath("$.downloadUrl").isEqualTo("https://economize-web.onrender.com/baixar")
                 .jsonPath("$.storeUrl").isEmpty()
                 .jsonPath("$.message").isEqualTo(AppVersionFilter.DEFAULT_MESSAGE)
@@ -85,16 +86,24 @@ class AppVersionControllerTest {
                 .expectBody()
                 .jsonPath("$.type").isEqualTo(AppVersionFilter.PROBLEM_TYPE)
                 .jsonPath("$.title").isEqualTo("Atualização necessária")
-                .jsonPath("$.minVersion").isEqualTo("2.2.0")
+                .jsonPath("$.minVersion").isEqualTo("2.3.1")
                 .jsonPath("$.downloadUrl").isEqualTo("https://economize-web.onrender.com/baixar");
     }
 
     @Test
-    @DisplayName("App na versão mínima sem token segue para o Security e recebe o 401 de sempre")
+    @DisplayName("App acima da mínima sem token segue para o Security e recebe o 401 de sempre")
     void appNovoSemTokenRecebe401() {
+        // O que este teste garante: a porta de versão NÃO engole a
+        // autenticação. Quem passa por ela sem token recebe 401, não 426.
+        //
+        // A versão é absurdamente alta de PROPÓSITO. Antes era "2.2.0", e o
+        // teste reprovou no dia em que a mínima virou 2.3.1 -- número fixo de
+        // versão num teste de política envelhece exatamente como data fixa
+        // envelhece. Com 99.0.0 ele continua dizendo "acima da mínima,
+        // qualquer que ela seja".
         webTestClient.get()
                 .uri("/api/v1/users/me")
-                .header(AppVersionFilter.VERSION_HEADER, "2.2.0")
+                .header(AppVersionFilter.VERSION_HEADER, "99.0.0")
                 .header(AppVersionFilter.PLATFORM_HEADER, "ios")
                 .exchange()
                 .expectStatus().isUnauthorized();

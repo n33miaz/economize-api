@@ -97,7 +97,7 @@ public class AppVersionFilter implements WebFilter {
 
     public AppVersionFilter(CorsConfigurationSource corsConfigurationSource,
                             ObjectMapper objectMapper,
-                            @Value("${economize.app.min-version:2.2.0}") String minVersion,
+                            @Value("${economize.app.min-version:2.3.1}") String minVersion,
                             @Value("${economize.app.download-url:https://economize-web.onrender.com/baixar}")
                             String downloadUrl,
                             @Value("${economize.app.update-message:" + DEFAULT_MESSAGE + "}") String updateMessage,
