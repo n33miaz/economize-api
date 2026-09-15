@@ -260,11 +260,24 @@ class MarketSnapshotStoreTest {
         verify(repository, never()).save(any());
     }
 
+    /**
+     * O item é datado do relógio DE SISTEMA, e não do {@link #NOW} fixo que os
+     * outros testes usam, porque o construtor sem argumento — que é justamente
+     * o que este teste exercita — não recebe relógio nenhum: ele lê a hora da
+     * máquina.
+     *
+     * <p>Com a data fixa o teste passava e ia apodrecendo: {@code MAX_AGE} é de
+     * sete dias, então em 13/09 ele estava verde e em 14/09 reprovou sozinho,
+     * sem ninguém tocar em uma linha de código. É a mesma bomba-relógio que
+     * quebrou o {@code AwesomeApiProviderTest} em 11/09 — a correção de lá não
+     * chegou aqui.
+     */
     @Test
     @DisplayName("Sem repositório (modo memória) tudo funciona igual, só sem banco")
     void memoryOnlyModeShouldWork() {
         MarketSnapshotStore memoryOnly = new MarketSnapshotStore();
-        memoryOnly.save("awesome:all", List.of(usd("5.40", NOW, "AwesomeAPI")));
+        Instant agora = Instant.now();
+        memoryOnly.save("awesome:all", List.of(usd("5.40", agora, "AwesomeAPI")));
 
         assertTrue(memoryOnly.find("awesome:all").isPresent());
         assertEquals(1, memoryOnly.findAll().size());
