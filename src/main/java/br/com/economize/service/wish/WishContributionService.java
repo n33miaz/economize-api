@@ -42,6 +42,14 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class WishContributionService {
 
+    /**
+     * O maior saldo que a coluna comporta — {@code saved_amount} é
+     * {@code NUMERIC(19,4)}, ou seja, quinze dígitos inteiros e quatro
+     * decimais. Não é regra de negócio: é o limite físico, escrito aqui para
+     * virar um 400 explicado em vez de um 500 sem explicação.
+     */
+    static final BigDecimal SALDO_MAXIMO = new BigDecimal("999999999999999.9999");
+
     private final WishContributionRepository contributionRepository;
     private final WishRepository wishRepository;
     private final UserRepository userRepository;
@@ -87,6 +95,15 @@ public class WishContributionService {
         if (novoSaldo.signum() < 0) {
             throw new IllegalArgumentException(
                     "Não dá para devolver mais do que está guardado nesta meta");
+        }
+        // O teto não é capricho: `saved_amount` é NUMERIC(19,4), e a SOMA pode
+        // estourar mesmo com cada aporte cabendo sozinho — dois de quinze
+        // dígitos dão dezesseis. Sem esta linha o Postgres recusava e a pessoa
+        // recebia "erro inesperado, tente novamente mais tarde", que é mentira:
+        // tentar mais tarde dá exatamente igual
+        if (novoSaldo.compareTo(SALDO_MAXIMO) > 0) {
+            throw new IllegalArgumentException(
+                    "Este aporte passa do maior valor que uma meta comporta");
         }
 
         WishContribution aporte = contributionRepository.save(WishContribution.builder()
