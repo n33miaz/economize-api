@@ -79,8 +79,8 @@ public class AppVersionService {
     private final String schemaVersion;
 
     public AppVersionService(ObjectProvider<BuildProperties> buildProperties,
-                             @Value("${economize.app.latest-version:2.3.1}") String latestVersion,
-                             @Value("${economize.app.min-version:2.2.0}") String minVersion,
+                             @Value("${economize.app.latest-version:2.3.2}") String latestVersion,
+                             @Value("${economize.app.min-version:2.3.1}") String minVersion,
                              @Value("${economize.app.download-url:https://economize-web.onrender.com/baixar}")
                              String downloadUrl,
                              @Value("${economize.app.apk-url:}") String apkUrl,
