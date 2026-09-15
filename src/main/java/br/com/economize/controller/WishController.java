@@ -97,7 +97,7 @@ public class WishController {
     public Mono<WishContributionService.Result> contribute(
             @AuthenticationPrincipal String email,
             @PathVariable UUID id,
-            @RequestBody WishRequests.ContributeToWish request) {
+            @Valid @RequestBody WishRequests.ContributeToWish request) {
         return Mono.fromCallable(() -> contributionService.contribute(
                         email, id, request.amount(), request.cycleMonth(), request.note()))
                 .subscribeOn(Schedulers.boundedElastic());

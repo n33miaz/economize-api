@@ -181,6 +181,89 @@ class WishControllerTest {
         verify(wishService).delete(EMAIL, id);
     }
 
+    /**
+     * O aporte era a única rota deste controlador sem {@code @Valid} — e o
+     * record não tinha uma restrição sequer, enquanto os dois vizinhos tinham.
+     * O valor atravessava até o Postgres e estourava a coluna: o usuário recebia
+     * "erro inesperado, tente novamente mais tarde", que é mentira, porque
+     * tentar mais tarde dá exatamente igual.
+     */
+    @Test
+    @DisplayName("Aporte acima da faixa da coluna responde 400, e o serviço nem é chamado")
+    void aporteGrandeDemaisNaoChegaNoBanco() {
+        UUID id = UUID.randomUUID();
+
+        // 16 dígitos: um a mais do que a coluna NUMERIC(19,4) comporta. O valor
+        // de 15 dígitos PASSA por aqui de propósito — ele cabe sozinho, e quem
+        // segura o estouro da SOMA com o saldo é o service
+        webTestClient.post().uri("/api/v1/wishes/" + id + "/contributions")
+                .header(HttpHeaders.AUTHORIZATION, bearer())
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of("amount", new BigDecimal("9999999999999999")))
+                .exchange()
+                .expectStatus().isBadRequest();
+
+        verify(contributionService, never()).contribute(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("Observação acima de 200 responde 400 — é o tamanho da coluna")
+    void observacaoCompridaDemaisNaoChegaNoBanco() {
+        UUID id = UUID.randomUUID();
+
+        webTestClient.post().uri("/api/v1/wishes/" + id + "/contributions")
+                .header(HttpHeaders.AUTHORIZATION, bearer())
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of("amount", new BigDecimal("10"), "note", "a".repeat(201)))
+                .exchange()
+                .expectStatus().isBadRequest();
+
+        verify(contributionService, never()).contribute(any(), any(), any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("Aporte sem valor responde 400")
+    void aporteSemValorNaoPassa() {
+        UUID id = UUID.randomUUID();
+
+        webTestClient.post().uri("/api/v1/wishes/" + id + "/contributions")
+                .header(HttpHeaders.AUTHORIZATION, bearer())
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of("note", "sem valor nenhum"))
+                .exchange()
+                .expectStatus().isBadRequest();
+
+        verify(contributionService, never()).contribute(any(), any(), any(), any(), any());
+    }
+
+    /**
+     * A guarda acima tinha como cobrar caro: aporte NEGATIVO é entrada legítima
+     * — é o desfazer honesto, sai do saldo e fica no histórico. Um teto escrito
+     * com {@code @DecimalMin} teria fechado a porta do valor absurdo e a do
+     * desfazer junto, e ninguém perceberia até alguém tentar corrigir um dedo
+     * errado.
+     */
+    @Test
+    @DisplayName("Aporte negativo continua passando — é o desfazer, não um erro")
+    void aporteNegativoContinuaPassando() {
+        UUID id = UUID.randomUUID();
+        WishContributionService.Item item = new WishContributionService.Item(
+                UUID.randomUUID(), new BigDecimal("-100.00"),
+                br.com.economize.model.WishContribution.Origin.DECLARED, null, null,
+                java.time.OffsetDateTime.now());
+        when(contributionService.contribute(eq(EMAIL), eq(id), any(), any(), any()))
+                .thenReturn(new WishContributionService.Result(item, new BigDecimal("150.50")));
+
+        webTestClient.post().uri("/api/v1/wishes/" + id + "/contributions")
+                .header(HttpHeaders.AUTHORIZATION, bearer())
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of("amount", new BigDecimal("-100.00")))
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.savedAmount").isEqualTo(150.50);
+    }
+
     @Test
     @DisplayName("Sem token, nenhuma rota de desejo responde")
     void semTokenNaoResponde() {

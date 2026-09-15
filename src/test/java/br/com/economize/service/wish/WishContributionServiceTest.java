@@ -150,6 +150,37 @@ class WishContributionServiceTest {
         assertThat(wish.getSavedAmount()).isEqualByComparingTo("1200.00");
     }
 
+    /**
+     * O valor passa pela validação do corpo — quinze dígitos cabem na coluna.
+     * Quem estoura é a SOMA com o que já estava guardado, e o Postgres recusava
+     * com "numeric field overflow": 500, e a pessoa lendo "tente novamente mais
+     * tarde" sobre uma tentativa que nunca vai dar certo.
+     */
+    @Test
+    @DisplayName("Soma que estoura a coluna é recusada aqui, não pelo banco")
+    void naoDeixaOSaldoEstourarAColuna() {
+        comUsuarioEMeta();
+
+        assertThatThrownBy(() -> service.contribute(
+                EMAIL, wish.getId(), new BigDecimal("999999999999999"), null, null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("maior valor que uma meta comporta");
+
+        assertThat(wish.getSavedAmount()).isEqualByComparingTo("1200.00");
+        verify(contributionRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("O teto não atrapalha um aporte grande que ainda cabe")
+    void aporteGrandeQueCabeContinuaPassando() {
+        comUsuarioEMeta();
+        gravaOQueChega();
+
+        service.contribute(EMAIL, wish.getId(), new BigDecimal("1000000.00"), null, null);
+
+        assertThat(wish.getSavedAmount()).isEqualByComparingTo("1001200.00");
+    }
+
     @Test
     @DisplayName("Zero não é aporte, e a recusa aponta o caminho da correção")
     void zeroNaoEAporte() {
