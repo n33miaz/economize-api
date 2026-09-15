@@ -282,6 +282,33 @@ class AnalyticsControllerTest {
                 List.of(), 0, List.of(), LocalDate.of(2026, 7, 28));
     }
 
+    /**
+     * {@code AnalysisWindow.resolve} devolve NULO quando nenhum recorte veio —
+     * é a forma dela dizer "período não informado". Sete rotas a chamam; seis
+     * tratavam o nulo e esta passava adiante, e o serviço estourava num
+     * {@code NullPointerException} que virava 500 "erro inesperado". O padrão
+     * aqui é o mesmo que /monthly e /debt já davam para a mesma pergunta: o mês
+     * corrente.
+     */
+    @Test
+    @DisplayName("GET /daily sem recorte nenhum cai no mês corrente, não em 500")
+    void dailyWithoutAnyWindowFallsBackToTheCurrentMonth() {
+        when(analyticsService.dailyTotals(eq(EMAIL), any())).thenReturn(List.of());
+
+        webTestClient.get().uri("/api/v1/analytics/daily")
+                .header(HttpHeaders.AUTHORIZATION, bearerToken())
+                .exchange()
+                .expectStatus().isOk();
+
+        ArgumentCaptor<AnalysisWindow> captor = ArgumentCaptor.forClass(AnalysisWindow.class);
+        verify(analyticsService).dailyTotals(eq(EMAIL), captor.capture());
+        assertThat(captor.getValue())
+                .as("o serviço nunca pode receber janela nula")
+                .isNotNull();
+        assertThat(captor.getValue().month())
+                .isEqualTo(YearMonth.now(ZoneOffset.UTC));
+    }
+
     private MonthlyAnalyticsResponse windowResponse() {
         return new MonthlyAnalyticsResponse(
                 null, LocalDate.of(2026, 7, 12), LocalDate.of(2026, 8, 12),
