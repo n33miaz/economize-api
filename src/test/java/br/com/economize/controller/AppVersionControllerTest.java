@@ -49,8 +49,10 @@ class AppVersionControllerTest {
                 .expectStatus().isOk()
                 .expectHeader().valueEquals(HttpHeaders.CACHE_CONTROL, "public, max-age=300")
                 .expectBody()
+                // Os dois numeros sao independentes: a publicada anda a cada
+                // release, a minima so quando o contrato quebra
                 .jsonPath("$.minVersion").isEqualTo("2.2.0")
-                .jsonPath("$.latestVersion").isEqualTo("2.2.0")
+                .jsonPath("$.latestVersion").isEqualTo("2.3.1")
                 .jsonPath("$.downloadUrl").isEqualTo("https://economize-web.onrender.com/baixar")
                 .jsonPath("$.storeUrl").isEmpty()
                 .jsonPath("$.message").isEqualTo(AppVersionFilter.DEFAULT_MESSAGE)
