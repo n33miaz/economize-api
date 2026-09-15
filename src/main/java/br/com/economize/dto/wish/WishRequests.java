@@ -94,12 +94,29 @@ public final class WishRequests {
      * negativo é devolução legítima, zero não é aporte nenhum. O service
      * explica os dois; uma anotação diria "valor inválido" para os dois.
      */
+    /**
+     * O aporte não tem {@code @DecimalMin}: negativo é entrada legítima aqui —
+     * é o desfazer honesto, sai do saldo e fica no histórico. Quem barra o zero
+     * e quem impede o saldo de ficar negativo é o service, com a frase que
+     * ensina o negativo.
+     *
+     * <p>O que ele precisa, e não tinha, é <b>teto</b>. Sem {@code @Digits} o
+     * valor atravessava até o Postgres e estourava a coluna
+     * ({@code NUMERIC(19,4)}) — o usuário recebia "erro inesperado, tente mais
+     * tarde", que é mentira: tentar mais tarde dá igual. Os irmãos deste record
+     * já respondiam 400 dizendo a faixa; este agora responde igual.
+     */
     public record ContributeToWish(
+            @NotNull(message = "Valor do aporte é obrigatório")
+            @Digits(integer = 15, fraction = 4, message = "Valor fora da faixa aceita")
             BigDecimal amount,
 
             /* `YYYY-MM`: presente marca o aporte como MEDIDO e trava o ciclo */
+            @Size(max = 7, message = "Ciclo deve ser YYYY-MM")
             String cycleMonth,
 
+            /* A coluna é VARCHAR(200); passar disso virava 500 no banco */
+            @Size(max = 200, message = "Observação deve ter no máximo 200 caracteres")
             String note
     ) {
     }

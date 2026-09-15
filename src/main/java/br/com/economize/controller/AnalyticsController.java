@@ -172,7 +172,15 @@ public class AnalyticsController {
             @RequestParam(required = false) String month,
             @RequestParam(required = false) String start,
             @RequestParam(required = false) String end) {
-        AnalysisWindow window = AnalysisWindow.resolve(month, start, end);
+        AnalysisWindow requested = AnalysisWindow.resolve(month, start, end);
+        // `resolve` devolve nulo quando NENHUM recorte veio — é assim que ela
+        // diz "período não informado". Sem este padrão o nulo chegava ao
+        // service e estourava; a tela pedindo o calendário sem parâmetro
+        // recebia "erro inesperado" em vez do mês corrente, que é a mesma
+        // resposta que /monthly e /debt já davam para a mesma pergunta
+        AnalysisWindow window = requested != null
+                ? requested
+                : AnalysisWindow.ofMonth(YearMonth.now(ZoneOffset.UTC));
         return Mono.fromCallable(() -> analyticsService.dailyTotals(email, window))
                 .subscribeOn(Schedulers.boundedElastic());
     }
