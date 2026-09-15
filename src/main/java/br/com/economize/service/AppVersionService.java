@@ -2,6 +2,7 @@ package br.com.economize.service;
 
 import br.com.economize.dto.app.AppVersionResponse;
 import br.com.economize.security.AppVersionFilter;
+import br.com.economize.security.SemanticVersion;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
@@ -24,17 +25,27 @@ import java.util.stream.Stream;
  * Versões anunciadas ao app: a mínima aceita, a mais recente, e a identidade
  * da API e do banco que estão no ar.
  *
- * <p><b>A mínima é a versão publicada, sempre.</b> Não existe um segundo
- * número configurável: quem está atrás da versão atual não usa o app, e é
- * levado à página de download. Dois números que podem divergir são dois
- * números que UM DIA divergem — e o modo de falha é silencioso (aparelho
- * velho continua chamando a API e recebendo dado que ele não sabe ler).
+ * <p><b>São dois números, e antes eram um.</b> A versão publicada e a mínima
+ * aceita eram a MESMA propriedade, e o argumento para isso estava escrito
+ * aqui: dois números que podem divergir são dois números que um dia divergem,
+ * e o modo de falha é silencioso — aparelho velho continua chamando a API e
+ * recebendo dado que não sabe ler.
  *
- * <p><b>Consequência operacional, e ela importa:</b> subir
- * {@code APP_LATEST_VERSION} bloqueia todo mundo que ainda não atualizou. A
- * ordem é publicar o APK novo em {@code /baixar} PRIMEIRO e só então subir o
- * número aqui — nunca o contrário, ou o app manda o usuário buscar uma versão
- * que ainda não existe.
+ * <p>O argumento estava certo sobre o risco e errado sobre a cura. Juntar os
+ * dois tornava <b>impossível publicar sem bloquear</b>: cada release trancava
+ * todo mundo que ainda não tinha atualizado, e o dono não conseguia nem
+ * anunciar uma versão nova sem barrar a anterior. Publicar e barrar são
+ * eventos diferentes — a mínima sobe quando o <b>contrato</b> quebra (uma
+ * migration que muda o que a API devolve), não quando sai versão.
+ *
+ * <p><b>E a divergência que machuca fica proibida no boot.</b> Mínima MAIOR
+ * que a publicada é o único jeito de divergir que faz mal: manda a pessoa
+ * buscar o que não existe e a tranca fora do app. O construtor recusa esse
+ * estado. O contrário — mínima ATRÁS da publicada — é exatamente o que
+ * permite anunciar sem trancar, e é o estado normal.
+ *
+ * <p><b>Ordem do deploy:</b> publicar o APK PRIMEIRO, subir a mínima DEPOIS.
+ * Nunca o contrário.
  *
  * <p>A versão do schema não é uma constante escrita à mão — seria o primeiro
  * número a ficar para trás na próxima migration. Ela é lida dos nomes dos
@@ -55,8 +66,11 @@ public class AppVersionService {
     // V23__users_plan_and_app_version.sql -> 23
     private static final Pattern MIGRATION_NAME = Pattern.compile("^V(\\d+)__.*\\.sql$");
 
-    /** A publicada. É também a mínima — ver o javadoc da classe. */
+    /** A publicada: quem está atrás vê o aviso e segue usando o app. */
     private final String latestVersion;
+
+    /** A mínima aceita: abaixo dela o filtro responde 426. */
+    private final String minVersion;
     private final String downloadUrl;
     private final String apkUrl;
     private final String storeUrl;
@@ -65,7 +79,8 @@ public class AppVersionService {
     private final String schemaVersion;
 
     public AppVersionService(ObjectProvider<BuildProperties> buildProperties,
-                             @Value("${economize.app.latest-version:2.2.0}") String latestVersion,
+                             @Value("${economize.app.latest-version:2.3.1}") String latestVersion,
+                             @Value("${economize.app.min-version:2.2.0}") String minVersion,
                              @Value("${economize.app.download-url:https://economize-web.onrender.com/baixar}")
                              String downloadUrl,
                              @Value("${economize.app.apk-url:}") String apkUrl,
@@ -73,6 +88,22 @@ public class AppVersionService {
                              @Value("${economize.app.update-message:" + AppVersionFilter.DEFAULT_MESSAGE + "}")
                              String updateMessage) {
         this.latestVersion = latestVersion;
+        this.minVersion = minVersion;
+        // A única divergência que machuca: mínima na frente da publicada manda
+        // a pessoa buscar o que não existe. Recusar no boot é mais barato que
+        // descobrir pelo usuário trancado fora do app
+        SemanticVersion publicada = SemanticVersion.parse(latestVersion).orElseThrow(
+                () -> new IllegalStateException(
+                        "economize.app.latest-version não é MAJOR.MINOR.PATCH: " + latestVersion));
+        SemanticVersion minima = SemanticVersion.parse(minVersion).orElseThrow(
+                () -> new IllegalStateException(
+                        "economize.app.min-version não é MAJOR.MINOR.PATCH: " + minVersion));
+        if (publicada.isOlderThan(minima)) {
+            throw new IllegalStateException(
+                    "economize.app.min-version (" + minVersion + ") é maior que a publicada ("
+                            + latestVersion + "): isso tranca todo mundo e manda buscar uma "
+                            + "versão que não existe");
+        }
         this.downloadUrl = downloadUrl;
         // Vazio vira null, e não string vazia: é o estado "ainda não publiquei"
         // que a página /baixar sabe ler
@@ -86,13 +117,12 @@ public class AppVersionService {
         this.apiVersion = build == null || build.getVersion() == null ? DEV_VERSION : build.getVersion();
         this.schemaVersion = resolveSchemaVersion(
                 new PathMatchingResourcePatternResolver(AppVersionService.class.getClassLoader()));
-        log.info("Versões anunciadas: app mínima=recente={} api={} schema={}",
-                latestVersion, apiVersion, schemaVersion);
+        log.info("Versões anunciadas: app publicada={} mínima={} api={} schema={}",
+                latestVersion, minVersion, apiVersion, schemaVersion);
     }
 
     public AppVersionResponse describe() {
-        // minVersion == latestVersion: a regra da classe, expressa onde o app lê
-        return new AppVersionResponse(latestVersion, latestVersion, downloadUrl, apkUrl, storeUrl,
+        return new AppVersionResponse(minVersion, latestVersion, downloadUrl, apkUrl, storeUrl,
                 updateMessage, apiVersion, schemaVersion);
     }
 
