@@ -65,7 +65,9 @@ class AccountControllerTest {
                 id, "Ultravioleta ····1234", ConnectorAccount.AccountType.CREDIT_CARD,
                 "Nubank", 10, 17, true,
                 new java.math.BigDecimal("742.19"),
-                java.time.OffsetDateTime.parse("2026-09-10T09:00:00Z"))));
+                java.time.OffsetDateTime.parse("2026-09-10T09:00:00Z"),
+                new java.math.BigDecimal("5000.00"),
+                null)));
 
         webTestClient.get()
                 .uri("/api/v1/accounts")

@@ -164,6 +164,87 @@ public class ConnectorAccountService {
     }
 
     /**
+     * Guarda o saldo que um arquivo de extrato declarou (EC: "3.021,06 não
+     * existe", 15/09/2026).
+     *
+     * <p>É a mesma coluna que o conector preenche, e por um bom motivo: para
+     * as telas, "o saldo que a instituição informou" é uma coisa só — não
+     * importa se chegou por API ou dentro de um OFX que a pessoa baixou do
+     * aplicativo do banco. O que muda é a frescura, e ela viaja junto no
+     * {@code reportedBalanceAt}.
+     *
+     * <p><b>Só grava se for mais NOVO.</b> Importar hoje o extrato de março não
+     * pode fazer o app achar que o saldo de março é o de agora — e reimportar
+     * arquivos antigos é rotina em app de finanças. Sem data guardada, qualquer
+     * saldo vindo é mais novo que "não sei", então o primeiro entra.
+     *
+     * @return o saldo efetivamente gravado, ou nulo quando nada mudou
+     */
+    public BigDecimal recordStatementBalance(ConnectorAccount account, BigDecimal amount, OffsetDateTime asOf) {
+        if (amount == null || asOf == null) return null;
+        OffsetDateTime conhecido = account.getReportedBalanceAt();
+        if (conhecido != null && !asOf.isAfter(conhecido)) {
+            log.debug("Saldo do arquivo ({}) é mais velho que o guardado ({}), conta={}",
+                    asOf, conhecido, account.getId());
+            return null;
+        }
+        account.setReportedBalance(amount);
+        account.setReportedBalanceAt(asOf);
+        accountRepository.save(account);
+        log.info("Saldo informado por arquivo: conta={} valor={} lido em {}", account.getId(), amount, asOf);
+        return amount;
+    }
+
+    /**
+     * Guarda o limite do cartão informado pelo usuário (V36).
+     *
+     * <p>As três recusas aqui existem porque cada uma delas produziria um
+     * número errado na tela de crédito, e número errado de dinheiro é pior do
+     * que número nenhum:
+     *
+     * <ul>
+     *   <li><b>Conta corrente não tem limite de cartão.</b> Aceitar aqui faria
+     *       a soma de crédito disponível incluir uma conta de débito.</li>
+     *   <li><b>Não dá para compartilhar limite consigo mesmo</b> — o cartão
+     *       entraria e não entraria na soma ao mesmo tempo.</li>
+     *   <li><b>Nem com uma conta que já aponta para outra.</b> Corrente de
+     *       ponteiros tornaria a soma dependente da ordem de leitura; um
+     *       degrau só é o que o usuário consegue explicar em uma frase.</li>
+     * </ul>
+     */
+    public ConnectorAccount declareCreditLimit(String email, UUID accountId,
+                                               BigDecimal limit, UUID sharedWithId) {
+        User user = userRepository.findByEmail(email)
+                .orElseThrow(() -> new ResourceNotFoundException("Usuário não encontrado"));
+        ConnectorAccount account = requireOwned(accountId, user.getId());
+
+        if (account.getType() != ConnectorAccount.AccountType.CREDIT_CARD) {
+            throw new IllegalArgumentException("Limite de crédito só existe em cartão");
+        }
+        if (sharedWithId != null) {
+            if (sharedWithId.equals(accountId)) {
+                throw new IllegalArgumentException("Um cartão não divide limite com ele mesmo");
+            }
+            ConnectorAccount dono = requireOwned(sharedWithId, user.getId());
+            if (dono.getType() != ConnectorAccount.AccountType.CREDIT_CARD) {
+                throw new IllegalArgumentException("O limite compartilhado tem de vir de outro cartão");
+            }
+            if (dono.getCreditLimitSharedWith() != null) {
+                throw new IllegalArgumentException(
+                        "Esse cartão já usa o limite de um terceiro; aponte direto para o dono do limite");
+            }
+        }
+
+        // Quem divide a bolsa de outro não guarda valor próprio: dois números
+        // no mesmo cartão viram duas respostas para "qual é o meu limite"
+        account.setCreditLimit(sharedWithId != null ? null : limit);
+        account.setCreditLimitSharedWith(sharedWithId);
+        log.info("Limite de cartão declarado: conta={} limite={} divide com={}",
+                accountId, account.getCreditLimit(), sharedWithId);
+        return accountRepository.save(account);
+    }
+
+    /**
      * Origem criada à mão por quem importa extrato em arquivo.
      *
      * <p>Nasce sempre DESVINCULADA ({@code pluggyItemId} nulo), que é a

@@ -33,6 +33,23 @@ public class OfxParser implements StatementParserStrategy {
     private static final Pattern MEMO = Pattern.compile("<MEMO>([^<\\r\\n]+)");
     private static final Pattern NAME = Pattern.compile("<NAME>([^<\\r\\n]+)");
     private static final Pattern SPACES = Pattern.compile("\\s+");
+    /**
+     * O bloco de saldo. {@code LEDGERBAL} é o saldo do LIVRO — o que o banco
+     * diz que existe na conta no momento da leitura. O {@code AVAILBAL}
+     * (disponível), que costuma vir logo depois, fica de fora de propósito:
+     * ele soma limite de cheque especial, e limite não é dinheiro do usuário.
+     *
+     * <p>Em fatura de cartão (`CCSTMTRS`) o mesmo bloco traz o valor DEVIDO, e
+     * é assim que o resto do sistema já trata `reportedBalance` de cartão.
+     *
+     * <p>O fecho é tolerante porque OFX 1.x é SGML: muitos bancos não fecham
+     * as tags. Sem os limites alternativos, o bloco engoliria o arquivo
+     * inteiro e o `BALAMT` capturado poderia ser o do `AVAILBAL`.
+     */
+    private static final Pattern LEDGERBAL = Pattern.compile(
+            "<LEDGERBAL>(.*?)(?:</LEDGERBAL>|<AVAILBAL>|</STMTRS>|</CCSTMTRS>)", Pattern.DOTALL);
+    private static final Pattern BALAMT = Pattern.compile("<BALAMT>([^<\\r\\n]+)");
+    private static final Pattern DTASOF = Pattern.compile("<DTASOF>([^<\\r\\n\\[]+)");
 
     @Override
     public StatementFormat format() {
@@ -59,6 +76,40 @@ public class OfxParser implements StatementParserStrategy {
                     .build());
         }
         return result;
+    }
+
+    /**
+     * O saldo declarado no arquivo (EC: "3.021,06 não existe", 15/09/2026).
+     *
+     * <p>Sempre esteve aqui e era descartado: o parser lia as transações e
+     * ignorava o bloco de saldo, então o app só sabia somar movimento. A
+     * explicação longa — e o estrago que essa soma fazia na Home e na
+     * Perspectiva de saldo — está em {@link StatementBalance}.
+     *
+     * <p>Sem bloco, sem valor ou com valor ilegível, devolve nulo: nulo aqui
+     * significa "este arquivo não informa saldo", e quem chama tem de saber
+     * lidar com isso sem inventar um número.
+     */
+    @Override
+    public StatementBalance parseBalance(InputStream input) {
+        String content = readAll(input);
+        Matcher bloco = LEDGERBAL.matcher(content);
+        if (!bloco.find()) return null;
+        String valor = extract(BALAMT, bloco.group(1));
+        if (valor == null) return null;
+        try {
+            BigDecimal amount = new BigDecimal(valor.trim());
+            String quando = extract(DTASOF, bloco.group(1));
+            // Sem DTASOF o saldo existe mas não se sabe de quando. Datar como
+            // "agora" mentiria uma leitura fresca; datar como a transação mais
+            // recente seria chute. O arquivo acabou de ser entregue pelo
+            // usuário, então o instante da importação é a informação honesta
+            // disponível — e é o que o comparador de "mais novo" precisa.
+            return new StatementBalance(amount, quando == null ? OffsetDateTime.now() : parseDate(quando));
+        } catch (NumberFormatException e) {
+            log.warn("Saldo OFX ilegível '{}', seguindo sem saldo", valor);
+            return null;
+        }
     }
 
     /**

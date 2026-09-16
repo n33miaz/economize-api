@@ -127,6 +127,4 @@ Com a aplicação rodando:
 
 ## Licença
 
-Projeto desenvolvido para fins acadêmicos e de portfólio.
-
 **Desenvolvedor:** [Neemias Cormino Manso](https://www.linkedin.com/in/neemiasmanso/)

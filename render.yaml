@@ -124,8 +124,34 @@ services:
       #                        thread desperdicado
       #   UseSerialGC ........ heap pequeno em 0,1 CPU: o G1 cobra mais em
       #                        estruturas e threads de GC do que devolve aqui
+      #
+      # SEGUNDA RODADA — 15/09/2026. O Render avisou de novo: "economize-api
+      # exceeded its memory limit", com reinicio automatico e a instancia fora
+      # do ar durante ele. Ou seja: os tetos acima somavam pouco menos que 512
+      # MB e nao sobrava folga para o que a JVM commita sem perguntar.
+      #
+      # O que faltava no orcamento anterior era o CODE CACHE. Ele nao aparece
+      # em nenhum -Xmx e cresce com o JIT: o padrao RESERVA 240 MB e vai
+      # commitando conforme compila. Numa API que ja rodou um tempo, sao
+      # dezenas de MB que ninguem estava contando.
+      #
+      # Conta nova, com folga de proposito:
+      #   heap 224 + metaspace 128 + direto 32 + code cache 48 + ~40 threads a
+      #   512k (20) + estruturas da JVM (~25) = ~477 MB. Sobram ~35 MB.
+      #
+      #   ReservedCodeCacheSize  o teto que faltava
+      #   ExitOnOutOfMemoryError faltar memoria passa a MATAR o processo na
+      #                          hora, e o Render reergue limpo. Sem isso a JVM
+      #                          fica minutos em GC sem sair do lugar,
+      #                          respondendo lentissimo — pior que cair
+      #
+      # SUSPEITO A INVESTIGAR, e vale medir antes de cortar: o springdoc monta
+      # o modelo inteiro do OpenAPI (117 rotas, 158 schemas) NA PRIMEIRA vez
+      # que alguem abre /v3/api-docs ou /swagger-ui, e guarda em memoria dali
+      # em diante. Num container de 512 MB isso levanta o piso de forma
+      # permanente por uma pagina que so o desenvolvedor abre.
       - key: JAVA_OPTS
-        value: -Xmx256m -XX:MaxMetaspaceSize=140m -XX:MaxDirectMemorySize=48m -Xss512k -XX:+UseSerialGC
+        value: -Xmx224m -XX:MaxMetaspaceSize=128m -XX:MaxDirectMemorySize=32m -XX:ReservedCodeCacheSize=48m -Xss512k -XX:+UseSerialGC -XX:+ExitOnOutOfMemoryError
 
   # --------------------------------------------------------------------------
   # HOMOLOGAÇÃO — o ambiente onde a migration estreia
@@ -200,8 +226,34 @@ services:
         value: "false"
       # Mesmo teto de memória de produção: um ambiente que não reproduz o limite
       # não serve para descobrir que a memória estourou
+      #
+      # SEGUNDA RODADA — 15/09/2026. O Render avisou de novo: "economize-api
+      # exceeded its memory limit", com reinicio automatico e a instancia fora
+      # do ar durante ele. Ou seja: os tetos acima somavam pouco menos que 512
+      # MB e nao sobrava folga para o que a JVM commita sem perguntar.
+      #
+      # O que faltava no orcamento anterior era o CODE CACHE. Ele nao aparece
+      # em nenhum -Xmx e cresce com o JIT: o padrao RESERVA 240 MB e vai
+      # commitando conforme compila. Numa API que ja rodou um tempo, sao
+      # dezenas de MB que ninguem estava contando.
+      #
+      # Conta nova, com folga de proposito:
+      #   heap 224 + metaspace 128 + direto 32 + code cache 48 + ~40 threads a
+      #   512k (20) + estruturas da JVM (~25) = ~477 MB. Sobram ~35 MB.
+      #
+      #   ReservedCodeCacheSize  o teto que faltava
+      #   ExitOnOutOfMemoryError faltar memoria passa a MATAR o processo na
+      #                          hora, e o Render reergue limpo. Sem isso a JVM
+      #                          fica minutos em GC sem sair do lugar,
+      #                          respondendo lentissimo — pior que cair
+      #
+      # SUSPEITO A INVESTIGAR, e vale medir antes de cortar: o springdoc monta
+      # o modelo inteiro do OpenAPI (117 rotas, 158 schemas) NA PRIMEIRA vez
+      # que alguem abre /v3/api-docs ou /swagger-ui, e guarda em memoria dali
+      # em diante. Num container de 512 MB isso levanta o piso de forma
+      # permanente por uma pagina que so o desenvolvedor abre.
       - key: JAVA_OPTS
-        value: -Xmx256m -XX:MaxMetaspaceSize=140m -XX:MaxDirectMemorySize=48m -Xss512k -XX:+UseSerialGC
+        value: -Xmx224m -XX:MaxMetaspaceSize=128m -XX:MaxDirectMemorySize=32m -XX:ReservedCodeCacheSize=48m -Xss512k -XX:+UseSerialGC -XX:+ExitOnOutOfMemoryError
 
 # ----------------------------------------------------------------------------
 # O banco de homologação. Fica no Render, e não no Supabase, por dois motivos:

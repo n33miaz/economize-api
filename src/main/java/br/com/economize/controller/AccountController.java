@@ -3,6 +3,7 @@ package br.com.economize.controller;
 import br.com.economize.dto.account.AccountResponse;
 import br.com.economize.service.BalanceReconciliationService;
 import br.com.economize.dto.account.CreateAccountRequest;
+import br.com.economize.dto.account.DeclareCreditLimitRequest;
 import br.com.economize.dto.account.CardInvoicesResponse;
 import br.com.economize.dto.account.UpsertInvoiceReserveRequest;
 import br.com.economize.service.CardInvoiceService;
@@ -15,6 +16,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -86,6 +88,22 @@ public class AccountController {
         return Mono.fromCallable(() -> AccountResponse.from(accountService.createManual(
                         email, request.name(), request.institution(), request.type(),
                         request.statementClosingDay(), request.statementDueDay())))
+                .subscribeOn(Schedulers.boundedElastic());
+    }
+
+    @Operation(summary = "Informar o limite de um cartão",
+            description = "O limite NÃO vem em arquivo nenhum: a fatura declara o valor devido, não o "
+                    + "limite, e o agregador só devolve o dado em parte das instituições. Quem sabe é o dono "
+                    + "do cartão. Mande `sharedWithAccountId` quando este cartão divide a bolsa de outro "
+                    + "(virtual, adicional) — nesse caso ele não entra na soma de crédito disponível. Os dois "
+                    + "campos nulos APAGAM o que estava informado.")
+    @PatchMapping("/{accountId}/credit-limit")
+    public Mono<AccountResponse> declareCreditLimit(
+            @AuthenticationPrincipal String email,
+            @PathVariable UUID accountId,
+            @Valid @RequestBody DeclareCreditLimitRequest request) {
+        return Mono.fromCallable(() -> AccountResponse.from(accountService.declareCreditLimit(
+                        email, accountId, request.creditLimit(), request.sharedWithAccountId())))
                 .subscribeOn(Schedulers.boundedElastic());
     }
 
