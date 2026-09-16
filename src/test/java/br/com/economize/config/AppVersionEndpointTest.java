@@ -42,7 +42,8 @@ class AppVersionEndpointTest {
                     }
                 })
                 .jsonPath("$.minVersion").exists()
-                .jsonPath("$.downloadUrl").exists();
+                .jsonPath("$.downloadUrl").exists()
+                .jsonPath("$.notes").isArray();
     }
 
     @Test

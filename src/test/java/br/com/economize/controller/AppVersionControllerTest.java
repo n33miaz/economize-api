@@ -59,7 +59,11 @@ class AppVersionControllerTest {
                 .jsonPath("$.message").isEqualTo(AppVersionFilter.DEFAULT_MESSAGE)
                 // na fatia não há build-info: a identidade honesta é "dev"
                 .jsonPath("$.apiVersion").isEqualTo("dev")
-                .jsonPath("$.schemaVersion").isEqualTo(maiorMigrationDoProjeto());
+                .jsonPath("$.schemaVersion").isEqualTo(maiorMigrationDoProjeto())
+                // sem APP_RELEASE_NOTES a lista vem VAZIA, e nunca ausente ou
+                // nula: o app soma notes.length sem se defender
+                .jsonPath("$.notes").isArray()
+                .jsonPath("$.notes.length()").isEqualTo(0);
     }
 
     @Test

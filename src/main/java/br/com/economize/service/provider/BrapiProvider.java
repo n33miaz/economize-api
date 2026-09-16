@@ -52,6 +52,15 @@ public class BrapiProvider implements MarketDataProvider {
     private static final List<String> DEFAULT_TICKERS = List.of(
             "PETR4", "VALE3", "ITUB4", "MXRF11", "BOVA11", "IVVB11", "^BVSP");
 
+    /**
+     * A janela curta pedida junto com a cotação. Vai na MESMA requisição do
+     * {@code /quote} — a Brapi devolve {@code historicalDataPrice} sem cobrar
+     * chamada a mais, e é dela que sai a linha de tendência do card. Cinco
+     * pregões porque é o que cabe num card sem virar gráfico; o detalhe
+     * ({@link #fetchDetail}) continua pedindo o ano inteiro.
+     */
+    static final String QUOTE_RANGE = "?range=5d&interval=1d";
+
     // Quarentena de ticker que a Brapi disse NÃO EXISTIR. Sem ela, um papel
     // deslistado ou com erro de grafia no catálogo seria repedido em toda página
     // e drenaria a cota sem nunca devolver preço. Só entra aqui quem levou 404:
@@ -245,7 +254,7 @@ public class BrapiProvider implements MarketDataProvider {
     private Mono<List<Indicator>> fetchSingleTicker(String ticker) {
         String snapshotKey = snapshotKey(ticker);
         return webClient.get()
-                .uri(brapiApiUrl + "/quote/" + ticker)
+                .uri(brapiApiUrl + "/quote/" + ticker + QUOTE_RANGE)
                 // token vai no header para nunca aparecer em URL de log/exceção
                 .header(HttpHeaders.AUTHORIZATION, "Bearer " + brapiToken)
                 .retrieve()
@@ -328,6 +337,13 @@ public class BrapiProvider implements MarketDataProvider {
                     ind.setVariation(BigDecimal.valueOf(((Number) changeObj).doubleValue()));
                 }
 
+                // mínima/máxima do dia e a série curta já vinham na resposta e
+                // eram descartadas; zero em vez de nulo (índice fora do pregão)
+                // não é extremo do dia, é ausência
+                ind.setDayHigh(positive(number(item.get("regularMarketDayHigh"))));
+                ind.setDayLow(positive(number(item.get("regularMarketDayLow"))));
+                ind.setSparkline(closes(item.get("historicalDataPrice")));
+
                 ind.setSource(SOURCE);
                 ind.setAsOf(marketTime(item.get("regularMarketTime"), fetchedAt));
 
@@ -335,6 +351,28 @@ public class BrapiProvider implements MarketDataProvider {
             }
         }
         return stocks;
+    }
+
+    private static BigDecimal positive(BigDecimal value) {
+        return value != null && value.signum() > 0 ? value : null;
+    }
+
+    /**
+     * Fechamentos de {@code historicalDataPrice} em ordem cronológica. Menos
+     * de dois pontos não é linha, é ponto — e sai nulo para o card não
+     * desenhar um traço reto que pareceria estabilidade.
+     */
+    static List<BigDecimal> closes(Object rawSeries) {
+        if (!(rawSeries instanceof List<?> points)) return null;
+        java.util.TreeMap<Long, BigDecimal> byDate = new java.util.TreeMap<>();
+        for (Object point : points) {
+            if (!(point instanceof Map<?, ?> map)) continue;
+            BigDecimal close = number(map.get("close"));
+            Object rawDate = map.get("date");
+            if (close == null || !(rawDate instanceof Number epoch)) continue;
+            byDate.put(epoch.longValue(), close);
+        }
+        return byDate.size() >= 2 ? List.copyOf(byDate.values()) : null;
     }
 
     /**

@@ -73,7 +73,15 @@ class BrapiProviderTest {
                 return Mono.error(error != null ? error : new RuntimeException("brapi indisponivel"));
             }
             String uri = requestedUris.get(requestedUris.size() - 1);
-            String ticker = uri.substring(uri.lastIndexOf('/') + 1);
+            // O ticker é o ÚLTIMO SEGMENTO SEM A QUERY. A cotação passou a
+            // pedir a janela curta na mesma requisição (`?range=5d&interval=1d`,
+            // de onde sai a linha de tendência do card), e sem cortar a query
+            // este dublê devolvia `symbol: "PETR4?range=5d&interval=1d"` — a
+            // Brapi de verdade devolve o símbolo limpo. O teste falhava por
+            // causa do dublê, não do provedor.
+            String caminho = uri.substring(uri.lastIndexOf('/') + 1);
+            int query = caminho.indexOf('?');
+            String ticker = query < 0 ? caminho : caminho.substring(0, query);
             return Mono.just(Map.of("results", List.of(Map.of(
                     "symbol", ticker,
                     "shortName", "Nome " + ticker,
@@ -101,7 +109,8 @@ class BrapiProviderTest {
         assertEquals(7, requestedUris.size());
         assertTrue(requestedUris.stream().noneMatch(uri -> uri.contains(",")),
                 "lote com vírgula não pode ser enviado à Brapi");
-        assertTrue(requestedUris.contains(BASE_URL + "/quote/^BVSP"));
+        assertTrue(requestedUris.contains(BASE_URL + "/quote/^BVSP" + BrapiProvider.QUOTE_RANGE),
+                "a janela curta vai na MESMA requisição da cotação — é dela que sai a tendência do card");
         // token nunca vai na URL (vai no header Authorization)
         assertTrue(requestedUris.stream().noneMatch(uri -> uri.contains("token")));
     }
