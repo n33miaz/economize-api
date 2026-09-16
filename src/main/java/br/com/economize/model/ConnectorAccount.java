@@ -92,6 +92,26 @@ public class ConnectorAccount {
     @Column(name = "reported_balance_at")
     private OffsetDateTime reportedBalanceAt;
 
+    /**
+     * Limite total do cartão, informado pelo usuário (V36).
+     *
+     * <p>Nulo é o normal: o limite não vem em arquivo nenhum. Fatura declara o
+     * DEVIDO, não o limite, e nem todo provedor devolve o dado. Quem sabe é o
+     * dono do cartão — e é por isso que o app pergunta.
+     */
+    @Column(name = "credit_limit", precision = 19, scale = 4)
+    private BigDecimal creditLimit;
+
+    /**
+     * A conta dona do limite, quando ele é compartilhado.
+     *
+     * <p>Cartão físico e virtual do mesmo banco, ou o adicional de alguém da
+     * casa, consomem a MESMA bolsa. Somar o limite dos dois mostraria o dobro
+     * do crédito que existe. Quem aponta para outra conta não entra na soma.
+     */
+    @Column(name = "credit_limit_shared_with")
+    private UUID creditLimitSharedWith;
+
     @Column(name = "created_at", updatable = false)
     private OffsetDateTime createdAt;
 

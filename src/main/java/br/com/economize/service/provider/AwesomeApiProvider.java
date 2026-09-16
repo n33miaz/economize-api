@@ -53,7 +53,10 @@ public class AwesomeApiProvider implements MarketDataProvider {
     public static final String SOURCE = "AwesomeAPI";
     static final String SNAPSHOT_KEY = "awesome:all";
 
-    private static final Set<String> CRYPTO_CODES = Set.of("BTC", "ETH", "XRP", "LTC");
+    // DOGE entrou no /json/all em 2026 e, fora desta lista, saía como MOEDA
+    // (currency_DOGE, "Dogecoin/Real Brasileiro") no meio das fiat da aba
+    // Moedas. A CoinGecko já o cobre no fallback e no histórico.
+    private static final Set<String> CRYPTO_CODES = Set.of("BTC", "ETH", "XRP", "LTC", "DOGE");
 
     private final WebClient webClient;
     private final String awesomeApiUrl;
@@ -200,6 +203,7 @@ public class AwesomeApiProvider implements MarketDataProvider {
                 case "ETH" -> indicator.setName("Ethereum");
                 case "XRP" -> indicator.setName("XRP");
                 case "LTC" -> indicator.setName("Litecoin");
+                case "DOGE" -> indicator.setName("Dogecoin");
             }
         } else {
             indicator.setId("currency_" + key);

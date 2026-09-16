@@ -31,7 +31,14 @@ public record AccountResponse(
         // tela não tem segunda fonte para conferir. No cartão este campo é o
         // valor DEVIDO, não um saldo
         BigDecimal reportedBalance,
-        OffsetDateTime reportedBalanceAt
+        OffsetDateTime reportedBalanceAt,
+        // O limite do cartão, informado pelo usuário (V36). Nulo = nunca
+        // informado, e nulo aqui é o que faz a tela PERGUNTAR em vez de somar
+        // um crédito que ela não conhece
+        BigDecimal creditLimit,
+        // Quando o limite é compartilhado, a conta que é dona dele. Quem
+        // aponta para outra não entra na soma de crédito disponível
+        UUID creditLimitSharedWith
 ) {
     public static AccountResponse from(ConnectorAccount account) {
         return new AccountResponse(
@@ -43,6 +50,8 @@ public record AccountResponse(
                 account.getStatementDueDay(),
                 account.getPluggyItemId() != null,
                 account.getReportedBalance(),
-                account.getReportedBalanceAt());
+                account.getReportedBalanceAt(),
+                account.getCreditLimit(),
+                account.getCreditLimitSharedWith());
     }
 }

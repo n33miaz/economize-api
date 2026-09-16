@@ -16,7 +16,9 @@ import br.com.economize.service.recurrence.MerchantKeyExtractor;
 import br.com.economize.service.statement.category.AiCategorySuggester;
 import br.com.economize.service.statement.category.CategorizationEngine;
 import br.com.economize.service.statement.category.DescriptionNormalizer;
+import br.com.economize.model.ConnectorAccount;
 import br.com.economize.service.statement.parser.ParsedTransaction;
+import br.com.economize.service.statement.parser.StatementBalance;
 import br.com.economize.service.statement.parser.StatementFormat;
 import br.com.economize.service.statement.parser.StatementParserFactory;
 import br.com.economize.service.statement.parser.StatementParserStrategy;
@@ -191,8 +193,37 @@ public class BankStatementService {
             parsed = parsed.stream()
                     .map(tx -> tx.toBuilder().accountId(accountId).build())
                     .toList();
+            guardarSaldoDeclarado(user, accountId, parser, bytes);
         }
         return persist(user, parsed, fileName, format, hash);
+    }
+
+    /**
+     * O arquivo diz quanto tem na conta; até 15/09/2026 o app jogava fora.
+     *
+     * <p>Com o saldo descartado, todo "saldo" do produto nascia da soma dos
+     * lançamentos importados — e soma de movimento não é saldo. O dono viu o
+     * estrago em dois lugares no mesmo dia: a Home anunciando R$ 3.021,06 que
+     * não existiam em conta nenhuma, e a Perspectiva de saldo projetando que
+     * ele fecharia o mês devendo dezenove mil. Ver {@link StatementBalance}.
+     *
+     * <p>Só vale quando a importação já sabe A QUAL CONTA o arquivo pertence.
+     * Sem origem, um saldo solto não teria onde pousar — e grudá-lo na conta
+     * errada é pior do que não ter saldo nenhum.
+     *
+     * <p>Falha aqui não derruba a importação: as transações são o contrato do
+     * upload, o saldo é um bônus do formato.
+     */
+    private void guardarSaldoDeclarado(User user, UUID accountId, StatementParserStrategy parser, byte[] bytes) {
+        try {
+            StatementBalance saldo = parser.parseBalance(new ByteArrayInputStream(bytes));
+            if (saldo == null) return;
+            ConnectorAccount conta = accountService.requireOwned(accountId, user.getId());
+            accountService.recordStatementBalance(conta, saldo.amount(), saldo.asOf());
+        } catch (RuntimeException e) {
+            log.warn("Não deu para guardar o saldo declarado no arquivo (conta={}): {}",
+                    accountId, e.toString());
+        }
     }
 
     /**

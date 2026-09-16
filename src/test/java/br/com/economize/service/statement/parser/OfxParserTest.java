@@ -6,6 +6,7 @@ import java.io.ByteArrayInputStream;
 import java.math.BigDecimal;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
+import java.time.OffsetDateTime;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -102,5 +103,140 @@ class OfxParserTest {
         List<ParsedTransaction> result = parser.parse(new ByteArrayInputStream(bytes));
 
         assertThat(result.get(0).getDescription()).isEqualTo("Pix recebido: \"Cp :123-Maria Souza\"");
+    }
+
+    /**
+     * O saldo do arquivo (EC: "3.021,06 não existe", 15/09/2026).
+     *
+     * <p>O dado sempre esteve no OFX e era descartado; o app somava movimento e
+     * chamava de saldo. Os testes abaixo guardam as três decisões que importam:
+     * lê o LEDGERBAL, NÃO lê o AVAILBAL (que soma limite de cheque especial), e
+     * devolve nulo — nunca zero — quando o arquivo não informa nada.
+     */
+    @Test
+    void leOSaldoDeclaradoNoLedgerbal() {
+        String ofx = """
+                <OFX>
+                <STMTTRN>
+                <TRNTYPE>DEBIT
+                <DTPOSTED>20260101120000
+                <TRNAMT>-50.25
+                <FITID>TX-001
+                <MEMO>IFOOD
+                </STMTTRN>
+                <LEDGERBAL><BALAMT>4213.83<DTASOF>20260915120000</LEDGERBAL>
+                </OFX>
+                """;
+
+        StatementBalance saldo = parser.parseBalance(new ByteArrayInputStream(ofx.getBytes(StandardCharsets.UTF_8)));
+
+        assertThat(saldo).isNotNull();
+        assertThat(saldo.amount()).isEqualByComparingTo("4213.83");
+        assertThat(saldo.asOf()).isEqualTo(OffsetDateTime.parse("2026-09-15T12:00:00Z"));
+    }
+
+    /**
+     * Limite de cheque especial não é dinheiro do usuário. O AVAILBAL vem logo
+     * depois do LEDGERBAL na maioria dos bancos e costuma ser MAIOR: capturá-lo
+     * por engano inventaria saldo — o erro exato que este trabalho veio
+     * consertar, só que ao contrário.
+     */
+    @Test
+    void ignoraOSaldoDisponivelQueSomaLimite() {
+        String ofx = """
+                <OFX>
+                <STMTTRN>
+                <TRNTYPE>DEBIT
+                <DTPOSTED>20260101120000
+                <TRNAMT>-10.00
+                <FITID>TX-009
+                <MEMO>PADARIA
+                </STMTTRN>
+                <LEDGERBAL><BALAMT>120.00<DTASOF>20260910120000</LEDGERBAL>
+                <AVAILBAL><BALAMT>5120.00<DTASOF>20260910120000</AVAILBAL>
+                </OFX>
+                """;
+
+        StatementBalance saldo = parser.parseBalance(new ByteArrayInputStream(ofx.getBytes(StandardCharsets.UTF_8)));
+
+        assertThat(saldo).isNotNull();
+        assertThat(saldo.amount()).isEqualByComparingTo("120.00");
+    }
+
+    /**
+     * SGML de banco raramente fecha tag. Sem tolerância no fecho, o bloco
+     * engoliria o resto do arquivo e o BALAMT capturado seria o do AVAILBAL.
+     */
+    @Test
+    void leOSaldoMesmoComTagSemFechamento() {
+        String ofx = """
+                <OFX>
+                <STMTTRN>
+                <TRNTYPE>DEBIT
+                <DTPOSTED>20260101120000
+                <TRNAMT>-10.00
+                <FITID>TX-010
+                <MEMO>PADARIA
+                </STMTTRN>
+                <LEDGERBAL>
+                <BALAMT>77.50
+                <DTASOF>20260914000000
+                <AVAILBAL>
+                <BALAMT>9999.00
+                <DTASOF>20260914000000
+                </STMTRS>
+                </OFX>
+                """;
+
+        StatementBalance saldo = parser.parseBalance(new ByteArrayInputStream(ofx.getBytes(StandardCharsets.UTF_8)));
+
+        assertThat(saldo).isNotNull();
+        assertThat(saldo.amount()).isEqualByComparingTo("77.50");
+    }
+
+    /**
+     * Nulo e não zero. Zero é um saldo — e um saldo falso vira número na tela
+     * do usuário; nulo é "este arquivo não informa", que é a verdade e o que as
+     * telas sabem tratar.
+     */
+    @Test
+    void semBlocoDeSaldoDevolveNuloEmVezDeZero() {
+        String ofx = """
+                <OFX>
+                <STMTTRN>
+                <TRNTYPE>CREDIT
+                <DTPOSTED>20260101120000
+                <TRNAMT>10.00
+                <FITID>TX-011
+                <MEMO>PIX
+                </STMTTRN>
+                </OFX>
+                """;
+
+        assertThat(parser.parseBalance(new ByteArrayInputStream(ofx.getBytes(StandardCharsets.UTF_8)))).isNull();
+    }
+
+    /** Fatura de cartão declara o DEVIDO no mesmo bloco, e ele vem negativo. */
+    @Test
+    void leODevidoDaFaturaDeCartao() {
+        String ofx = """
+                <OFX>
+                <CCSTMTRS>
+                <STMTTRN>
+                <TRNTYPE>DEBIT
+                <DTPOSTED>20260101120000
+                <TRNAMT>-89.90
+                <FITID>TX-012
+                <MEMO>MERCADO
+                </STMTTRN>
+                <LEDGERBAL><BALAMT>-1432.17<DTASOF>20260912000000</LEDGERBAL>
+                </CCSTMTRS>
+                </OFX>
+                """;
+
+        StatementBalance saldo = parser.parseBalance(new ByteArrayInputStream(ofx.getBytes(StandardCharsets.UTF_8)));
+
+        assertThat(saldo).isNotNull();
+        assertThat(saldo.amount()).isEqualByComparingTo("-1432.17");
     }
 }

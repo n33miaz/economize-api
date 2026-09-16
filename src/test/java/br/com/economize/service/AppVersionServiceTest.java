@@ -44,7 +44,7 @@ class AppVersionServiceTest {
         }
 
         AppVersionService service = new AppVersionService(emptyBuild(), "2.2.0", "2.2.0",
-                "https://economize-web.onrender.com/baixar", "", "", "msg");
+                "https://economize-web.onrender.com/baixar", "", "", "msg", "");
 
         assertThat(service.schemaVersion()).isEqualTo("V" + esperado);
         // e esta rodada entregou a V23: se o número abaixo ficar menor que o
@@ -82,7 +82,7 @@ class AppVersionServiceTest {
     @DisplayName("Sem build-info (mvn spring-boot:run, fatia de teste) a versão da API é 'dev'")
     void semBuildInfoEDev() {
         AppVersionService service = new AppVersionService(emptyBuild(), "2.3.0", "2.2.0",
-                "https://d", "", "", "msg");
+                "https://d", "", "", "msg", "");
 
         var response = service.describe();
         assertThat(response.apiVersion()).isEqualTo(AppVersionService.DEV_VERSION);
@@ -103,7 +103,7 @@ class AppVersionServiceTest {
         when(provider.getIfAvailable()).thenReturn(new BuildProperties(props));
 
         AppVersionService service = new AppVersionService(provider, "2.2.0", "2.2.0", "https://d", "https://cdn/economize.apk",
-                " https://play.google.com/store/apps/details?id=app.economize ", "msg");
+                " https://play.google.com/store/apps/details?id=app.economize ", "msg", "");
 
         assertThat(service.apiVersion()).isEqualTo("1.4.0");
         assertThat(service.describe().storeUrl())
@@ -130,7 +130,7 @@ class AppVersionServiceTest {
     @DisplayName("Publicada e mínima são anunciadas cada uma com o próprio valor")
     void anunciaOsDoisNumerosSeparados() {
         AppVersionService service = new AppVersionService(emptyBuild(), "2.3.1", "2.2.0",
-                "https://economize-web.onrender.com/baixar", "", "", "atualize");
+                "https://economize-web.onrender.com/baixar", "", "", "atualize", "");
 
         var resposta = service.describe();
         assertThat(resposta.latestVersion()).isEqualTo("2.3.1");
@@ -146,7 +146,7 @@ class AppVersionServiceTest {
     void minimaAtrasDaPublicadaEAceita() {
         for (String publicada : new String[] {"2.3.1", "3.0.0", "10.0.1"}) {
             AppVersionService service = new AppVersionService(emptyBuild(), publicada, "2.2.0",
-                    "https://d", "", "", "atualize");
+                    "https://d", "", "", "atualize", "");
 
             assertThat(service.describe().latestVersion()).isEqualTo(publicada);
             assertThat(service.describe().minVersion()).isEqualTo("2.2.0");
@@ -163,7 +163,7 @@ class AppVersionServiceTest {
     @DisplayName("Mínima MAIOR que a publicada derruba o boot")
     void minimaNaFrenteDaPublicadaDerrubaOBoot() {
         assertThatThrownBy(() -> new AppVersionService(emptyBuild(), "2.2.0", "2.3.1",
-                "https://d", "", "", "atualize"))
+                "https://d", "", "", "atualize", ""))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("maior que a publicada");
     }
@@ -175,10 +175,10 @@ class AppVersionServiceTest {
         // só apareceria em produção, e pelo usuário trancado fora do app
         // "2.3" NAO serve de exemplo: o parse aceita versao parcial de proposito
         assertThatThrownBy(() -> new AppVersionService(emptyBuild(), "2.x", "2.2.0",
-                "https://d", "", "", "atualize"))
+                "https://d", "", "", "atualize", ""))
                 .isInstanceOf(IllegalStateException.class);
         assertThatThrownBy(() -> new AppVersionService(emptyBuild(), "2.3.1", "dois",
-                "https://d", "", "", "atualize"))
+                "https://d", "", "", "atualize", ""))
                 .isInstanceOf(IllegalStateException.class);
     }
 
@@ -189,12 +189,87 @@ class AppVersionServiceTest {
         // link que da 404 para quem acabou de ser bloqueado seria pior do que
         // dizer "em breve".
         AppVersionService semArquivo = new AppVersionService(emptyBuild(), "2.2.0", "2.2.0",
-                "https://d", "  ", "", "msg");
+                "https://d", "  ", "", "msg", "");
         assertThat(semArquivo.describe().apkUrl()).isNull();
 
         AppVersionService comArquivo = new AppVersionService(emptyBuild(), "2.2.0", "2.2.0",
-                "https://d", " https://cdn/economize.apk ", "", "msg");
+                "https://d", " https://cdn/economize.apk ", "", "msg", "");
         assertThat(comArquivo.describe().apkUrl()).isEqualTo("https://cdn/economize.apk");
+    }
+
+    /**
+     * As notas da versão saem da variável de ambiente já prontas para a folha
+     * do app: itens separados por barra ou por linha, aparados, sem vazios.
+     */
+    @Test
+    @DisplayName("Notas separadas por ' | ' viram uma lista, aparadas e sem itens vazios")
+    void notasSeparadasPorBarraViramLista() {
+        assertThat(AppVersionService.parseReleaseNotes(
+                "Mercado com mais moedas | Home com parcelamentos |  | Extrato mais leve "))
+                .containsExactly("Mercado com mais moedas", "Home com parcelamentos", "Extrato mais leve");
+    }
+
+    @Test
+    @DisplayName("Uma nota por linha também vale — é como um .env local lê melhor")
+    void notasUmaPorLinha() {
+        assertThat(AppVersionService.parseReleaseNotes("Primeira\nSegunda\r\n\r\nTerceira"))
+                .containsExactly("Primeira", "Segunda", "Terceira");
+    }
+
+    @Test
+    @DisplayName("Sem notas a lista é VAZIA, nunca nula — o app soma notes.length sem se defender")
+    void semNotasListaVazia() {
+        assertThat(AppVersionService.parseReleaseNotes(null)).isEmpty();
+        assertThat(AppVersionService.parseReleaseNotes("")).isEmpty();
+        assertThat(AppVersionService.parseReleaseNotes("   ")).isEmpty();
+        assertThat(AppVersionService.parseReleaseNotes(" | | ")).isEmpty();
+
+        AppVersionService service = new AppVersionService(emptyBuild(), "2.3.2", "2.3.1",
+                "https://d", "", "", "msg", "");
+        assertThat(service.describe().notes()).isNotNull().isEmpty();
+    }
+
+    /**
+     * A resposta é pública, cacheada e lida a cada abertura do app: um
+     * changelog inteiro colado na variável viraria peso em toda abertura. O
+     * teto corta em silêncio nos itens e com reticência no texto — uma nota
+     * longa demais ainda é uma nota, sumir com ela esconderia o excesso.
+     */
+    @Test
+    @DisplayName("Do décimo primeiro item em diante nada sai")
+    void tetoDeDezItens() {
+        String quinze = String.join(" | ",
+                java.util.stream.IntStream.rangeClosed(1, 15).mapToObj(i -> "Nota " + i).toList());
+
+        assertThat(AppVersionService.parseReleaseNotes(quinze))
+                .hasSize(AppVersionService.MAX_NOTES)
+                .first().isEqualTo("Nota 1");
+        assertThat(AppVersionService.parseReleaseNotes(quinze)).last().isEqualTo("Nota 10");
+    }
+
+    @Test
+    @DisplayName("Item acima de 200 caracteres é cortado com reticência, sem passar do teto")
+    void tetoDeDuzentosCaracteresPorItem() {
+        String longa = "x".repeat(250);
+        String exata = "y".repeat(AppVersionService.MAX_NOTE_LENGTH);
+
+        var notas = AppVersionService.parseReleaseNotes(longa + " | " + exata);
+
+        assertThat(notas).hasSize(2);
+        assertThat(notas.get(0)).hasSize(AppVersionService.MAX_NOTE_LENGTH)
+                .endsWith(AppVersionService.NOTE_ELLIPSIS);
+        // no limite exato não há o que cortar
+        assertThat(notas.get(1)).isEqualTo(exata);
+    }
+
+    @Test
+    @DisplayName("As notas chegam à resposta na ordem em que foram escritas")
+    void notasChegamAResposta() {
+        AppVersionService service = new AppVersionService(emptyBuild(), "2.3.2", "2.3.1",
+                "https://d", "", "", "msg", "Mercado com mais moedas | Home com parcelamentos");
+
+        assertThat(service.describe().notes())
+                .containsExactly("Mercado com mais moedas", "Home com parcelamentos");
     }
 
     @SuppressWarnings("unchecked")

@@ -7,6 +7,7 @@ import lombok.Data;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Instant;
+import java.util.List;
 
 @Data
 public class Indicator {
@@ -41,6 +42,28 @@ public class Indicator {
     private Double points;
 
     /**
+     * Mínima e máxima do dia, quando a fonte as informa: a AwesomeAPI manda
+     * {@code high}/{@code low} em toda cotação do /json/all e a Brapi,
+     * {@code regularMarketDayHigh/Low} — os dois já chegavam e eram jogados
+     * fora no parse. Aditivos e nuláveis: o card só desenha a régua do dia
+     * quando os dois existem, e quem ignora os campos lê o /all de sempre.
+     */
+    @JsonAlias("high")
+    private BigDecimal dayHigh;
+
+    @JsonAlias("low")
+    private BigDecimal dayLow;
+
+    /**
+     * Fechamentos dos últimos dias, do mais antigo ao mais recente — a linha
+     * de tendência do card. Nunca custa requisição própria: vem na MESMA
+     * resposta que já trazia o preço (Brapi com {@code range=5d}, série
+     * semanal do BCE, série do Yahoo). Nula quando a fonte não traz série,
+     * como o /json/all da AwesomeAPI.
+     */
+    private List<BigDecimal> sparkline;
+
+    /**
      * De onde o número veio ("AwesomeAPI", "Frankfurter (BCE)", "CoinGecko",
      * "Brapi"...). Desde que a AwesomeAPI passou a estourar cota com frequência
      * o preço da Home pode sair de fontes diferentes ao longo do dia, e o app
@@ -70,6 +93,17 @@ public class Indicator {
     }
 
     /**
+     * A variação como veio da fonte, sem o zero que o getter põe no lugar do
+     * nulo. O contrato do /all precisa do zero; o overview do Mercado precisa
+     * distinguir "não variou" de "a fonte não disse" — senão um índice sem
+     * fechamento anterior sairia pintado de +0,00%. Não é getter de
+     * propósito: Jackson não o serializa e o /all continua o mesmo.
+     */
+    public BigDecimal variationOrNull() {
+        return variation != null ? variation.setScale(2, RoundingMode.HALF_UP) : null;
+    }
+
+    /**
      * Cópia marcada como stale. É cópia, e não mutação, porque o original mora
      * no snapshot compartilhado: marcá-lo no lugar contaminaria a mesma
      * instância para todo mundo. Os campos são copiados crus (o getter de
@@ -86,6 +120,9 @@ public class Indicator {
         copy.sell = this.sell;
         copy.variation = this.variation;
         copy.points = this.points;
+        copy.dayHigh = this.dayHigh;
+        copy.dayLow = this.dayLow;
+        copy.sparkline = this.sparkline;
         copy.source = this.source;
         copy.asOf = this.asOf;
         copy.stale = true;
