@@ -52,6 +52,31 @@ public interface BankTransactionRepository extends JpaRepository<BankTransaction
                       @Param("ids") Collection<UUID> ids);
 
     /**
+     * Muda a origem de TODAS as linhas de uma conta para outra — a fusão de
+     * origens duplicadas.
+     *
+     * <p>Diferente do {@link #assignAccount} logo acima, este SOBRESCREVE: o
+     * ponto é justamente tirar as linhas de uma origem que vai deixar de
+     * existir. A conta de destino é validada no serviço; aqui a única guarda é
+     * o dono, para uma requisição não mexer no extrato de outra pessoa.
+     *
+     * <p>Existe porque a chave estrangeira de `bank_transactions.account_id` é
+     * {@code ON DELETE SET NULL}: apagar a origem sem mudar as linhas antes
+     * transformaria 1.632 lançamentos em lançamentos sem origem, que é pior do
+     * que a duplicata que a fusão vem resolver.
+     */
+    @Modifying
+    @Transactional
+    @Query("update BankTransaction t set t.accountId = :targetId "
+            + "where t.user.id = :userId and t.accountId = :sourceId")
+    int moveAccount(@Param("userId") UUID userId,
+                    @Param("sourceId") UUID sourceId,
+                    @Param("targetId") UUID targetId);
+
+    /** Quantos lançamentos moram nesta origem. Alimenta a sugestão de fusão. */
+    long countByUserIdAndAccountId(UUID userId, UUID accountId);
+
+    /**
      * Carimba a origem em TODAS as linhas de um upload que ainda não a tenham.
      *
      * <p>Existe para o histórico importado ANTES de a conta ser criada: sem

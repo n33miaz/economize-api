@@ -9,6 +9,7 @@ import br.com.economize.model.ConnectorAccount;
 import br.com.economize.security.JwtAuthenticationFilter;
 import br.com.economize.security.JwtUtil;
 import br.com.economize.security.SecurityConfig;
+import br.com.economize.service.AccountMergeService;
 import br.com.economize.service.BalanceReconciliationService;
 import br.com.economize.service.CardInvoiceService;
 import br.com.economize.service.InvoiceReserveService;
@@ -44,6 +45,11 @@ class AccountControllerTest {
 
     @Autowired
     private JwtUtil jwtUtil;
+
+    // A fatia WebFlux monta só o controller: cada dependência dele precisa de
+    // um dublê aqui, senão o contexto não sobe (e o erro não diz qual falta)
+    @MockitoBean
+    private AccountMergeService mergeService;
 
     @MockitoBean
     private ConnectorAccountService accountService;
