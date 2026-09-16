@@ -68,19 +68,38 @@ public class FrankfurterSource implements FallbackQuoteSource {
 
     @Override
     public Mono<List<Indicator>> fetch() {
+        return fetch(CODES);
+    }
+
+    /**
+     * A mesma chamada para um conjunto arbitrário de códigos. O overview do
+     * Mercado pede as moedas da Home mais as que o /json/all não traz (MXN,
+     * ZAR, TRY...) numa requisição só: a série de sete dias de todas elas
+     * custa o mesmo GET. Código que o BCE não cota (ARS) é simplesmente
+     * ignorado pela API e fica de fora da resposta.
+     */
+    public Mono<List<Indicator>> fetch(List<String> codes) {
         LocalDate start = LocalDate.now(clock).minusDays(LOOKBACK_DAYS);
         return webClient.get()
-                .uri(baseUrl + "/" + start + "..?from=BRL&to=" + String.join(",", CODES))
+                .uri(baseUrl + "/" + start + "..?from=BRL&to=" + String.join(",", codes))
                 .retrieve()
                 .bodyToMono(JsonNode.class)
-                .map(FrankfurterSource::parse);
+                .map(root -> parse(root, codes));
+    }
+
+    static List<Indicator> parse(JsonNode root) {
+        return parse(root, CODES);
     }
 
     /**
      * Shape: {@code {"base":"BRL","end_date":"2026-09-04","rates":{"2026-09-03":{"USD":0.197},...}}}.
      * Método puro para o parse ser testável com JSON fixo.
+     *
+     * <p>A série inteira vira {@code sparkline} (do dia mais antigo ao mais
+     * recente, já invertida para X→BRL): a resposta sempre trouxe a semana e
+     * só o último e o anterior eram aproveitados.
      */
-    static List<Indicator> parse(JsonNode root) {
+    static List<Indicator> parse(JsonNode root, List<String> codes) {
         JsonNode rates = root.path("rates");
         if (!rates.isObject() || rates.isEmpty()) {
             return List.of();
@@ -96,7 +115,7 @@ public class FrankfurterSource implements FallbackQuoteSource {
         Instant asOf = latestDate.atTime(PUBLICATION_HOUR, 0).atZone(ECB_ZONE).toInstant();
 
         List<Indicator> result = new ArrayList<>();
-        for (String code : CODES) {
+        for (String code : codes) {
             BigDecimal brlToX = decimal(latest.get(code));
             if (brlToX == null || brlToX.signum() <= 0) {
                 continue;
@@ -111,9 +130,23 @@ public class FrankfurterSource implements FallbackQuoteSource {
                         .multiply(BigDecimal.valueOf(100))
                         .setScale(4, RoundingMode.HALF_UP);
             }
-            result.add(CurrencyNames.fiat(code, price, price, variation, SOURCE, asOf));
+            Indicator indicator = CurrencyNames.fiat(code, price, price, variation, SOURCE, asOf);
+            indicator.setSparkline(series(byDate, code));
+            result.add(indicator);
         }
         return result;
+    }
+
+    /** Um ponto por dia publicado, invertido; menos de dois pontos não é linha e sai nulo. */
+    private static List<BigDecimal> series(TreeMap<LocalDate, JsonNode> byDate, String code) {
+        List<BigDecimal> points = new ArrayList<>(byDate.size());
+        for (JsonNode day : byDate.values()) {
+            BigDecimal brlToX = decimal(day.get(code));
+            if (brlToX != null && brlToX.signum() > 0) {
+                points.add(invert(brlToX));
+            }
+        }
+        return points.size() >= 2 ? List.copyOf(points) : null;
     }
 
     private static BigDecimal invert(BigDecimal rate) {

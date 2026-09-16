@@ -49,8 +49,12 @@ public class AuthController {
         this.deviceService = deviceService;
     }
 
+    @Operation(summary = "Criar conta",
+            description = "Devolve o token já pronto para uso — cadastrar e entrar são o mesmo passo. "
+                    + "Responde 409 quando o e-mail já existe e 400 quando nome, e-mail ou senha não passam "
+                    + "na validação (a senha tem piso de 8 caracteres, o mesmo da troca e da recuperação).")
     @PostMapping("/register")
-    public Mono<ResponseEntity<AuthResponse>> register(@RequestBody RegisterRequest request) {
+    public Mono<ResponseEntity<AuthResponse>> register(@Valid @RequestBody RegisterRequest request) {
         return Mono.fromCallable(() -> {
             if (userRepository.findByEmail(request.getEmail()).isPresent()) {
                 throw new IllegalArgumentException("Email já cadastrado");
@@ -78,7 +82,7 @@ public class AuthController {
                     + "Com `deviceToken` de um aparelho já lembrado, o segundo passo é DISPENSADO: o código "
                     + "só é pedido em aparelho desconhecido.")
     @PostMapping("/login")
-    public Mono<ResponseEntity<AuthResponse>> login(@RequestBody AuthRequest request,
+    public Mono<ResponseEntity<AuthResponse>> login(@Valid @RequestBody AuthRequest request,
                                                     ServerWebExchange exchange) {
         return Mono.fromCallable(() -> {
             User user = userRepository.findByEmail(request.getEmail())

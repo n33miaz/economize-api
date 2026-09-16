@@ -42,6 +42,11 @@ public class CatalogItem extends Indicator {
         item.setSell(source.getSell());
         item.setVariation(source.getVariation());
         item.setPoints(source.getPoints());
+        // mínima/máxima do dia e a série curta viajam com o preço: o card do
+        // catálogo desenha a mesma régua e a mesma linha de tendência das abas
+        item.setDayHigh(source.getDayHigh());
+        item.setDayLow(source.getDayLow());
+        item.setSparkline(source.getSparkline());
         // procedência e data viajam com o preço: o catálogo mostra o mesmo
         // "atualizado às · fonte" que a Home
         item.setSource(source.getSource());

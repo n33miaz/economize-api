@@ -15,6 +15,7 @@ import org.springframework.stereotype.Service;
 import java.io.IOException;
 import java.util.Arrays;
 import java.util.Comparator;
+import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.regex.Matcher;
@@ -66,6 +67,23 @@ public class AppVersionService {
     // V23__users_plan_and_app_version.sql -> 23
     private static final Pattern MIGRATION_NAME = Pattern.compile("^V(\\d+)__.*\\.sql$");
 
+    /**
+     * Teto das notas da versão: a resposta é pública, cacheada e lida a cada
+     * abertura do app — um changelog inteiro colado na variável de ambiente
+     * viraria peso em toda abertura, e a folha de anúncio é uma folha, não um
+     * documento. Dez frases curtas é o que cabe nela sem rolar duas telas.
+     */
+    static final int MAX_NOTES = 10;
+    static final int MAX_NOTE_LENGTH = 200;
+    static final String NOTE_ELLIPSIS = "…";
+
+    /**
+     * Um item por linha OU separados por barra vertical: a barra existe porque
+     * o painel do Render aceita mal quebra de linha numa variável de ambiente,
+     * e a quebra existe porque um .env local lê melhor com uma nota por linha.
+     */
+    private static final Pattern NOTE_SEPARATOR = Pattern.compile("\\||\\R");
+
     /** A publicada: quem está atrás vê o aviso e segue usando o app. */
     private final String latestVersion;
 
@@ -77,6 +95,8 @@ public class AppVersionService {
     private final String updateMessage;
     private final String apiVersion;
     private final String schemaVersion;
+    /** O que há de novo na publicada, já aparado; vazia quando não há. */
+    private final List<String> releaseNotes;
 
     public AppVersionService(ObjectProvider<BuildProperties> buildProperties,
                              @Value("${economize.app.latest-version:2.3.2}") String latestVersion,
@@ -86,7 +106,8 @@ public class AppVersionService {
                              @Value("${economize.app.apk-url:}") String apkUrl,
                              @Value("${economize.app.store-url:}") String storeUrl,
                              @Value("${economize.app.update-message:" + AppVersionFilter.DEFAULT_MESSAGE + "}")
-                             String updateMessage) {
+                             String updateMessage,
+                             @Value("${economize.app.release-notes:}") String releaseNotes) {
         this.latestVersion = latestVersion;
         this.minVersion = minVersion;
         // A única divergência que machuca: mínima na frente da publicada manda
@@ -110,6 +131,10 @@ public class AppVersionService {
         this.apkUrl = apkUrl == null || apkUrl.isBlank() ? null : apkUrl.trim();
         this.storeUrl = storeUrl == null || storeUrl.isBlank() ? null : storeUrl.trim();
         this.updateMessage = updateMessage;
+        // As notas acompanham a PUBLICADA: quem as escreve é quem faz o bump
+        // de latest-version, na mesma hora, e o texto vive na mesma variável
+        // de ambiente do Render. Um release sem notas é lista vazia, não erro
+        this.releaseNotes = parseReleaseNotes(releaseNotes);
         // BuildProperties só existe quando o jar carrega o build-info gerado
         // pelo plugin (ver pom); em `mvn spring-boot:run` e nos testes de fatia
         // ele não está lá, e "dev" é mais honesto do que inventar um número
@@ -117,13 +142,47 @@ public class AppVersionService {
         this.apiVersion = build == null || build.getVersion() == null ? DEV_VERSION : build.getVersion();
         this.schemaVersion = resolveSchemaVersion(
                 new PathMatchingResourcePatternResolver(AppVersionService.class.getClassLoader()));
-        log.info("Versões anunciadas: app publicada={} mínima={} api={} schema={}",
-                latestVersion, minVersion, apiVersion, schemaVersion);
+        log.info("Versões anunciadas: app publicada={} mínima={} api={} schema={} notas={}",
+                latestVersion, minVersion, apiVersion, schemaVersion, this.releaseNotes.size());
     }
 
     public AppVersionResponse describe() {
         return new AppVersionResponse(minVersion, latestVersion, downloadUrl, apkUrl, storeUrl,
-                updateMessage, apiVersion, schemaVersion);
+                updateMessage, apiVersion, schemaVersion, releaseNotes);
+    }
+
+    /**
+     * Da variável de ambiente para a lista que o app mostra.
+     *
+     * <p>Quebra por barra vertical ou por linha, apara cada item e descarta os
+     * vazios — {@code "A | | B"} são duas notas, não três. Depois aplica o teto:
+     * do décimo primeiro item em diante nada sai, e um item mais longo que o
+     * limite é cortado com reticências em vez de descartado, porque uma nota
+     * grande demais ainda é uma nota, e sumir com ela em silêncio esconderia
+     * do operador que o texto passou da medida.
+     *
+     * <p>Nulo ou em branco vira lista vazia, nunca nulo: o app soma
+     * {@code notes.length} sem se defender, e o contrato aditivo promete isso.
+     */
+    static List<String> parseReleaseNotes(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return List.of();
+        }
+        return NOTE_SEPARATOR.splitAsStream(raw)
+                .map(String::trim)
+                .filter(item -> !item.isEmpty())
+                .limit(MAX_NOTES)
+                .map(AppVersionService::trimNote)
+                .toList();
+    }
+
+    private static String trimNote(String note) {
+        if (note.length() <= MAX_NOTE_LENGTH) {
+            return note;
+        }
+        // O corte deixa espaço para a reticência, assim o item devolvido nunca
+        // passa do teto — é o teto que a documentação promete
+        return note.substring(0, MAX_NOTE_LENGTH - NOTE_ELLIPSIS.length()).stripTrailing() + NOTE_ELLIPSIS;
     }
 
     public String schemaVersion() {

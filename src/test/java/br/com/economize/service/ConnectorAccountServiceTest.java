@@ -16,6 +16,8 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.DataIntegrityViolationException;
 
+import java.math.BigDecimal;
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -348,5 +350,144 @@ class ConnectorAccountServiceTest {
                 .statementClosingDay(closingDay)
                 .statementDueDay(dueDay)
                 .build();
+    }
+
+    // ------------------------------------------------- saldo declarado no arquivo
+
+    /**
+     * O saldo que vem dentro do OFX (EC: "3.021,06 não existe", 15/09/2026).
+     *
+     * <p>Antes disto, TODO saldo do produto nascia da soma dos lançamentos
+     * importados — e soma de movimento não é saldo. O dono viu o resultado em
+     * dois lugares no mesmo dia: a Home anunciando três mil reais que não
+     * existiam, e a previsão dizendo que ele fecharia o mês devendo dezenove
+     * mil. O dado sempre esteve no arquivo, no bloco LEDGERBAL.
+     */
+    @Test
+    @DisplayName("saldo do arquivo é gravado quando a conta ainda não tinha nenhum")
+    void recordStatementBalanceGravaOPrimeiro() {
+        ConnectorAccount conta = ConnectorAccount.builder()
+                .id(UUID.randomUUID()).user(user).providerAccountId("manual-1")
+                .name("Inter").type(ConnectorAccount.AccountType.BANK).build();
+        when(accountRepository.save(any(ConnectorAccount.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        BigDecimal gravado = service.recordStatementBalance(
+                conta, new BigDecimal("4213.83"), OffsetDateTime.parse("2026-09-15T12:00:00Z"));
+
+        assertThat(gravado).isEqualByComparingTo("4213.83");
+        assertThat(conta.getReportedBalance()).isEqualByComparingTo("4213.83");
+        assertThat(conta.getReportedBalanceAt()).isEqualTo(OffsetDateTime.parse("2026-09-15T12:00:00Z"));
+    }
+
+    /**
+     * Reimportar arquivo velho é rotina em app de finanças — o usuário baixa
+     * seis meses de extrato e sobe tudo. Se o último arquivo subido mandasse
+     * no saldo, importar março faria o app achar que o saldo de março é o de
+     * hoje. Quem manda é a DATA da leitura, nunca a ordem de chegada.
+     */
+    @Test
+    @DisplayName("saldo mais VELHO que o guardado não sobrescreve")
+    void recordStatementBalanceIgnoraLeituraVelha() {
+        ConnectorAccount conta = ConnectorAccount.builder()
+                .id(UUID.randomUUID()).user(user).providerAccountId("manual-1")
+                .name("Inter").type(ConnectorAccount.AccountType.BANK)
+                .reportedBalance(new BigDecimal("900.00"))
+                .reportedBalanceAt(OffsetDateTime.parse("2026-09-15T12:00:00Z"))
+                .build();
+
+        BigDecimal gravado = service.recordStatementBalance(
+                conta, new BigDecimal("120.00"), OffsetDateTime.parse("2026-03-31T12:00:00Z"));
+
+        assertThat(gravado).isNull();
+        assertThat(conta.getReportedBalance()).isEqualByComparingTo("900.00");
+        verify(accountRepository, never()).save(any(ConnectorAccount.class));
+    }
+
+    // ------------------------------------------------- limite de cartão
+
+    @Test
+    @DisplayName("limite informado entra no cartão")
+    void declareCreditLimitGuardaOValor() {
+        UUID id = UUID.randomUUID();
+        ConnectorAccount cartao = cartaoDe(id);
+        when(accountRepository.findByIdAndUserId(id, user.getId())).thenReturn(Optional.of(cartao));
+        when(accountRepository.save(any(ConnectorAccount.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        ConnectorAccount salvo = service.declareCreditLimit(EMAIL, id, new BigDecimal("5000"), null);
+
+        assertThat(salvo.getCreditLimit()).isEqualByComparingTo("5000");
+        assertThat(salvo.getCreditLimitSharedWith()).isNull();
+    }
+
+    /**
+     * Cartão virtual e adicional consomem a MESMA bolsa. Guardar valor nos dois
+     * faria a soma de crédito disponível mostrar o dobro do que existe — por
+     * isso quem aponta para outro cartão não guarda valor próprio.
+     */
+    @Test
+    @DisplayName("cartão que divide a bolsa de outro não guarda limite próprio")
+    void declareCreditLimitCompartilhadoZeraOValorProprio() {
+        UUID id = UUID.randomUUID();
+        UUID donoId = UUID.randomUUID();
+        ConnectorAccount cartao = cartaoDe(id);
+        cartao.setCreditLimit(new BigDecimal("1000"));
+        when(accountRepository.findByIdAndUserId(id, user.getId())).thenReturn(Optional.of(cartao));
+        when(accountRepository.findByIdAndUserId(donoId, user.getId())).thenReturn(Optional.of(cartaoDe(donoId)));
+        when(accountRepository.save(any(ConnectorAccount.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        ConnectorAccount salvo = service.declareCreditLimit(EMAIL, id, new BigDecimal("1000"), donoId);
+
+        assertThat(salvo.getCreditLimit()).isNull();
+        assertThat(salvo.getCreditLimitSharedWith()).isEqualTo(donoId);
+    }
+
+    @Test
+    @DisplayName("conta corrente não tem limite de cartão")
+    void declareCreditLimitRecusaContaCorrente() {
+        UUID id = UUID.randomUUID();
+        ConnectorAccount conta = ConnectorAccount.builder()
+                .id(id).user(user).providerAccountId("manual-2").name("Inter")
+                .type(ConnectorAccount.AccountType.BANK).build();
+        when(accountRepository.findByIdAndUserId(id, user.getId())).thenReturn(Optional.of(conta));
+
+        assertThatThrownBy(() -> service.declareCreditLimit(EMAIL, id, new BigDecimal("100"), null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("cartão");
+    }
+
+    @Test
+    @DisplayName("ninguém divide limite consigo mesmo")
+    void declareCreditLimitRecusaAutoReferencia() {
+        UUID id = UUID.randomUUID();
+        when(accountRepository.findByIdAndUserId(id, user.getId())).thenReturn(Optional.of(cartaoDe(id)));
+
+        assertThatThrownBy(() -> service.declareCreditLimit(EMAIL, id, null, id))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    /**
+     * Um degrau só. Corrente de ponteiros faria a soma de crédito depender da
+     * ordem em que as contas são lidas — e ninguém consegue explicar isso em
+     * uma frase na tela.
+     */
+    @Test
+    @DisplayName("não dá para apontar para um cartão que já aponta para outro")
+    void declareCreditLimitRecusaCorrente() {
+        UUID id = UUID.randomUUID();
+        UUID meioId = UUID.randomUUID();
+        ConnectorAccount meio = cartaoDe(meioId);
+        meio.setCreditLimitSharedWith(UUID.randomUUID());
+        when(accountRepository.findByIdAndUserId(id, user.getId())).thenReturn(Optional.of(cartaoDe(id)));
+        when(accountRepository.findByIdAndUserId(meioId, user.getId())).thenReturn(Optional.of(meio));
+
+        assertThatThrownBy(() -> service.declareCreditLimit(EMAIL, id, null, meioId))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("dono do limite");
+    }
+
+    private ConnectorAccount cartaoDe(UUID id) {
+        return ConnectorAccount.builder()
+                .id(id).user(user).providerAccountId("card-" + id)
+                .name("Cartão").type(ConnectorAccount.AccountType.CREDIT_CARD).build();
     }
 }

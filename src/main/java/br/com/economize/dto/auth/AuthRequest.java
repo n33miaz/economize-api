@@ -1,6 +1,7 @@
 package br.com.economize.dto.auth;
 
 import io.swagger.v3.oas.annotations.media.Schema;
+import jakarta.validation.constraints.NotBlank;
 import lombok.Data;
 
 /**
@@ -11,7 +12,17 @@ import lombok.Data;
  */
 @Data
 public class AuthRequest {
+
+    @NotBlank(message = "Informe seu e-mail")
     private String email;
+
+    /**
+     * Sem piso de tamanho aqui, e é de propósito: o piso de 8 caracteres vale
+     * para CRIAR e TROCAR senha. Cobrá-lo no login trancaria para fora quem
+     * criou a conta antes da regra existir — punindo o usuário por um defeito
+     * nosso em vez de corrigi-lo.
+     */
+    @NotBlank(message = "Informe sua senha")
     private String password;
 
     /**

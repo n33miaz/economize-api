@@ -1,8 +1,12 @@
 package br.com.economize.controller;
 
+import br.com.economize.dto.account.AccountMergeSuggestion;
 import br.com.economize.dto.account.AccountResponse;
+import br.com.economize.dto.account.MergeAccountRequest;
+import br.com.economize.service.AccountMergeService;
 import br.com.economize.service.BalanceReconciliationService;
 import br.com.economize.dto.account.CreateAccountRequest;
+import br.com.economize.dto.account.DeclareCreditLimitRequest;
 import br.com.economize.dto.account.CardInvoicesResponse;
 import br.com.economize.dto.account.UpsertInvoiceReserveRequest;
 import br.com.economize.service.CardInvoiceService;
@@ -15,6 +19,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -28,6 +33,7 @@ import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 @RestController
@@ -40,6 +46,7 @@ public class AccountController {
 
     private final ConnectorAccountService accountService;
     private final BalanceReconciliationService balanceReconciliationService;
+    private final AccountMergeService mergeService;
     private final CardInvoiceService cardInvoiceService;
     private final InvoiceReserveService invoiceReserveService;
 
@@ -86,6 +93,54 @@ public class AccountController {
         return Mono.fromCallable(() -> AccountResponse.from(accountService.createManual(
                         email, request.name(), request.institution(), request.type(),
                         request.statementClosingDay(), request.statementDueDay())))
+                .subscribeOn(Schedulers.boundedElastic());
+    }
+
+    @Operation(summary = "Informar o limite de um cartão",
+            description = "O limite NÃO vem em arquivo nenhum: a fatura declara o valor devido, não o "
+                    + "limite, e o agregador só devolve o dado em parte das instituições. Quem sabe é o dono "
+                    + "do cartão. Mande `sharedWithAccountId` quando este cartão divide a bolsa de outro "
+                    + "(virtual, adicional) — nesse caso ele não entra na soma de crédito disponível. Os dois "
+                    + "campos nulos APAGAM o que estava informado.")
+    @PatchMapping("/{accountId}/credit-limit")
+    public Mono<AccountResponse> declareCreditLimit(
+            @AuthenticationPrincipal String email,
+            @PathVariable UUID accountId,
+            @Valid @RequestBody DeclareCreditLimitRequest request) {
+        return Mono.fromCallable(() -> AccountResponse.from(accountService.declareCreditLimit(
+                        email, accountId, request.creditLimit(), request.sharedWithAccountId())))
+                .subscribeOn(Schedulers.boundedElastic());
+    }
+
+    @Operation(summary = "Pares de origens que parecem a mesma conta",
+            description = "Quando o mesmo banco entra por arquivo E por conector, o app fica com DUAS "
+                    + "origens para a mesma conta — e toda tela que agrupa por origem mostra o banco "
+                    + "repetido, com números diferentes. Medido na conta do dono: 1.632 de 1.967 "
+                    + "lançamentos moravam na origem solta do Inter, e o saldo só existia na ligada. A "
+                    + "adoção automática não cobre o caso porque exige nome e instituição iguais, e "
+                    + "afrouxá-la misturaria histórico de cartões diferentes. O sinal aqui são os últimos "
+                    + "dígitos do rótulo mais o tipo; a decisão continua sendo do dono da conta.")
+    @GetMapping("/merge-suggestions")
+    public Mono<List<AccountMergeSuggestion>> mergeSuggestions(@AuthenticationPrincipal String email) {
+        return Mono.fromCallable(() -> mergeService.suggestionsFor(email))
+                .subscribeOn(Schedulers.boundedElastic());
+    }
+
+    @Operation(summary = "Juntar duas origens que são a mesma conta",
+            description = "Move TUDO da origem do caminho para `intoAccountId` e apaga a que ficou vazia: "
+                    + "lançamentos e reservas de fatura. A que desaparece tem de ser a DESVINCULADA — a "
+                    + "ligada é quem continua sincronizando, e o conector a recriaria na próxima leitura. "
+                    + "Responde 400 para tipos diferentes, para a mesma conta duas vezes, e quando se "
+                    + "tenta apagar a origem ligada.")
+    @PostMapping("/{accountId}/merge")
+    public Mono<Map<String, Object>> merge(
+            @AuthenticationPrincipal String email,
+            @PathVariable UUID accountId,
+            @Valid @RequestBody MergeAccountRequest request) {
+        return Mono.fromCallable(() -> {
+                    int movidos = mergeService.merge(email, accountId, request.intoAccountId());
+                    return Map.<String, Object>of("movedTransactions", movidos);
+                })
                 .subscribeOn(Schedulers.boundedElastic());
     }
 
