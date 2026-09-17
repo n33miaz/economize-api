@@ -45,8 +45,56 @@ public class PluggyItem {
     @Column(name = "created_at", updatable = false)
     private OffsetDateTime createdAt;
 
+    // QUANDO NOS lemos o Pluggy. Nao diz nada sobre a idade do dado: o sync
+    // pode responder 200 lendo um retrato que o Pluggy coletou do banco ha um
+    // mes. Ver V37 para o caso que obrigou a separar os tres tempos.
     @Column(name = "last_synced_at")
     private OffsetDateTime lastSyncedAt;
+
+    // Estado declarado pelo provedor: UPDATED, LOGIN_ERROR, WAITING_USER_INPUT,
+    // OUTDATED. Nulo = nunca perguntamos.
+    @Column(name = "status", length = 40)
+    private String status;
+
+    @Column(name = "execution_status", length = 60)
+    private String executionStatus;
+
+    @Column(name = "status_detail", length = 400)
+    private String statusDetail;
+
+    // QUANDO O PLUGGY leu o banco. E esta a idade real do que o usuario ve.
+    @Column(name = "provider_updated_at")
+    private OffsetDateTime providerUpdatedAt;
+
+    // Quando pedimos coleta nova. Existe para nao pedir em rajada: o Pluggy
+    // cobra por atualizacao e o banco do outro lado tem limite proprio.
+    @Column(name = "update_requested_at")
+    private OffsetDateTime updateRequestedAt;
+
+    /**
+     * Ha quantas horas o BANCO foi lido. Vazio quando nunca perguntamos.
+     *
+     * <p>Fica no modelo, e nao na tela, porque "o dado esta velho" e uma regra
+     * do dominio: a mesma resposta serve o app, o relatorio e o vigia.
+     */
+    public java.util.OptionalLong horasDesdeAColeta() {
+        if (providerUpdatedAt == null) return java.util.OptionalLong.empty();
+        return java.util.OptionalLong.of(
+                java.time.Duration.between(providerUpdatedAt, OffsetDateTime.now()).toHours());
+    }
+
+    /**
+     * A conexao precisa de atencao do usuario?
+     *
+     * <p>Duas situacoes diferentes, mesma consequencia pratica: ou o provedor
+     * diz que travou (credencial, segundo fator), ou ele nao trava mas tambem
+     * nao coleta ha mais de um dia — foi exatamente este segundo caso que
+     * deixou nove compras de cartao de fora sem nenhum erro aparecer.
+     */
+    public boolean precisaDeAtencao() {
+        if (status != null && !"UPDATED".equalsIgnoreCase(status)) return true;
+        return horasDesdeAColeta().orElse(0) > 24;
+    }
 
     @PrePersist
     protected void onCreate() {

@@ -112,6 +112,51 @@ public class PluggyClient {
     }
 
     /**
+     * PATCH /items/{id} — PEDE ao Pluggy uma coleta nova no banco.
+     *
+     * <p><b>O que faltava.</b> Todo o resto deste cliente apenas LÊ o que o
+     * Pluggy já tem guardado. Em 17/09/2026 isso apareceu na conta do dono da
+     * pior forma: o sync respondia 200 com {@code itemsSynced: 5} e
+     * {@code transactionsImported: 0}, o saldo até mudava — e nove compras de
+     * cartão entre 05/09 e 14/09 simplesmente não existiam, porque o Pluggy não
+     * visitava o banco desde 14/08. Ler mais vezes um retrato velho não traz
+     * nada novo; é preciso pedir um retrato novo.
+     *
+     * <p>A chamada é assíncrona do lado deles: devolve o item com
+     * {@code executionStatus} em andamento e a coleta termina depois. Por isso
+     * aqui não se espera nada — grava-se o que voltou e o próximo sync lê o
+     * resultado. Esperar bloquearia uma requisição HTTP por minutos num
+     * container de 512 MB.
+     *
+     * <p>Devolve null quando o item não existe mais (404) ou quando o provedor
+     * recusa a atualização (por exemplo, conexão que exige segundo fator e só
+     * pode ser refeita pela pessoa). Recusa é resposta legítima, não falha
+     * nossa: quem trata é o chamador, marcando a conexão como precisando de
+     * atenção.
+     */
+    public Map<String, Object> requestUpdate(String apiKey, String itemId) {
+        try {
+            return webClient.patch()
+                    .uri(baseUrl + "/items/{itemId}", itemId)
+                    .header("X-API-KEY", apiKey)
+                    .bodyValue(Map.of())
+                    .retrieve()
+                    .bodyToMono(new ParameterizedTypeReference<Map<String, Object>>() {
+                    })
+                    .block();
+        } catch (WebClientResponseException.NotFound e) {
+            return null;
+        } catch (WebClientResponseException e) {
+            // 400/403 aqui significa "esta conexão não pode ser atualizada
+            // sozinha" — credencial vencida, segundo fator, consentimento
+            // revogado. Sem itemId no log: é identificador de terceiro.
+            log.warn("Pluggy recusou atualizar uma conexão ({}). Ela será marcada como precisando de atenção.",
+                    e.getStatusCode());
+            return null;
+        }
+    }
+
+    /**
      * DELETE /items/{id} — apaga a conexão no Pluggy (revoga o consentimento no
      * agregador). 404 conta como sucesso: o item já não existia lá.
      */

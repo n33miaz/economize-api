@@ -103,7 +103,11 @@ class PluggyOpenFinanceProviderTest {
         UUID id = UUID.randomUUID();
         OffsetDateTime criado = OffsetDateTime.parse("2026-08-15T12:00:00Z");
         OffsetDateTime sync = OffsetDateTime.parse("2026-08-16T12:00:00Z");
-        PluggyItemResponse item = new PluggyItemResponse(id, "item-1", 612L, "Nubank", criado, sync);
+        // A resposta ganhou a saude da conexao em 17/09/2026 (ver V37). Aqui a
+        // conexao e sadia de proposito: o que este teste cobra e a TRADUCAO para
+        // a resposta neutra, e uma conexao com problema mereceria teste proprio.
+        PluggyItemResponse item = new PluggyItemResponse(id, "item-1", 612L, "Nubank", criado, sync,
+                "UPDATED", "SUCCESS", null, sync, 0L, false);
         when(itemService.register(EMAIL, "item-1")).thenReturn(item);
         when(itemService.list(EMAIL)).thenReturn(List.of(item));
 

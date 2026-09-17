@@ -16,6 +16,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -80,6 +81,12 @@ public class PluggySyncService {
 
     private final PluggyClient pluggyClient;
     private final UserRepository userRepository;
+    // De quantas em quantas horas um retrato vira "velho". Banco nao publica
+    // lancamento de minuto em minuto; 6 horas pega o mesmo dia sem queimar cota.
+    private static final long HORAS_ATE_PEDIR_COLETA = 6;
+    // Intervalo minimo entre dois PEDIDOS de coleta para o mesmo item.
+    private static final long HORAS_ENTRE_PEDIDOS = 6;
+
     private final PluggyItemRepository pluggyItemRepository;
     private final PluggyItemService pluggyItemService;
     private final BankStatementService bankStatementService;
@@ -130,6 +137,12 @@ public class PluggySyncService {
             throw new IllegalArgumentException(
                     "Nenhuma conexão Pluggy registrada — conecte uma instituição pelo app antes de sincronizar");
         }
+
+        // ANTES de ler qualquer coisa: conferir a saude de cada conexao e, se o
+        // retrato estiver velho, PEDIR um novo. Ler de novo um retrato velho
+        // devolve o mesmo retrato velho — foi assim que nove compras de cartao
+        // de setembro ficaram de fora enquanto o sync respondia 200. Ver V37.
+        conferirSaude(apiKey, items);
 
         LocalDate to = LocalDate.now(ZoneOffset.UTC);
         LocalDate from = to.minusDays(days);
@@ -466,4 +479,87 @@ public class PluggySyncService {
     /** Resultado da importação + quantas conexões foram percorridas. */
     public record SyncResult(BankStatementService.ImportResult result, int itemsSynced) {
     }
+
+    /**
+     * Le o estado de cada conexao no provedor e pede coleta nova quando o dado
+     * esta velho.
+     *
+     * <p><b>Por que existe.</b> Ate 17/09/2026 o sync so lia. O Pluggy guarda o
+     * ultimo retrato que ELE coletou do banco; se ninguem pedir atualizacao,
+     * esse retrato envelhece sem nenhum erro aparecer. Na conta do dono o
+     * retrato era de 14/08: o saldo vinha, a fatura do mes saia com total
+     * R$ 0,00 e nove compras entre 05/09 e 14/09 nao existiam.
+     *
+     * <p><b>Por que nao espera.</b> A coleta do outro lado leva de segundos a
+     * minutos e depende do banco. Bloquear a requisicao HTTP por isso, num
+     * container de 512 MB com uma CPU, seria trocar um dado velho por um
+     * timeout. Pedimos, gravamos o estado, e o proximo sync colhe o resultado.
+     *
+     * <p><b>Por que so a cada 6 horas.</b> Cada atualizacao e cobrada pelo
+     * provedor e o banco do outro lado tem limite proprio. Pedir a cada toque
+     * de "sincronizar" queimaria cota sem trazer nada — bancos nao publicam
+     * lancamento de minuto em minuto.
+     *
+     * <p>Falha aqui NAO derruba a sincronizacao: dado velho e melhor que tela
+     * vazia, desde que o app possa dizer que ele e velho — e agora pode.
+     */
+    private void conferirSaude(String apiKey, List<PluggyItem> items) {
+        OffsetDateTime agora = OffsetDateTime.now();
+        for (PluggyItem item : items) {
+            try {
+                Map<String, Object> detalhe = pluggyClient.item(apiKey, item.getItemId());
+                if (detalhe == null) {
+                    // o item sumiu do provedor: consentimento revogado la fora
+                    item.setStatus("NOT_FOUND");
+                    item.setStatusDetail("A conexao nao existe mais no provedor. E preciso conectar de novo.");
+                    continue;
+                }
+                aplicarEstado(item, detalhe);
+
+                boolean velho = item.horasDesdeAColeta().orElse(Long.MAX_VALUE) >= HORAS_ATE_PEDIR_COLETA;
+                boolean pedidoRecente = item.getUpdateRequestedAt() != null
+                        && Duration.between(item.getUpdateRequestedAt(), agora).toHours() < HORAS_ENTRE_PEDIDOS;
+                if (velho && !pedidoRecente) {
+                    item.setUpdateRequestedAt(agora);
+                    Map<String, Object> apos = pluggyClient.requestUpdate(apiKey, item.getItemId());
+                    if (apos != null) {
+                        aplicarEstado(item, apos);
+                    } else {
+                        // recusa do provedor: so a pessoa resolve
+                        item.setStatus("NEEDS_USER_ACTION");
+                        item.setStatusDetail("O provedor nao consegue atualizar sozinho. "
+                                + "Reconecte esta instituicao pelo app.");
+                    }
+                }
+            } catch (RuntimeException e) {
+                // conferir saude e melhoria, nao pre-requisito: se falhar, o
+                // sync segue com o que der para ler
+                log.warn("Nao consegui conferir a saude de uma conexao ({}); a sincronizacao segue.",
+                        e.getClass().getSimpleName());
+            }
+        }
+    }
+
+    /** Copia o estado declarado pelo provedor para o nosso registro. */
+    private void aplicarEstado(PluggyItem item, Map<String, Object> detalhe) {
+        item.setStatus(text(detalhe.get("status")));
+        item.setExecutionStatus(text(detalhe.get("executionStatus")));
+        Object erro = detalhe.get("error");
+        if (erro instanceof Map<?, ?> mapa) {
+            Object msg = mapa.get("message");
+            item.setStatusDetail(msg == null ? null : String.valueOf(msg).substring(0,
+                    Math.min(400, String.valueOf(msg).length())));
+        }
+        // `lastUpdatedAt` e QUANDO O PLUGGY LEU O BANCO — a idade real do dado.
+        // Nao confundir com o nosso last_synced_at, que e quando nos lemos ele.
+        String coletadoEm = text(detalhe.get("lastUpdatedAt"));
+        if (coletadoEm != null) {
+            try {
+                item.setProviderUpdatedAt(OffsetDateTime.parse(coletadoEm));
+            } catch (java.time.format.DateTimeParseException ignorada) {
+                // formato de terceiro: nao derrubar o sync por causa dele
+            }
+        }
+    }
+
 }
