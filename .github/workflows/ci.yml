@@ -125,6 +125,35 @@ jobs:
             exit 1
           fi
 
+      - name: Contrato OpenAPI em dia
+        # A documentação da API deixou de ser servida em produção (o springdoc
+        # levantava o piso de memória de forma permanente por uma página que
+        # ninguém abre lá). Em troca, o contrato virou ARQUIVO VERSIONADO, e
+        # este passo é o que garante que ele não envelhece: o app já está de pé
+        # com o schema real, então o contrato sai dele e é comparado com o que
+        # está commitado. Rota nova sem regenerar o arquivo quebra aqui, e não
+        # na cara de quem for consumir a API.
+        run: |
+          curl -sf http://localhost:8080/v3/api-docs             | python3 scripts/normalizar-openapi.py > /tmp/openapi-gerado.json
+          if ! diff -u docs/openapi.json /tmp/openapi-gerado.json > /tmp/openapi.diff; then
+            echo "::error::docs/openapi.json ficou para trás do código."
+            echo "Regenere com a API de pé e commite:"
+            echo "  curl -sf http://localhost:8080/v3/api-docs | python3 scripts/normalizar-openapi.py > docs/openapi.json"
+            echo "--- primeiras 80 linhas da diferença ---"
+            head -80 /tmp/openapi.diff
+            exit 1
+          fi
+          rotas=$(python3 -c "import json;print(len(json.load(open('docs/openapi.json'))['paths']))")
+          echo "contrato em dia: $rotas rotas"
+
+      - name: Publicar o contrato como artefato
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: openapi
+          path: docs/openapi.json
+          if-no-files-found: ignore
+
       - name: Log da aplicação
         if: always()
         run: tail -40 boot.log || true
