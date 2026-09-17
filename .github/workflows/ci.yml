@@ -50,7 +50,13 @@ jobs:
     # Este job existe porque migration só é verificada EXECUTANDO. A suíte roda
     # com `spring.flyway.enabled=false` em H2, então nada nela toca num arquivo
     # de migration — e o primeiro lugar onde eles rodavam de verdade era a conta
-    # do dono. Aqui o schema nasce do zero a cada push: o Flyway aplica V1 até a
+    # do dono.
+    #
+    # DESDE 17/09/2026 ELE É O ÚNICO ENSAIO. O ambiente de homologação foi
+    # aposentado (o Postgres gratuito do Render expira; ver `render.homolog.yaml`
+    # para recriá-lo), então este job deixou de ser rede extra e passou a ser a
+    # rede. Desligar ou ignorar este job é aceitar que a primeira execução de
+    # verdade de uma migration aconteça na conta do dono. Aqui o schema nasce do zero a cada push: o Flyway aplica V1 até a
     # última e o Hibernate valida o mapeamento contra o que saiu, que é a mesma
     # dupla de erros que derruba um deploy (SQL inválido e coluna que não bate).
     services:
