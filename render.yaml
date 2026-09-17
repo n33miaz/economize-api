@@ -48,6 +48,15 @@ services:
       # os testes; TIRAR antes do lancamento publico.
       - key: CORS_ALLOWED_ORIGINS
         value: https://economize-web.onrender.com,http://localhost:8081,http://localhost:19006
+      # A documentacao da API sai do ar AQUI, e so aqui. Medido em 16/09/2026:
+      # o metaspace estava em 118 MB de 128, e o springdoc e um dos maiores
+      # inquilinos — ele carrega o WebJar da interface e monta o modelo inteiro
+      # (120 rotas, 161 schemas) na primeira chamada, e guarda dali em diante.
+      # Em troca, o contrato virou arquivo versionado (docs/openapi.json,
+      # conferido pela esteira a cada push) e o site publica ele. Quem avalia
+      # continua vendo a documentacao; a producao para de pagar por ela.
+      - key: SPRINGDOC_ENABLED
+        value: "false"
       - key: GEMINI_API_KEY
         sync: false
       - key: BRAPI_TOKEN
@@ -150,8 +159,38 @@ services:
       # que alguem abre /v3/api-docs ou /swagger-ui, e guarda em memoria dali
       # em diante. Num container de 512 MB isso levanta o piso de forma
       # permanente por uma pagina que so o desenvolvedor abre.
+      #
+      # TERCEIRA RODADA — 16/09/2026, e desta vez o numero errado era MEU.
+      #
+      # O Render avisou "Exited with status 3". Status 3 e exatamente o codigo
+      # que o -XX:+ExitOnOutOfMemoryError acima produz: a JVM viu
+      # OutOfMemoryError e saiu na hora, de proposito. A flag funcionou; o teto
+      # e que estava apertado demais.
+      #
+      # MEDIDO pelo actuator na instancia reiniciada (7 leituras em 6 minutos,
+      # uptime subindo, sem reinicio no meio):
+      #   heap ........ teto 216,6 MB   em uso 112-122 MB
+      #   Metaspace ... teto 128,0 MB   em uso 118,0 MB  <-- 92% do teto
+      #   CodeCache ... teto  48,0 MB   em uso  30,0 MB
+      #   committed total: 382 MB de JVM + pilhas + nativo = 440-470 de 512
+      #
+      # A rodada anterior BAIXOU o MaxMetaspaceSize de 140m (o que estava no
+      # painel) para 128m. Metaspace nao e compressivel: e quantas classes o
+      # Spring carrega, e a aplicacao precisa de 118 so para subir. Sobravam
+      # 10 MB, e qualquer classe carregada tarde (rota ainda nao tocada, proxy,
+      # serializador de DTO) estourava.
+      #
+      # A correcao nao e somar memoria — e TIRAR DO HEAP E DAR AO METASPACE.
+      # O heap tinha 216 de teto para 122 de uso; o metaspace nao tinha folga
+      # nenhuma.
+      #   heap 192 + metaspace 176 + direto 32 + code cache 40
+      #   + ~40 threads a 512k (20) + estruturas da JVM (~25) = ~485 de teto,
+      #   com committed real perto de 355 + nativo.
+      #
+      # Nao entra -XX:+HeapDumpOnOutOfMemoryError: o dump nao caberia no disco
+      # efemero e, num estouro de metaspace, nao e o artefato util.
       - key: JAVA_OPTS
-        value: -Xmx224m -XX:MaxMetaspaceSize=128m -XX:MaxDirectMemorySize=32m -XX:ReservedCodeCacheSize=48m -Xss512k -XX:+UseSerialGC -XX:+ExitOnOutOfMemoryError
+        value: -Xmx192m -XX:MaxMetaspaceSize=176m -XX:MaxDirectMemorySize=32m -XX:ReservedCodeCacheSize=40m -Xss512k -XX:+UseSerialGC -XX:+ExitOnOutOfMemoryError
 
   # --------------------------------------------------------------------------
   # HOMOLOGAÇÃO — o ambiente onde a migration estreia
@@ -203,6 +242,11 @@ services:
         generateValue: true
       - key: CORS_ALLOWED_ORIGINS
         value: https://economize-web-homolog.onrender.com,http://localhost:8081,http://localhost:19006
+      # LIGADO aqui de proposito: homologacao e onde se abre o Swagger para
+      # conferir uma rota nova antes de ela virar producao, e o ambiente nao
+      # atende usuario de verdade
+      - key: SPRINGDOC_ENABLED
+        value: "true"
       # As chaves de terceiros ficam VAZIAS de propósito. A API sobe sem elas —
       # o mercado cai para as fontes gratuitas e a IA fica desligada —, e gastar
       # cota de API paga com tráfego de homologação seria pagar duas vezes pela
@@ -252,8 +296,38 @@ services:
       # que alguem abre /v3/api-docs ou /swagger-ui, e guarda em memoria dali
       # em diante. Num container de 512 MB isso levanta o piso de forma
       # permanente por uma pagina que so o desenvolvedor abre.
+      #
+      # TERCEIRA RODADA — 16/09/2026, e desta vez o numero errado era MEU.
+      #
+      # O Render avisou "Exited with status 3". Status 3 e exatamente o codigo
+      # que o -XX:+ExitOnOutOfMemoryError acima produz: a JVM viu
+      # OutOfMemoryError e saiu na hora, de proposito. A flag funcionou; o teto
+      # e que estava apertado demais.
+      #
+      # MEDIDO pelo actuator na instancia reiniciada (7 leituras em 6 minutos,
+      # uptime subindo, sem reinicio no meio):
+      #   heap ........ teto 216,6 MB   em uso 112-122 MB
+      #   Metaspace ... teto 128,0 MB   em uso 118,0 MB  <-- 92% do teto
+      #   CodeCache ... teto  48,0 MB   em uso  30,0 MB
+      #   committed total: 382 MB de JVM + pilhas + nativo = 440-470 de 512
+      #
+      # A rodada anterior BAIXOU o MaxMetaspaceSize de 140m (o que estava no
+      # painel) para 128m. Metaspace nao e compressivel: e quantas classes o
+      # Spring carrega, e a aplicacao precisa de 118 so para subir. Sobravam
+      # 10 MB, e qualquer classe carregada tarde (rota ainda nao tocada, proxy,
+      # serializador de DTO) estourava.
+      #
+      # A correcao nao e somar memoria — e TIRAR DO HEAP E DAR AO METASPACE.
+      # O heap tinha 216 de teto para 122 de uso; o metaspace nao tinha folga
+      # nenhuma.
+      #   heap 192 + metaspace 176 + direto 32 + code cache 40
+      #   + ~40 threads a 512k (20) + estruturas da JVM (~25) = ~485 de teto,
+      #   com committed real perto de 355 + nativo.
+      #
+      # Nao entra -XX:+HeapDumpOnOutOfMemoryError: o dump nao caberia no disco
+      # efemero e, num estouro de metaspace, nao e o artefato util.
       - key: JAVA_OPTS
-        value: -Xmx224m -XX:MaxMetaspaceSize=128m -XX:MaxDirectMemorySize=32m -XX:ReservedCodeCacheSize=48m -Xss512k -XX:+UseSerialGC -XX:+ExitOnOutOfMemoryError
+        value: -Xmx192m -XX:MaxMetaspaceSize=176m -XX:MaxDirectMemorySize=32m -XX:ReservedCodeCacheSize=40m -Xss512k -XX:+UseSerialGC -XX:+ExitOnOutOfMemoryError
 
 # ----------------------------------------------------------------------------
 # O banco de homologação. Fica no Render, e não no Supabase, por dois motivos:
