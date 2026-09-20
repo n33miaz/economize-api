@@ -1,0 +1,75 @@
+name: Manter acordado
+
+# A API vive num plano gratuito que DERRUBA a instância depois de alguns
+# minutos sem tráfego. O custo disso foi medido: a primeira carga do dia levou
+# 229 segundos, e o Render respondia 503 com `x-render-routing:
+# hibernate-wake-error` enquanto reerguia o container. Para quem abre o app, é
+# indistinguível de aplicativo quebrado.
+#
+# Este workflow existe para que isso não aconteça: uma batida no health a cada
+# 10 minutos mantém a instância de pé. E resolve um segundo problema de graça —
+# o banco no Supabase também PAUSA por inatividade, e foi exatamente isso que
+# derrubou produção em 29/08/2026. Uma requisição que toca o banco (o health
+# valida a conexão) mantém os dois acordados.
+#
+# O que isto NÃO é: não é monitoramento. Se a API estiver fora, aqui não há
+# quem avisar. É só o dedo que impede o serviço de dormir.
+#
+# ORÇAMENTO, e a razão de existir UM único serviço aquecido: o plano gratuito
+# dá um número fixo de horas de instância por mês. Uma instância acordada 24/7
+# consome ~730 h. Cabe para um serviço; para dois (produção e homologação), não.
+# É por isso que homologação continua dormindo de propósito.
+
+on:
+  schedule:
+    # A cada 10 minutos. O tempo de inatividade que derruba a instância é da
+    # ordem de 15 min, então 10 dá margem para o atraso de fila do agendador
+    # do GitHub, que não é pontual e pode passar de 5 minutos em hora cheia.
+    - cron: "*/10 * * * *"
+  # Para conferir na mão depois de mexer em deploy
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Duas batidas simultâneas não servem para nada
+concurrency:
+  group: manter-acordado
+  cancel-in-progress: true
+
+jobs:
+  acordar:
+    name: Bater no health da produção
+    runs-on: ubuntu-latest
+    # Cold start real já passou de 200 s; o teto aqui tem de caber nisso
+    timeout-minutes: 8
+    steps:
+      - name: GET /actuator/health
+        run: |
+          inicio=$(date +%s)
+          # --max-time cobre o pior caso de container dormindo
+          codigo=$(curl -sS -o /tmp/health.json -w "%{http_code}" \
+            --max-time 300 --retry 2 --retry-delay 15 --retry-all-errors \
+            https://economize-api.onrender.com/actuator/health || echo "000")
+          segundos=$(( $(date +%s) - inicio ))
+          echo "HTTP $codigo em ${segundos}s"
+          cat /tmp/health.json 2>/dev/null | head -c 400 || true
+          echo
+
+          # Acordar é o objetivo; o estado do banco é o que diz se acordou de
+          # verdade. Um 200 com o banco fora seria falso conforto.
+          if [ "$codigo" != "200" ]; then
+            echo "::warning::A API respondeu $codigo. Se repetir, vale olhar o log do Render."
+            exit 0
+          fi
+          if grep -q '"status":"UP"' /tmp/health.json; then
+            echo "acordada e saudável"
+          else
+            echo "::warning::Health respondeu 200 mas não está UP — conferir o banco."
+          fi
+
+          # Um cold start longo é sinal de que a instância tinha dormido, ou
+          # seja, de que a batida anterior falhou. Registrar sem quebrar.
+          if [ "$segundos" -gt 60 ]; then
+            echo "::warning::Levou ${segundos}s — a instância estava dormindo."
+          fi
