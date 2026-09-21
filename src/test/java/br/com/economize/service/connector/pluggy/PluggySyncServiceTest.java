@@ -521,7 +521,10 @@ class PluggySyncServiceTest {
                 Map.of("id", "acc-card", "type", "CREDIT", "name", "Mastercard Black",
                         "marketingName", "Ultravioleta", "number", "1234",
                         "creditData", Map.of("balanceCloseDate", "2026-08-10",
-                                "balanceDueDate", "2026-08-17"))));
+                                "balanceDueDate", "2026-08-17",
+                                // o limite total vem no mesmo bloco; o disponível
+                                // é limite menos devido e fica de fora
+                                "creditLimit", "5330.01", "availableCreditLimit", "3992.06"))));
         when(pluggyClient.transactions(eq("api-key"), eq("acc-bank"), any(LocalDate.class), any(LocalDate.class)))
                 .thenReturn(List.of(Map.of("id", "b1", "amount", "-50.00", "date", "2026-08-10",
                         "description", "SUPERMERCADO")));
@@ -548,6 +551,8 @@ class PluggySyncServiceTest {
         // do metadado do provedor guardamos só o DIA, que é o que se repete
         assertThat(cartao.statementClosingDay()).isEqualTo(10);
         assertThat(cartao.statementDueDay()).isEqualTo(17);
+        // o limite TOTAL do cartão viaja no snapshot (o disponível não)
+        assertThat(cartao.creditLimit()).isEqualByComparingTo("5330.01");
 
         ConnectorAccountService.AccountSnapshot conta = snapshots.getAllValues().stream()
                 .filter(s -> "acc-bank".equals(s.providerAccountId())).findFirst().orElseThrow();
