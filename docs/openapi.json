@@ -899,6 +899,10 @@
       },
       "CloseTrip": {
         "properties": {
+          "receiptKey": {
+            "pattern": "^\\d{44}$",
+            "type": "string"
+          },
           "receiptTotal": {
             "minimum": 0.0,
             "type": "number"
@@ -4545,6 +4549,12 @@
           "ownerName": {
             "type": "string"
           },
+          "receiptIssuerCnpj": {
+            "type": "string"
+          },
+          "receiptKey": {
+            "type": "string"
+          },
           "receiptTotal": {
             "type": "number"
           },
@@ -5043,6 +5053,10 @@
           "notes": {
             "maxLength": 500,
             "minLength": 0,
+            "type": "string"
+          },
+          "receiptKey": {
+            "pattern": "^\\d{44}$",
             "type": "string"
           },
           "receiptTotal": {
