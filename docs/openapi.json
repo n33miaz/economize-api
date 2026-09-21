@@ -2186,6 +2186,9 @@
             "format": "date",
             "type": "string"
           },
+          "providerBill": {
+            "$ref": "#/components/schemas/ProviderBill"
+          },
           "purchasesTotal": {
             "type": "number"
           },
@@ -3465,6 +3468,35 @@
             "type": "number"
           },
           "workYears": {
+            "type": "number"
+          }
+        },
+        "type": "object"
+      },
+      "ProviderBill": {
+        "properties": {
+          "allowsInstallments": {
+            "type": "boolean"
+          },
+          "closingDate": {
+            "format": "date",
+            "type": "string"
+          },
+          "dueDate": {
+            "format": "date",
+            "type": "string"
+          },
+          "financeCharges": {
+            "type": "number"
+          },
+          "minimumPayment": {
+            "type": "number"
+          },
+          "syncedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "total": {
             "type": "number"
           }
         },

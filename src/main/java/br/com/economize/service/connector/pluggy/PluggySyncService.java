@@ -91,6 +91,7 @@ public class PluggySyncService {
     private final PluggyItemService pluggyItemService;
     private final BankStatementService bankStatementService;
     private final ConnectorAccountService accountService;
+    private final CardBillService cardBillService;
 
     /**
      * Contrato do APK publicado: enabled/owner/configured/itemCount existem e
@@ -224,6 +225,16 @@ public class PluggySyncService {
                 parsed.size(), from, to, items.size(), user.getId());
         BankStatementService.ImportResult result =
                 bankStatementService.importFromConnector(user, "Meu Pluggy", StatementFormat.PLUGGY, parsed);
+
+        // As faturas do provedor vêm DEPOIS do extrato e nunca o derrubam:
+        // extrato é o produto, fatura é enriquecimento. Foi assim que o
+        // investimento ficou meses sem aparecer — a lição é não acoplar o
+        // opcional ao essencial.
+        try {
+            cardBillService.sync(user, apiKey, items);
+        } catch (Exception e) {
+            log.warn("Faturas do provedor não lidas nesta sincronização: {}", e.getMessage());
+        }
 
         // o carimbo vem depois da importação: sync que falhou não conta
         OffsetDateTime now = OffsetDateTime.now();

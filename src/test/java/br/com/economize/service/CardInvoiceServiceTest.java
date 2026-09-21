@@ -60,6 +60,9 @@ class CardInvoiceServiceTest {
     @Mock
     private InvoiceReserveService reserveService;
 
+    @Mock
+    private br.com.economize.repository.CardBillRepository cardBillRepository;
+
     private CardInvoiceService service;
 
     private User user;
@@ -68,10 +71,91 @@ class CardInvoiceServiceTest {
     void setUp() {
         user = User.builder().id(UUID.randomUUID()).email(EMAIL).name("Teste").password("x").build();
         service = new CardInvoiceService(accountService, bankTransactionRepository, userRepository,
-                reserveService);
+                reserveService, cardBillRepository);
+        // sem fatura do provedor é o caso comum: o cartão pode não ter conector,
+        // ou o emissor pode não publicar fatura fechada
+        lenient().when(cardBillRepository.findByAccountIdOrderByClosingDateDesc(any()))
+                .thenReturn(java.util.List.of());
         // sem reserva é o caso comum; os testes do EC-181 sobrescrevem
         lenient().when(reserveService.byReference(any(), any())).thenReturn(Map.of());
         lenient().when(userRepository.findByEmail(EMAIL)).thenReturn(Optional.of(user));
+    }
+
+    // --------------------------------------- a fatura que o BANCO fechou
+
+    @Test
+    @DisplayName("a fatura do banco vem AO LADO da deduzida, e a diferença é o aviso")
+    void faturaDoBancoVemAoLadoDaDeduzida() {
+        ConnectorAccount cartao = card(10, 17);
+        owned(cartao);
+        LocalDate fechamento = closing(YearMonth.now(ZoneOffset.UTC), 10);
+        transactions(cartao, tx(cartao, "-775.67", fechamento.minusDays(2)));
+
+        // O que o emissor fechou: mais do que enxergamos. Na conta do dono a
+        // diferença era de R$ 775,67 contra R$ 2.311,49 — compras que o
+        // conector não trouxe
+        when(cardBillRepository.findByAccountIdOrderByClosingDateDesc(cartao.getId()))
+                .thenReturn(java.util.List.of(bill(fechamento, "2311.49", "347.63")));
+
+        CardInvoicesResponse.Invoice atual = service.invoices(EMAIL, cartao.getId(), 6).invoices().get(0);
+
+        // a nossa conta continua sendo a nossa: ela NÃO é substituída
+        assertThat(atual.total()).isEqualByComparingTo("775.67");
+        assertThat(atual.providerBill()).isNotNull();
+        assertThat(atual.providerBill().total()).isEqualByComparingTo("2311.49");
+        // o mínimo não existe em nenhum outro lugar do app
+        assertThat(atual.providerBill().minimumPayment()).isEqualByComparingTo("347.63");
+    }
+
+    @Test
+    @DisplayName("fatura do banco sem data de fechamento não casa com ciclo nenhum")
+    void faturaSemFechamentoNaoCasa() {
+        ConnectorAccount cartao = card(10, 17);
+        owned(cartao);
+        LocalDate fechamento = closing(YearMonth.now(ZoneOffset.UTC), 10);
+        transactions(cartao, tx(cartao, "-100.00", fechamento.minusDays(2)));
+        // sem fechamento não há por onde casar: cair no ciclo errado seria pior
+        // do que não mostrar
+        when(cardBillRepository.findByAccountIdOrderByClosingDateDesc(cartao.getId()))
+                .thenReturn(java.util.List.of(bill(null, "999.00", "99.00")));
+
+        CardInvoicesResponse.Invoice atual = service.invoices(EMAIL, cartao.getId(), 6).invoices().get(0);
+
+        assertThat(atual.providerBill()).isNull();
+    }
+
+    @Test
+    @DisplayName("duas faturas fechando no mesmo mês: vale a mais nova, que é a reemissão")
+    void reemissaoNoMesmoMesVenceAMaisNova() {
+        ConnectorAccount cartao = card(10, 17);
+        owned(cartao);
+        LocalDate fechamento = closing(YearMonth.now(ZoneOffset.UTC), 10);
+        transactions(cartao, tx(cartao, "-100.00", fechamento.minusDays(2)));
+        // a consulta vem em ordem decrescente de fechamento: a primeira é a mais
+        // nova, e é ela que o usuário recebeu
+        when(cardBillRepository.findByAccountIdOrderByClosingDateDesc(cartao.getId()))
+                .thenReturn(java.util.List.of(
+                        bill(fechamento, "500.00", "50.00"),
+                        bill(fechamento.minusDays(1), "400.00", "40.00")));
+
+        CardInvoicesResponse.Invoice atual = service.invoices(EMAIL, cartao.getId(), 6).invoices().get(0);
+
+        assertThat(atual.providerBill().total()).isEqualByComparingTo("500.00");
+    }
+
+    private br.com.economize.model.CardBill bill(LocalDate fechamento, String total, String minimo) {
+        return br.com.economize.model.CardBill.builder()
+                .id(UUID.randomUUID())
+                .user(user)
+                .accountId(UUID.randomUUID())
+                .externalId("bill-" + UUID.randomUUID())
+                .closingDate(fechamento)
+                .dueDate(fechamento == null ? null : fechamento.plusDays(7))
+                .totalAmount(new java.math.BigDecimal(total))
+                .minimumPayment(new java.math.BigDecimal(minimo))
+                .allowsInstallments(true)
+                .syncedAt(java.time.OffsetDateTime.now())
+                .build();
     }
 
     // ------------------------------------------------- recorte do ciclo
