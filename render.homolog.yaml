@@ -1,0 +1,195 @@
+# Blueprint de HOMOLOGAÇÃO — guardado, não sincronizado.
+#
+# POR QUE ELE ESTÁ AQUI E NÃO NO `render.yaml`. O Postgres gratuito do Render
+# EXPIRA: em 17/09/2026 chegou o aviso de que o `economize-homolog-db` seria
+# suspenso em 08/10 e apagado depois de uma carência. Renovar custaria plano
+# pago, e o dono decidiu aposentar o ambiente.
+#
+# O que se perdeu com isso, dito com honestidade: um lugar para CLICAR antes de
+# produção. O que NÃO se perdeu: o ensaio de migration, que já roda na esteira —
+# o job "Migrations contra Postgres" sobe um Postgres limpo, aplica V1 até a
+# última e valida o mapeamento do Hibernate contra o schema que saiu. Desde a
+# aposentadoria, esse job é o ÚNICO ensaio; tratá-lo como opcional é aceitar que
+# a primeira execução de verdade de uma migration seja na conta do dono.
+#
+# O MOTIVO REAL DE APOSENTAR, que não é o banco: no plano gratuito o recurso
+# escasso é HORA DE INSTÂNCIA. Uma instância acordada 24/7 consome ~730 h/mês, e
+# isso cabe para UM serviço. Produção passou a ser mantida de pé pelo workflow
+# `manter-acordado.yml` justamente porque a primeira carga do dia chegou a levar
+# 229 s. Dois serviços aquecidos não cabem no orçamento.
+#
+# ------------------------------------------------------------------------------
+# COMO TRAZER DE VOLTA (o pedido do dono: "deixe fácil para um novo ambiente de
+# hml no futuro")
+#
+#   1. No Render: New > Blueprint, aponte para este repositório e escolha ESTE
+#      arquivo (`render.homolog.yaml`) como blueprint.
+#   2. Ele cria o serviço `economize-api-homolog` (branch `homolog`) e o banco
+#      `economize-homolog-db`. O Flyway remonta o schema inteiro no primeiro
+#      boot — não há dump para restaurar, e isso é de propósito: homologação não
+#      guarda nada que precise durar.
+#   3. Variáveis que vivem só no painel, se você for testar esses caminhos:
+#      MAIL_* e PLUGGY_*. Sem elas o ambiente sobe igual.
+#   4. No repositório do app, o mesmo procedimento com o `render.homolog.yaml`
+#      dele, que cria o site `economize-web-homolog`.
+#   5. Se produção estiver sendo mantida acordada, confira o orçamento de horas
+#      antes de aquecer o segundo ambiente também.
+#
+# ATENÇÃO ao plano gratuito: o Postgres free volta a expirar em ~30 dias. Este
+# ambiente é para uma rodada de testes, não para ficar de pé.
+# ------------------------------------------------------------------------------
+
+services:
+  # HOMOLOGAÇÃO — o ambiente onde a migration estreia
+  #
+  # A diferença que ele faz: até aqui, toda migration nova estreava contra a
+  # conta que o dono usa de verdade. Agora ela roda primeiro num banco que pode
+  # quebrar sem consequência, com dados de teste, e só depois vai para `main`.
+  #
+  # O banco é criado pelo próprio blueprint (ver `databases` no fim do arquivo),
+  # então não há URL para colar à mão. O Render entrega os dados campo a campo,
+  # e o `application.properties` monta a URL JDBC a partir deles quando DB_URL
+  # não vem preenchida — produção continua usando DB_URL, como sempre.
+  # --------------------------------------------------------------------------
+  - type: web
+    name: economize-api-homolog
+    runtime: docker
+    plan: free
+    region: virginia
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /actuator/health
+    branch: homolog
+    # Aqui o autoDeploy é para valer: o objetivo do ambiente é justamente ver o
+    # que acabou de ser mergeado, o quanto antes
+    autoDeploy: true
+    envVars:
+      - key: DB_HOST
+        fromDatabase:
+          name: economize-homolog-db
+          property: host
+      - key: DB_PORT
+        fromDatabase:
+          name: economize-homolog-db
+          property: port
+      - key: DB_NAME
+        fromDatabase:
+          name: economize-homolog-db
+          property: database
+      - key: DB_USER
+        fromDatabase:
+          name: economize-homolog-db
+          property: user
+      - key: DB_PASSWORD
+        fromDatabase:
+          name: economize-homolog-db
+          property: password
+      # Segredo PRÓPRIO, e não o de produção: token emitido em homologação não
+      # pode valer na conta do dono. É o mesmo motivo de o banco ser outro
+      - key: JWT_SECRET
+        generateValue: true
+      - key: CORS_ALLOWED_ORIGINS
+        value: https://economize-web-homolog.onrender.com,http://localhost:8081,http://localhost:19006
+      # LIGADO aqui de proposito: homologacao e onde se abre o Swagger para
+      # conferir uma rota nova antes de ela virar producao, e o ambiente nao
+      # atende usuario de verdade
+      - key: SPRINGDOC_ENABLED
+        value: "true"
+      # As chaves de terceiros ficam VAZIAS de propósito. A API sobe sem elas —
+      # o mercado cai para as fontes gratuitas e a IA fica desligada —, e gastar
+      # cota de API paga com tráfego de homologação seria pagar duas vezes pela
+      # mesma coisa. Preencha no painel se precisar testar exatamente esse ponto.
+      - key: GEMINI_API_KEY
+        value: ""
+      - key: BRAPI_TOKEN
+        value: ""
+      # Cifra de segredo do usuário desligada aqui: sem ela a opção de chave
+      # própria some do app e todo mundo segue na chave do servidor, que é um
+      # cenário válido e o que se quer em homologação
+      - key: SECRET_ENCRYPTION_KEY
+        value: ""
+      - key: SECRET_ENCRYPTION_KEY_ID
+        value: k1
+      - key: SECRET_ENCRYPTION_PREVIOUS_KEYS
+        value: ""
+      # Conector bancário DESLIGADO: homologação não pode tocar em conta real de
+      # ninguém, e o Pluggy só tem os itens do dono
+      - key: PLUGGY_ENABLED
+        value: "false"
+      # Mesmo teto de memória de produção: um ambiente que não reproduz o limite
+      # não serve para descobrir que a memória estourou
+      #
+      # SEGUNDA RODADA — 15/09/2026. O Render avisou de novo: "economize-api
+      # exceeded its memory limit", com reinicio automatico e a instancia fora
+      # do ar durante ele. Ou seja: os tetos acima somavam pouco menos que 512
+      # MB e nao sobrava folga para o que a JVM commita sem perguntar.
+      #
+      # O que faltava no orcamento anterior era o CODE CACHE. Ele nao aparece
+      # em nenhum -Xmx e cresce com o JIT: o padrao RESERVA 240 MB e vai
+      # commitando conforme compila. Numa API que ja rodou um tempo, sao
+      # dezenas de MB que ninguem estava contando.
+      #
+      # Conta nova, com folga de proposito:
+      #   heap 224 + metaspace 128 + direto 32 + code cache 48 + ~40 threads a
+      #   512k (20) + estruturas da JVM (~25) = ~477 MB. Sobram ~35 MB.
+      #
+      #   ReservedCodeCacheSize  o teto que faltava
+      #   ExitOnOutOfMemoryError faltar memoria passa a MATAR o processo na
+      #                          hora, e o Render reergue limpo. Sem isso a JVM
+      #                          fica minutos em GC sem sair do lugar,
+      #                          respondendo lentissimo — pior que cair
+      #
+      # SUSPEITO A INVESTIGAR, e vale medir antes de cortar: o springdoc monta
+      # o modelo inteiro do OpenAPI (117 rotas, 158 schemas) NA PRIMEIRA vez
+      # que alguem abre /v3/api-docs ou /swagger-ui, e guarda em memoria dali
+      # em diante. Num container de 512 MB isso levanta o piso de forma
+      # permanente por uma pagina que so o desenvolvedor abre.
+      #
+      # TERCEIRA RODADA — 16/09/2026, e desta vez o numero errado era MEU.
+      #
+      # O Render avisou "Exited with status 3". Status 3 e exatamente o codigo
+      # que o -XX:+ExitOnOutOfMemoryError acima produz: a JVM viu
+      # OutOfMemoryError e saiu na hora, de proposito. A flag funcionou; o teto
+      # e que estava apertado demais.
+      #
+      # MEDIDO pelo actuator na instancia reiniciada (7 leituras em 6 minutos,
+      # uptime subindo, sem reinicio no meio):
+      #   heap ........ teto 216,6 MB   em uso 112-122 MB
+      #   Metaspace ... teto 128,0 MB   em uso 118,0 MB  <-- 92% do teto
+      #   CodeCache ... teto  48,0 MB   em uso  30,0 MB
+      #   committed total: 382 MB de JVM + pilhas + nativo = 440-470 de 512
+      #
+      # A rodada anterior BAIXOU o MaxMetaspaceSize de 140m (o que estava no
+      # painel) para 128m. Metaspace nao e compressivel: e quantas classes o
+      # Spring carrega, e a aplicacao precisa de 118 so para subir. Sobravam
+      # 10 MB, e qualquer classe carregada tarde (rota ainda nao tocada, proxy,
+      # serializador de DTO) estourava.
+      #
+      # A correcao nao e somar memoria — e TIRAR DO HEAP E DAR AO METASPACE.
+      # O heap tinha 216 de teto para 122 de uso; o metaspace nao tinha folga
+      # nenhuma.
+      #   heap 192 + metaspace 176 + direto 32 + code cache 40
+      #   + ~40 threads a 512k (20) + estruturas da JVM (~25) = ~485 de teto,
+      #   com committed real perto de 355 + nativo.
+      #
+      # Nao entra -XX:+HeapDumpOnOutOfMemoryError: o dump nao caberia no disco
+      # efemero e, num estouro de metaspace, nao e o artefato util.
+      - key: JAVA_OPTS
+        value: -Xmx192m -XX:MaxMetaspaceSize=176m -XX:MaxDirectMemorySize=32m -XX:ReservedCodeCacheSize=40m -Xss512k -XX:+UseSerialGC -XX:+ExitOnOutOfMemoryError
+
+# ----------------------------------------------------------------------------
+# O banco de homologação. Fica no Render, e não no Supabase, por dois motivos:
+# ele nasce junto com o serviço (nada para criar à mão) e não divide instância
+# nenhuma com o banco que guarda o extrato de verdade do dono.
+#
+# ATENÇÃO ao plano gratuito: o Postgres free do Render EXPIRA (hoje, 30 dias) e
+# some. Isso é aceitável aqui — homologação não guarda nada que precise durar —,
+# mas quando ele expirar o serviço vai parar de subir até o banco ser recriado.
+# Recriar é apagar a entrada no painel e sincronizar o blueprint de novo; o
+# Flyway remonta o schema inteiro no primeiro boot.
+# ----------------------------------------------------------------------------
+databases:
+  - name: economize-homolog-db
+    plan: free
+    region: virginia
+    databaseName: economize_homolog
+    user: economize
