@@ -48,15 +48,55 @@ class ProvenanceTest {
     }
 
     @Test
-    @DisplayName("Com os dois, a CONEXÃO vence: o upload ali é lote de gravação")
-    void conexaoVenceUpload() {
-        // A sincronização também grava um lote; o lote não é a procedência do
-        // dado, é só o caminho pelo qual ele foi persistido
+    @DisplayName("No histórico sem procedência gravada, ter conta ainda vale como conexão")
+    void conexaoVenceUploadNoHistorico() {
+        // A dedução antiga, que sobrevive SÓ para o que foi importado antes da
+        // V41. Continua valendo para não reescrever o passado com um palpite
         BankTransaction tx = tx();
         tx.setAccountId(UUID.randomUUID());
         tx.setUploadId(UUID.randomUUID());
 
         assertThat(tx.importSource()).isEqualTo(BankTransaction.ImportSource.CONNECTION);
+    }
+
+    @Test
+    @DisplayName("O DEFEITO da V41: arquivo atribuído a uma conta continua sendo arquivo")
+    void arquivoComContaContinuaArquivo() {
+        // Dizer "este OFX é da conta do Inter" é organização, não procedência.
+        // Antes da V41 esse gesto fazia cada linha do arquivo se apresentar
+        // como se tivesse vindo do conector — e o dono usa as duas fontes no
+        // mesmo banco, que é onde a confusão dele começou
+        BankTransaction tx = tx();
+        tx.setUploadId(UUID.randomUUID());
+        tx.setAccountId(UUID.randomUUID());
+        tx.setImportSourceStored(BankTransaction.ImportSource.FILE);
+
+        assertThat(tx.importSource()).isEqualTo(BankTransaction.ImportSource.FILE);
+    }
+
+    @Test
+    @DisplayName("O que foi gravado vence a dedução, mesmo sem conta nenhuma")
+    void gravadoVenceDeducao() {
+        BankTransaction tx = tx();
+        tx.setUploadId(UUID.randomUUID());
+        tx.setImportSourceStored(BankTransaction.ImportSource.CONNECTION);
+
+        assertThat(tx.importSource()).isEqualTo(BankTransaction.ImportSource.CONNECTION);
+    }
+
+    @Test
+    @DisplayName("Ser reconhecida pelo conector depois não reescreve como a linha entrou")
+    void reconhecimentoPosteriorNaoMudaProcedencia() {
+        // `backfillAccountOrigin` carimba a conta por id externo quando o
+        // conector encontra uma linha que o arquivo já tinha trazido. Isso
+        // responde "o conector enxerga esta linha?", que é outra pergunta —
+        // ela entrou por arquivo e vai continuar tendo entrado por arquivo
+        BankTransaction tx = tx();
+        tx.setUploadId(UUID.randomUUID());
+        tx.setImportSourceStored(BankTransaction.ImportSource.FILE);
+        tx.setAccountId(UUID.randomUUID());
+
+        assertThat(tx.importSource()).isEqualTo(BankTransaction.ImportSource.FILE);
     }
 
     @Test
