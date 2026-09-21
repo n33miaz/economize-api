@@ -17,7 +17,11 @@ COPY --from=build /app/target/*.jar app.jar
 # Mesmos valores do render.yaml (que sobrescreve esta linha em producao) e pelo
 # mesmo motivo: o teto tem de caber no CONTAINER, contando metaspace, buffers
 # diretos e pilhas de thread — nao so no heap. Ver o comentario longo la.
-ENV JAVA_OPTS="-Xmx224m -XX:MaxMetaspaceSize=128m -XX:MaxDirectMemorySize=32m -XX:ReservedCodeCacheSize=48m -Xss512k -XX:+UseSerialGC -XX:+ExitOnOutOfMemoryError"
+# Medido em producao em 16/09/2026: o metaspace vivia a 118 MB de um teto de
+# 128 e a JVM saiu com status 3 (ExitOnOutOfMemoryError). Tirou-se do heap,
+# que sobrava, para dar ao metaspace, que nao tinha folga. Racional completo
+# no render.yaml, junto das medidas.
+ENV JAVA_OPTS="-Xmx192m -XX:MaxMetaspaceSize=176m -XX:MaxDirectMemorySize=32m -XX:ReservedCodeCacheSize=40m -Xss512k -XX:+UseSerialGC -XX:+ExitOnOutOfMemoryError"
 
 EXPOSE 8080
 
