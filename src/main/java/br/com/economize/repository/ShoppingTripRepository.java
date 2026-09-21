@@ -32,6 +32,9 @@ public interface ShoppingTripRepository extends JpaRepository<ShoppingTrip, UUID
     /** A viagem do PRÓPRIO usuário com este id de aparelho — a chave da idempotência. */
     Optional<ShoppingTrip> findByUserIdAndClientId(UUID userId, String clientId);
 
+    /** A mesma nota não pode entrar duas vezes na conta da mesma pessoa. */
+    Optional<ShoppingTrip> findByUserIdAndReceiptKey(UUID userId, String receiptKey);
+
     /**
      * A viagem que outro membro da casa compartilhou com este id de aparelho.
      * É por aqui que o PUT da esposa cai na viagem aberta pelo marido.

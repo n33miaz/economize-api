@@ -62,7 +62,10 @@ class ShoppingControllerTest {
         return new ShoppingResponses.TripItem(
                 UUID.randomUUID(), clientId, UUID.randomUUID(), "Ana", null, false,
                 "Mercado da Esquina", status, null,
-                OffsetDateTime.parse("2026-09-21T09:00:00Z"), null, null, null, null,
+                OffsetDateTime.parse("2026-09-21T09:00:00Z"), null, null,
+                // sem nota fiscal lida: é o estado de toda compra antes do caixa
+                null, null,
+                null, null,
                 new BigDecimal("58.40"), 2, List.of(), OffsetDateTime.now(), OffsetDateTime.now());
     }
 

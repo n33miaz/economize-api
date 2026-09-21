@@ -40,6 +40,10 @@ public final class ShoppingResponses {
             OffsetDateTime startedAt,
             OffsetDateTime closedAt,
             BigDecimal receiptTotal,
+            /** A chave de 44 dígitos do cupom, quando a nota foi lida. */
+            String receiptKey,
+            /** O CNPJ de quem emitiu, extraído da chave. */
+            String receiptIssuerCnpj,
             UUID reconciledTransactionId,
             String notes,
             BigDecimal total,
