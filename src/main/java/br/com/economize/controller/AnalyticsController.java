@@ -3,15 +3,20 @@ package br.com.economize.controller;
 import br.com.economize.dto.analytics.AnalysisWindow;
 import br.com.economize.dto.analytics.DailyTotalResponse;
 import br.com.economize.dto.analytics.DebtOverviewResponse;
+import br.com.economize.dto.analytics.IncomePatternResponse;
 import br.com.economize.dto.analytics.MonthlyAnalyticsResponse;
+import br.com.economize.dto.analytics.PurchasePreferenceRequest;
 import br.com.economize.service.AnalyticsService;
 import br.com.economize.service.CategoryBudgetService;
 import br.com.economize.service.DebtInsightService;
 import br.com.economize.service.InstallmentProjectionService;
 import br.com.economize.service.SubscriptionHunterService;
+import br.com.economize.service.wish.IncomePatternService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Mono;
@@ -33,6 +38,7 @@ public class AnalyticsController {
     private final DebtInsightService debtInsightService;
     private final InstallmentProjectionService installmentProjectionService;
     private final SubscriptionHunterService subscriptionHunterService;
+    private final IncomePatternService incomePatternService;
 
     @Operation(summary = "Consolidação de um período",
             description = "Entradas, saídas, quebra por categoria e delta vs período anterior. "
@@ -190,5 +196,45 @@ public class AnalyticsController {
     public Mono<List<String>> months(@AuthenticationPrincipal String email) {
         return Mono.fromCallable(() -> analyticsService.monthsWithData(email))
                 .subscribeOn(Schedulers.boundedElastic());
+    }
+
+    @Operation(summary = "Padrão de entradas em dia útil e o melhor dia para as compras",
+            description = "Salário não cai 'dia 5': cai no Nº dia útil bancário (segunda a sexta, sem "
+                    + "feriado nacional), e o vale costuma cair alguns dias úteis antes dele. O padrão é "
+                    + "DERIVADO a cada leitura a partir das transações já vinculadas a cada fonte de "
+                    + "renda — nada é gravado em income_sources nem em recurring_series aqui. "
+                    + "`status`: READY (há recomendação), INSUFFICIENT_HISTORY (menos de 3 meses de "
+                    + "histórico em toda fonte), NO_INCOME (nenhuma fonte de renda) ou "
+                    + "CARD_CYCLE_UNKNOWN (pagamento no cartão sem dia de fechamento conhecido). "
+                    + "`origin` MEASURED (extrato) ou INFORMED (dia declarado, sem histórico) viaja em "
+                    + "todo número.")
+    @GetMapping("/income-pattern")
+    public Mono<IncomePatternResponse> incomePattern(@AuthenticationPrincipal String email) {
+        return Mono.fromCallable(() -> incomePatternService.analyze(email))
+                .subscribeOn(Schedulers.boundedElastic());
+    }
+
+    @Operation(summary = "Declarar como você faz as compras de mercado",
+            description = "Cadência (MONTHLY/WEEKLY), preferência por fim de semana e forma de "
+                    + "pagamento (CASH/CARD) — o que o extrato sozinho não conta. CARD exige "
+                    + "cardAccountId de um cartão seu; sem preferência salva, o app deduz pelo extrato "
+                    + "(campo `inferred` do GET).")
+    @PutMapping("/income-pattern/preference")
+    public Mono<IncomePatternResponse.Preference> savePreference(
+            @AuthenticationPrincipal String email,
+            @Valid @RequestBody PurchasePreferenceRequest request) {
+        return Mono.fromCallable(() -> incomePatternService.savePreference(email, request.cadence(),
+                        request.weekendPreferred(), request.paymentMode(), request.cardAccountId(),
+                        request.fundingKind()))
+                .subscribeOn(Schedulers.boundedElastic());
+    }
+
+    @Operation(summary = "Apagar a preferência declarada",
+            description = "Volta a deixar o app deduzir a cadência de compra pelo extrato.")
+    @DeleteMapping("/income-pattern/preference")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public Mono<Void> clearPreference(@AuthenticationPrincipal String email) {
+        return Mono.fromRunnable(() -> incomePatternService.clearPreference(email))
+                .subscribeOn(Schedulers.boundedElastic()).then();
     }
 }
