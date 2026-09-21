@@ -66,6 +66,11 @@ public record BankTransactionResponse(
         // É o que permite a tela dizer "estorno de <compra>" em vez de só
         // "estorno"
         UUID refundOfId,
+        // V40: no lado da COMPRA, quanto já voltou por estornos parciais
+        // vinculados, e o valor que conta nas somas (amount + refundedAmount).
+        // Aditivo: a linha sem estorno parcial traz 0 e o próprio amount
+        BigDecimal refundedAmount,
+        BigDecimal netAmount,
         /*
          * EC-195: POR ONDE esta linha entrou e QUANDO. As duas perguntas que o
          * usuário faz quando desconfia de um número, e que até aqui nenhuma
@@ -108,6 +113,8 @@ public record BankTransactionResponse(
                 tx.isFamilyTransfer(),
                 tx.isRefunded(),
                 tx.getRefundOfId(),
+                tx.getRefundedAmount() == null ? BigDecimal.ZERO : tx.getRefundedAmount(),
+                tx.getNetAmount(),
                 tx.importSource(),
                 tx.getCreatedAt());
     }

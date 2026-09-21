@@ -49,6 +49,59 @@ class RuleBasedCategorizationServiceTest {
     }
 
     @Test
+    void reconheceAsDescricoesDoCartaoViaConectorMedidasNaContaDoDono() {
+        // Auditoria da conta de produção em 16/09/2026: 95 lançamentos sem
+        // categoria, todos do cartão via conector, no formato "loja  cidade
+        // bra". Estas são as descrições exatas, e cada uma tinha uma resposta
+        // óbvia que o motor não dava.
+        assertThat(keyOf("dl uberrides sao paulo bra")).isEqualTo("TRANSPORT_RIDE");
+        assertThat(keyOf("99 sao paulo bra")).isEqualTo("TRANSPORT_RIDE");
+        assertThat(keyOf("99app 99app sao paulo bra")).isEqualTo("TRANSPORT_RIDE");
+        assertThat(keyOf("Uber *One Membership U")).isEqualTo("TRANSPORT_RIDE");
+        assertThat(keyOf("bus servicos clickbus sao paulo bra")).isEqualTo("TRANSPORT_PUBLIC");
+        assertThat(keyOf("choripan barueri bra")).isEqualTo("FOOD_RESTAURANT");
+        assertThat(keyOf("carioca marmitex sao paulo bra")).isEqualTo("FOOD_RESTAURANT");
+        assertThat(keyOf("pastel do neto seropedica bra")).isEqualTo("FOOD_RESTAURANT");
+        assertThat(keyOf("aledocesesalgados carapicuiba bra")).isEqualTo("FOOD_RESTAURANT");
+        assertThat(keyOf("baruh cafe e bistro barueri bra")).isEqualTo("FOOD_COFFEE");
+        assertThat(keyOf("3713 - grsa gr pao de sao paulo bra")).isEqualTo("FOOD_COFFEE");
+        assertThat(keyOf("Qcasa Utilidades")).isEqualTo("HOUSING_GOODS");
+        assertThat(keyOf("Openai *Chatgpt Subscr")).isEqualTo("LEISURE_STREAMING");
+        assertThat(keyOf("ebn spotify curitiba bra")).isEqualTo("LEISURE_STREAMING");
+    }
+
+    @Test
+    void oPagamentoDaFaturaVistoDeDentroDoCartaoNaoCaiNaRaiz() {
+        // "Pagamento recebido" e "pagamento on line" são o crédito do
+        // pagamento da fatura dentro do cartão. Caíam no fallback na RAIZ
+        // Transferências com 60% de confiança — e, aprovados na revisão, o
+        // motor aprendia que pagar fatura é receita.
+        assertThat(keyOf("Pagamento recebido")).isEqualTo("TRANSFER_BILLS");
+        assertThat(keyOf("PAGAMENTO ON LINE")).isEqualTo("TRANSFER_BILLS");
+        assertThat(keyOf("Pagamento efetuado - Pagamento Fatura - NEEMIAS")).isEqualTo("TRANSFER_BILLS");
+    }
+
+    @Test
+    void pontosDeFidelidadeSaoCashbackENaoResgateDeInvestimento() {
+        // "Cred Pontos Meu Porquinho - Resgate Pontos" tem "porquinho" e
+        // "resgate", que mandavam R$ 1 a R$ 5 de pontos para Renda fixa e os
+        // contavam como receita de investimento. A frase inteira vence.
+        assertThat(keyOf("Cred Pontos Meu Porquinho - Resgate Pontos")).isEqualTo("INCOME_CASHBACK");
+        assertThat(keyOf("Cred Pontos Cashback Extra - Resgate Pontos")).isEqualTo("INCOME_CASHBACK");
+        // e o resgate de verdade continua sendo resgate
+        assertThat(keyOf("Resgate - Cdb Porq Obj Banco Inter S A")).isEqualTo("INVESTMENT_REDEMPTION");
+    }
+
+    @Test
+    void oProvedorRegionalDeInternetEhInternetENaoBoleto() {
+        // O boleto da ADAPT LINK caía em "Boletos e faturas" pela palavra
+        // "pagamento efetuado", e a conta de internet sumia do orçamento
+        assertThat(keyOf("Pagamento efetuado - ADAPT LINK SERVICOS DE COMUNICACAO MULTIMIDIA LTDA"))
+                .isEqualTo("UTILITIES_INTERNET");
+        assertThat(keyOf("CABO SERVICOS DE TELECOMUNICACOES")).isEqualTo("UTILITIES_INTERNET");
+    }
+
+    @Test
     void vencimentoDaFaturaNaoEhSalario() {
         // "vencimento" solto casaria com o vencimento de uma fatura, e o
         // pagamento do cartão viraria salário recebido. É por isso que a regra

@@ -136,10 +136,13 @@ public class AnalyticsService {
             LocalDate dia = tx.getDate().toLocalDate();
             BigDecimal[] somas = porDia.computeIfAbsent(dia,
                     k -> new BigDecimal[] {BigDecimal.ZERO, BigDecimal.ZERO});
-            if (tx.getAmount().signum() < 0) {
-                somas[0] = somas[0].add(tx.getAmount().abs());
+            // Líquido, não bruto: a compra com estorno parcial vale o que
+            // sobrou dela (V40), igual às somas por categoria
+            BigDecimal valor = tx.getNetAmount();
+            if (valor.signum() < 0) {
+                somas[0] = somas[0].add(valor.abs());
             } else {
-                somas[1] = somas[1].add(tx.getAmount());
+                somas[1] = somas[1].add(valor);
             }
             contagem.merge(dia, 1L, Long::sum);
         }

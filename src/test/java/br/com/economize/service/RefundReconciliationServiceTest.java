@@ -250,11 +250,12 @@ class RefundReconciliationServiceTest {
     }
 
     @Test
-    @DisplayName("Estorno PARCIAL é reportado e NÃO marcado")
-    void parcialEReportado() {
+    @DisplayName("Estorno PARCIAL abate a compra: o crédito sai das somas e a compra vale o líquido")
+    void parcialAbateACompra() {
         // O caso real: R$ 18,50 de volta sobre uma compra de R$ 604,91.
-        // Marcar só o crédito tiraria 18,50 da receita e deixaria a compra
-        // inteira na despesa — erra MAIS que deixar os dois contando
+        // Até 17/09/2026 era só reportado; o dono escolheu "abater a compra".
+        // O crédito é marcado e ligado à compra; a compra NÃO é marcada (ela
+        // continua contando) e recebe o abate na coluna da V40.
         BankTransaction credito = tx("2026-08-08", "18.50",
                 "Estorno de \"Mercadolivre*Homenow\" (Mercado Livre)");
         BankTransaction compra = tx("2026-08-05", "-604.91", "Mercadolivre*Homenow");
@@ -264,12 +265,41 @@ class RefundReconciliationServiceTest {
         RefundReconciliationService.Outcome resultado = service.sweep(EMAIL, false);
 
         assertThat(resultado.pairs()).isZero();
+        assertThat(resultado.volume()).isEqualByComparingTo(new BigDecimal("18.50"));
         assertThat(resultado.partials()).singleElement().satisfies(parcial -> {
             assertThat(parcial.refundedAmount()).isEqualByComparingTo(new BigDecimal("18.50"));
             assertThat(parcial.purchaseAmount()).isEqualByComparingTo(new BigDecimal("604.91"));
             assertThat(parcial.purchaseDescription()).isEqualTo("Mercadolivre*Homenow");
         });
+        verify(bankTransactionRepository).markAsRefundPair(user.getId(), List.of(credito.getId()));
+        verify(bankTransactionRepository).linkRefund(user.getId(), credito.getId(), compra.getId());
+        verify(bankTransactionRepository).applyPartialRefund(user.getId(), compra.getId(),
+                new BigDecimal("18.50"));
+    }
+
+    @Test
+    @DisplayName("Em dry run o parcial é só reportado, como tudo")
+    void parcialEmDryRunNaoGrava() {
+        BankTransaction credito = tx("2026-08-08", "18.50",
+                "Estorno de \"Mercadolivre*Homenow\" (Mercado Livre)");
+        BankTransaction compra = tx("2026-08-05", "-604.91", "Mercadolivre*Homenow");
+        when(bankTransactionRepository.findAllByUserIdOrderByDateDesc(user.getId()))
+                .thenReturn(List.of(credito, compra));
+
+        RefundReconciliationService.Outcome resultado = service.sweep(EMAIL, true);
+
+        assertThat(resultado.partials()).hasSize(1);
         verify(bankTransactionRepository, never()).markAsRefundPair(any(), any());
+        verify(bankTransactionRepository, never()).applyPartialRefund(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("O líquido da compra é o bruto menos o que voltou")
+    void liquidoDaCompra() {
+        BankTransaction compra = tx("2026-08-05", "-604.91", "Mercadolivre*Homenow");
+        assertThat(compra.getNetAmount()).isEqualByComparingTo(new BigDecimal("-604.91"));
+        compra.setRefundedAmount(new BigDecimal("18.50"));
+        assertThat(compra.getNetAmount()).isEqualByComparingTo(new BigDecimal("-586.41"));
     }
 
     @Test

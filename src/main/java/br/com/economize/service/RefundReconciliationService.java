@@ -143,6 +143,8 @@ public class RefundReconciliationService {
         List<UUID> marcar = new ArrayList<>();
         List<UUID[]> vinculos = new ArrayList<>();
         List<Partial> parciais = new ArrayList<>();
+        // (compra, valor) de cada abate parcial: gravado na compra, não no crédito
+        List<Object[]> abates = new ArrayList<>();
 
         // EC-236: primeiro os que NOMEIAM a compra. Vêm antes porque o nome é
         // prova mais forte que a coincidência de valor — deixá-los para o
@@ -178,15 +180,21 @@ public class RefundReconciliationService {
                 continue;
             }
             if (comparacao < 0) {
-                // PARCIAL — devolveram parte. Reportado e NÃO marcado, de
-                // propósito: marcar só o crédito tiraria R$ 18,50 da receita e
-                // deixaria a compra inteira na despesa, o que erra MAIS que
-                // deixar os dois contando (o líquido, hoje, está certo).
-                // Descontar da compra precisa de coluna nova e de uma decisão
-                // do dono sobre o que a categoria deve mostrar.
+                // PARCIAL — devolveram parte. Até 17/09/2026 era só reportado:
+                // marcar o crédito sozinho tiraria os R$ 18,50 da receita e
+                // deixaria a compra inteira na despesa. O dono decidiu o
+                // tratamento — "abater a compra" — e a V40 deu à compra o lugar
+                // para guardar o quanto voltou. Então: o crédito sai das somas
+                // (marca + vínculo, como num par inteiro) e a compra fica,
+                // valendo o líquido. A categoria passa a mostrar 586,41 e não
+                // 604,91 com uma transferência de 18,50 solta ao lado.
                 parciais.add(new Partial(compra.getId(), credito.getId(),
                         credito.getAmount(), compra.getAmount().abs(),
                         compra.getDescription(), credito.getDescription()));
+                consumidos.add(credito.getId());
+                marcar.add(credito.getId());
+                vinculos.add(new UUID[] {credito.getId(), compra.getId()});
+                abates.add(new Object[] {compra.getId(), credito.getAmount()});
                 continue;
             }
 
@@ -241,9 +249,17 @@ public class RefundReconciliationService {
             for (UUID[] vinculo : vinculos) {
                 bankTransactionRepository.linkRefund(user.getId(), vinculo[0], vinculo[1]);
             }
+            for (Object[] abate : abates) {
+                bankTransactionRepository.applyPartialRefund(user.getId(),
+                        (UUID) abate[0], (BigDecimal) abate[1]);
+            }
         }
+        // O volume conta também o que voltou parcialmente: é dinheiro que
+        // deixou de contar como gasto, e é isso que o recado do vigia diz
         BigDecimal volume = pares.stream().map(Pair::amount)
-                .reduce(BigDecimal.ZERO, BigDecimal::add);
+                .reduce(BigDecimal.ZERO, BigDecimal::add)
+                .add(parciais.stream().map(Partial::refundedAmount)
+                        .reduce(BigDecimal.ZERO, BigDecimal::add));
         log.info("Varredura de estornos: {} par(es), volume {}, dryRun={}, user={}",
                 pares.size(), volume, dryRun, user.getId());
         return new Outcome(todas.size(), pares.size(), volume, dryRun, pares, parciais);
@@ -287,8 +303,8 @@ public class RefundReconciliationService {
     }
 
     /**
-     * @param partials estornos parciais achados; reportados para o dono ver, e
-     *                 deliberadamente NÃO marcados
+     * @param partials estornos parciais achados — desde a V40 também marcados:
+     *                 o crédito sai das somas e a compra passa a valer o líquido
      */
     public record Outcome(int scanned, int pairs, BigDecimal volume, boolean dryRun,
                           List<Pair> details, List<Partial> partials) {

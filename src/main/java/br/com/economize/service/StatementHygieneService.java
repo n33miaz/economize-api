@@ -121,8 +121,14 @@ public class StatementHygieneService {
 
         RefundReconciliationService.Outcome estornos = refundService.sweep(email, false);
         anota(user, SweepRun.Kind.REFUND, estornos.pairs(), estornos.volume(),
-                estornos.details().stream()
-                        .flatMap(par -> java.util.stream.Stream.of(par.purchaseId(), par.refundId()))
+                // Os parciais entram com as duas pontas: o desfazer precisa
+                // achar a COMPRA para zerar o abate (V40), não só o crédito
+                java.util.stream.Stream.concat(
+                        estornos.details().stream()
+                                .flatMap(par -> java.util.stream.Stream.of(par.purchaseId(), par.refundId())),
+                        estornos.partials().stream()
+                                .flatMap(p -> java.util.stream.Stream.of(p.purchaseId(), p.refundId())))
+                        .distinct()
                         .toList());
 
         RecurrenceDetectionService.DetectionSummary recorrencia =
