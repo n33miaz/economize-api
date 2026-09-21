@@ -74,6 +74,19 @@ public class BankTransaction {
     private UUID uploadId;
 
     /**
+     * Como a linha entrou — gravado na importação (V41), que é a única hora em
+     * que o fato é conhecido com certeza.
+     *
+     * <p>NULO é o histórico sem upload nenhum, anterior ao registro de origem:
+     * para ele {@link #importSource()} cai na dedução antiga. O nome do campo
+     * carrega o sufixo porque o método público continua se chamando
+     * {@code importSource()} e é ele que todo mundo lê.
+     */
+    @Column(name = "import_source", length = 16)
+    @Enumerated(EnumType.STRING)
+    private ImportSource importSourceStored;
+
+    /**
      * Origem do lançamento (EC-113): qual conta bancária ou cartão de crédito do
      * usuário trouxe esta linha. Como {@code internalTransfer}, o fato só é
      * conhecido na IMPORTAÇÃO — o conector sabe de qual conta puxou; depois de
@@ -206,18 +219,27 @@ public class BankTransaction {
     }
 
     /**
-     * Por onde a linha entrou — EC-195.
+     * Por onde a linha entrou — EC-195, corrigido na V41.
      *
-     * <p>DERIVADO, não gravado: quem tem conta de provedor veio pela conexão,
-     * quem tem arquivo veio por arquivo, e quem não tem nenhum dos dois é
-     * histórico anterior ao EC-113. Derivar mantém tudo consistente com o que
-     * já está no banco e não obriga a decidir o que escrever no passado.
+     * <p>GRAVADO na importação. Era derivado, e a dedução dizia "tem conta de
+     * provedor, logo veio da conexão" — o que valia enquanto só o conector
+     * carimbava conta. Mas o upload de arquivo também carimba, quando a pessoa
+     * diz de qual conta o arquivo é (na hora ou depois), e a partir daí cada
+     * linha daquele arquivo se apresentava como se tivesse vindo do conector.
+     * Amarrar um fato imutável — como a linha entrou — a um campo que muda
+     * depois era a causa raiz, e nenhuma troca na ordem dos testes resolvia.
      *
-     * <p>A ordem é a regra: uma linha da conexão que também carrega
-     * {@code uploadId} é da CONEXÃO — o upload ali é o lote de gravação, não a
-     * procedência do dado.
+     * <p>A dedução antiga sobrevive como último recurso, e só alcança quem não
+     * tem upload nenhum: o histórico anterior ao registro de origem, para o
+     * qual não há o que backfillar e nada muda.
+     *
+     * <p>Note o que isto NÃO responde: "o conector enxerga esta linha?". Essa é
+     * outra pergunta, e quem a responde é a conta ({@code accountId} de uma
+     * conta vinculada). Uma linha que entrou por arquivo e depois foi
+     * reconhecida pelo conector continua tendo entrado por arquivo.
      */
     public ImportSource importSource() {
+        if (importSourceStored != null) return importSourceStored;
         if (accountId != null) return ImportSource.CONNECTION;
         if (uploadId != null) return ImportSource.FILE;
         return ImportSource.UNKNOWN;

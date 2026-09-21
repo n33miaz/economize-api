@@ -352,7 +352,15 @@ public class BankStatementService {
 
         int suggested = 0;
         int uncategorized = 0;
+        // A procedência é gravada AQUI porque aqui é a única hora em que ela é
+        // certa: o formato do upload diz se a linha veio do conector ou de um
+        // arquivo, e nada que aconteça depois (atribuir conta, reconciliar,
+        // recategorizar) pode mudar como ela entrou. Ver V41.
+        BankTransaction.ImportSource procedencia = format == StatementFormat.PLUGGY
+                ? BankTransaction.ImportSource.CONNECTION
+                : BankTransaction.ImportSource.FILE;
         for (BankTransaction tx : toSave) {
+            tx.setImportSourceStored(procedencia);
             if (tx.getReviewStatus() == BankTransaction.ReviewStatus.SUGGESTED) suggested++;
             if (tx.getReviewStatus() == BankTransaction.ReviewStatus.UNCATEGORIZED) uncategorized++;
         }
