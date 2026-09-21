@@ -145,6 +145,12 @@ class BankStatementAccountOriginTest {
         // Sem isto, duas contas correntes e um cartão importados por arquivo
         // viravam uma lista indistinta: o Extrato não tinha como separá-las
         assertThat(saved()).extracting(BankTransaction::getAccountId).containsOnly(conta);
+        // ...e declarar a conta NÃO transforma o arquivo em conexão (V41). Era
+        // este o defeito: a procedência era deduzida de `accountId`, e o
+        // Extrato passava a dizer "veio do conector" sobre um OFX que a pessoa
+        // enviou à mão
+        assertThat(saved()).extracting(BankTransaction::importSource)
+                .containsOnly(BankTransaction.ImportSource.FILE);
     }
 
     @Test
@@ -231,6 +237,11 @@ class BankStatementAccountOriginTest {
 
         assertThat(saved()).singleElement()
                 .extracting(BankTransaction::getAccountId).isEqualTo(cartao);
+        // e a procedência é gravada, não deduzida: quem decide é o FORMATO do
+        // upload, que é o único sinal que não muda depois da importação
+        assertThat(saved()).singleElement()
+                .extracting(BankTransaction::importSource)
+                .isEqualTo(BankTransaction.ImportSource.CONNECTION);
     }
 
     @Test
