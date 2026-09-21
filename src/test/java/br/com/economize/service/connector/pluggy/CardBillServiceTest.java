@@ -144,6 +144,54 @@ class CardBillServiceTest {
     }
 
     @Test
+    @DisplayName("número e data ilegíveis viram nulo em vez de derrubar a leitura")
+    void valorIlegivelViraNulo() {
+        contaExiste();
+        when(pluggyClient.bills(anyString(), eq(NO_PROVEDOR))).thenReturn(List.of(Map.of(
+                "id", "bill-torta",
+                "totalAmount", "isto não é número",
+                "dueDate", "31/09/2026",
+                "billClosingDate", "2026-08-31",
+                "financeCharges", List.of(Map.of("type", "JUROS")))));
+        when(cardBillRepository.findByAccountIdAndExternalId(cartao.getId(), "bill-torta"))
+                .thenReturn(Optional.empty());
+
+        service.sync(dono, "chave", List.of(item));
+
+        ArgumentCaptor<CardBill> capturada = ArgumentCaptor.forClass(CardBill.class);
+        verify(cardBillRepository).save(capturada.capture());
+        CardBill b = capturada.getValue();
+        // uma fatura com um campo torto ainda vale pelos outros: derrubar a
+        // leitura inteira por causa de um número perderia as outras 39
+        assertThat(b.getTotalAmount()).isNull();
+        assertThat(b.getDueDate()).isNull();
+        assertThat(b.getClosingDate()).isEqualTo(LocalDate.of(2026, 8, 31));
+        // encargo sem valor soma zero, não explode
+        assertThat(b.getFinanceCharges()).isEqualByComparingTo("0.00");
+    }
+
+    @Test
+    @DisplayName("o literal \"null\" que o provedor às vezes manda não vira id nem moeda")
+    void literalNullNaoViraTexto() {
+        contaExiste();
+        when(pluggyClient.bills(anyString(), eq(NO_PROVEDOR))).thenReturn(List.of(
+                Map.of("id", "null", "totalAmount", 10.0)));
+
+        assertThat(service.sync(dono, "chave", List.of(item))).isZero();
+        verify(cardBillRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("lista de faturas vazia não grava nada e não reclama")
+    void semFaturasNaoGravaNada() {
+        contaExiste();
+        when(pluggyClient.bills(anyString(), eq(NO_PROVEDOR))).thenReturn(List.of());
+
+        assertThat(service.sync(dono, "chave", List.of(item))).isZero();
+        verify(cardBillRepository, never()).save(any());
+    }
+
+    @Test
     @DisplayName("conta corrente não tem fatura e nem é perguntada")
     void contaCorrenteNaoEPerguntada() {
         when(pluggyClient.accounts(anyString(), eq("item-1")))

@@ -83,6 +83,68 @@ class PluggyClientTest {
     }
 
     @Test
+    @DisplayName("investments percorre as páginas e devolve as posições de todas elas")
+    void investmentsShouldFollowEveryPage() {
+        bodies.add(page(List.of(Map.of("id", "inv-1"), Map.of("id", "inv-2")),
+                "?itemId=item-1&after=cursor-2"));
+        bodies.add(page(List.of(Map.<String, Object>of("id", "inv-3")), null));
+
+        List<Map<String, Object>> posicoes = client.investments("api-key", "item-1");
+
+        // eram 53 aplicações do mesmo CDB na conta do dono: a paginação aqui é
+        // a diferença entre ver a carteira inteira e ver a primeira página dela
+        assertThat(posicoes).extracting(i -> i.get("id"))
+                .containsExactly("inv-1", "inv-2", "inv-3");
+        assertThat(requestedUris).containsExactly(
+                BASE_URL + "/investments?itemId=item-1",
+                BASE_URL + "/investments?itemId=item-1&after=cursor-2");
+    }
+
+    @Test
+    @DisplayName("investments sem corpo encerra sem devolver nada")
+    void investmentsWithoutBodyShouldStop() {
+        List<Map<String, Object>> posicoes = client.investments("api-key", "item-vazio");
+
+        assertThat(posicoes).isEmpty();
+        assertThat(requestedUris).containsExactly(BASE_URL + "/investments?itemId=item-vazio");
+    }
+
+    @Test
+    @DisplayName("investments para quando a resposta não traz lista de resultados")
+    void investmentsWithoutResultsListShouldStop() {
+        bodies.add(Map.of("results", "isto não é lista"));
+
+        assertThat(client.investments("api-key", "item-1")).isEmpty();
+    }
+
+    @Test
+    @DisplayName("bills percorre as páginas e devolve as faturas de um cartão")
+    void billsShouldFollowEveryPage() {
+        bodies.add(page(List.of(Map.of("id", "bill-1"), Map.of("id", "bill-2")),
+                "?accountId=acc-1&after=cursor-2"));
+        bodies.add(page(List.of(Map.<String, Object>of("id", "bill-3")), null));
+
+        List<Map<String, Object>> faturas = client.bills("api-key", "acc-1");
+
+        assertThat(faturas).extracting(b -> b.get("id"))
+                .containsExactly("bill-1", "bill-2", "bill-3");
+        assertThat(requestedUris).containsExactly(
+                BASE_URL + "/bills?accountId=acc-1",
+                BASE_URL + "/bills?accountId=acc-1&after=cursor-2");
+    }
+
+    @Test
+    @DisplayName("bills sem corpo encerra sem devolver nada — conta que não é cartão cai aqui")
+    void billsWithoutBodyShouldStop() {
+        // o dublê devolve Mono vazio quando a fila acaba: é o que acontece com
+        // uma conta corrente, que não tem fatura publicada
+        List<Map<String, Object>> faturas = client.bills("api-key", "acc-corrente");
+
+        assertThat(faturas).isEmpty();
+        assertThat(requestedUris).containsExactly(BASE_URL + "/bills?accountId=acc-corrente");
+    }
+
+    @Test
     @DisplayName("cursor devolvido como URL completa não pode virar URL concatenada e quebrada")
     void nextAsAbsoluteUrlShouldBeReducedToItsQuery() {
         bodies.add(page(List.of(transaction("t-1")),
