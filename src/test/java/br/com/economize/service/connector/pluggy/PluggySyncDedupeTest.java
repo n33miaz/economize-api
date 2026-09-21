@@ -126,8 +126,12 @@ class PluggySyncDedupeTest {
                 bankTransactionRepository, statementUploadRepository, userRepository, parserFactory,
                 categorizationEngine, categoryRepository, importWriter, accountService, eventPublisher,
                 aiSuggester);
+        // A fatura do provedor é enriquecimento e nunca derruba o extrato: o
+        // dublê devolve zero e este teste segue sendo sobre a dedupe
+        var cardBillService = mock(CardBillService.class);
+        lenient().when(cardBillService.sync(any(), any(), any())).thenReturn(0);
         service = new PluggySyncService(pluggyClient, userRepository, pluggyItemRepository,
-                pluggyItemService, bankStatementService, accountService);
+                pluggyItemService, bankStatementService, accountService, cardBillService);
 
         lenient().when(categorizationEngine.contextFor(user.getId())).thenReturn(context);
         lenient().when(context.getDirtyRules()).thenReturn(new HashSet<>());

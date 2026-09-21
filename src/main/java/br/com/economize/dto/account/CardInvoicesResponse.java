@@ -5,6 +5,7 @@ import br.com.economize.model.ConnectorAccount;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.UUID;
 
@@ -98,8 +99,44 @@ public record CardInvoicesResponse(
             // coberta?". Quem compara reserva e total é a leitura: o valor pode ser
             // menor (cobre em parte) ou maior (a fatura ainda vai crescer)
             Reserve reserve,
+            // A fatura que o BANCO fechou, quando o provedor a entrega. Nula
+            // quando ele não entrega ou quando nenhuma casa com este ciclo.
+            ProviderBill providerBill,
             List<BankTransactionResponse> transactions
     ) {
+    }
+
+    /**
+     * A fatura fechada pelo banco — o número dele, ao lado do nosso.
+     *
+     * <p>Ela NÃO substitui {@code total}: os dois convivem de propósito, e é a
+     * DIFERENÇA entre eles que vale. O total daqui vem das compras que
+     * chegaram até nós; o de lá é o que o emissor fechou. Medido na conta do
+     * dono em 21/09/2026: nós somávamos R$ 775,67 onde o banco fechou
+     * R$ 2.311,49 — a diferença eram compras que o conector não trouxe, e o
+     * app não tinha como saber que faltava algo. Trocar um pelo outro apagaria
+     * justamente esse sinal.
+     *
+     * <p>{@code minimumPayment} não existe em nenhum outro lugar do app: é
+     * dado que só o emissor tem.
+     *
+     * <p>{@code syncedAt} está aqui para a tela poder dizer "lido há três
+     * semanas" em vez de fingir que o número é de agora.
+     */
+    public record ProviderBill(
+            LocalDate closingDate,
+            LocalDate dueDate,
+            BigDecimal total,
+            BigDecimal minimumPayment,
+            BigDecimal financeCharges,
+            boolean allowsInstallments,
+            OffsetDateTime syncedAt
+    ) {
+        public static ProviderBill from(br.com.economize.model.CardBill b) {
+            return new ProviderBill(b.getClosingDate(), b.getDueDate(), b.getTotalAmount(),
+                    b.getMinimumPayment(), b.getFinanceCharges(), b.isAllowsInstallments(),
+                    b.getSyncedAt());
+        }
     }
 
     /**

@@ -55,6 +55,7 @@ public class CardInvoiceService {
     private final BankTransactionRepository bankTransactionRepository;
     private final UserRepository userRepository;
     private final InvoiceReserveService reserveService;
+    private final br.com.economize.repository.CardBillRepository cardBillRepository;
 
     public CardInvoicesResponse invoices(String email, UUID accountId, int months) {
         // validação de entrada antes de qualquer I/O, como no sync do EC-106:
@@ -101,6 +102,17 @@ public class CardInvoiceService {
         // laço seria uma por ciclo, e a janela chega a 24
         Map<String, CardInvoicesResponse.Reserve> reservas =
                 reserveService.byReference(user.getId(), account.getId());
+        // As faturas que o BANCO fechou, indexadas pelo mês em que fecharam —
+        // é por esse mês que o ciclo deduzido e a fatura real se encontram.
+        // Uma consulta só, pelo mesmo motivo das reservas.
+        Map<String, CardInvoicesResponse.ProviderBill> doBanco = new java.util.HashMap<>();
+        cardBillRepository.findByAccountIdOrderByClosingDateDesc(account.getId()).forEach(b -> {
+            if (b.getClosingDate() == null) return;
+            // Mais de uma fatura fechando no mesmo mês é caso de reemissão: a
+            // ordem da consulta é decrescente, então a PRIMEIRA é a mais nova
+            doBanco.putIfAbsent(YearMonth.from(b.getClosingDate()).toString(),
+                    CardInvoicesResponse.ProviderBill.from(b));
+        });
         List<CardInvoicesResponse.Invoice> invoices = new ArrayList<>();
         for (Cycle cycle : cycles) {
             List<BankTransaction> inCycle = transactions.stream()
@@ -110,7 +122,8 @@ public class CardInvoiceService {
             // um cartão que só começou a ser sincronizado depois
             if (inCycle.isEmpty()) continue;
             invoices.add(toInvoice(cycle, inCycle, today,
-                    reservas.get(cycle.reference().toString())));
+                    reservas.get(cycle.reference().toString()),
+                    doBanco.get(cycle.reference().toString())));
         }
         return new CardInvoicesResponse(account.getId(), account.getName(), account.getType(),
                 account.getInstitution(), source, invoices);
@@ -138,7 +151,8 @@ public class CardInvoiceService {
      */
     private CardInvoicesResponse.Invoice toInvoice(Cycle cycle, List<BankTransaction> inCycle,
                                                    LocalDate today,
-                                                   CardInvoicesResponse.Reserve reserve) {
+                                                   CardInvoicesResponse.Reserve reserve,
+                                                   CardInvoicesResponse.ProviderBill providerBill) {
         BigDecimal purchases = BigDecimal.ZERO;
         BigDecimal refunds = BigDecimal.ZERO;
         BigDecimal payments = BigDecimal.ZERO;
@@ -166,6 +180,7 @@ public class CardInvoiceService {
                 inCycle.size(),
                 !cycle.end().isBefore(today),
                 reserve,
+                providerBill,
                 inCycle.stream().map(BankTransactionResponse::from).toList());
     }
 
