@@ -87,6 +87,64 @@
         },
         "type": "object"
       },
+      "Advice": {
+        "properties": {
+          "basis": {
+            "$ref": "#/components/schemas/Basis"
+          },
+          "bestDay": {
+            "format": "date",
+            "type": "string"
+          },
+          "bestDayWeekday": {
+            "type": "string"
+          },
+          "cadence": {
+            "type": "string"
+          },
+          "cadenceOrigin": {
+            "type": "string"
+          },
+          "card": {
+            "$ref": "#/components/schemas/CardAdvice"
+          },
+          "confidence": {
+            "type": "string"
+          },
+          "daysToCover": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "explanation": {
+            "$ref": "#/components/schemas/Explanation"
+          },
+          "fundingDate": {
+            "format": "date",
+            "type": "string"
+          },
+          "fundingSource": {
+            "type": "string"
+          },
+          "mustLastUntil": {
+            "format": "date",
+            "type": "string"
+          },
+          "nextDates": {
+            "items": {
+              "format": "date",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "paymentMode": {
+            "type": "string"
+          },
+          "weeklyDay": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "AiKeyTestRequest": {
         "description": "Chave a testar; corpo ausente testa a chave já cadastrada",
         "properties": {
@@ -383,6 +441,9 @@
           "internalTransfer": {
             "type": "boolean"
           },
+          "netAmount": {
+            "type": "number"
+          },
           "normalizedDescription": {
             "type": "string"
           },
@@ -395,6 +456,9 @@
           },
           "refunded": {
             "type": "boolean"
+          },
+          "refundedAmount": {
+            "type": "number"
           },
           "reviewStatus": {
             "enum": [
@@ -455,6 +519,19 @@
         },
         "type": "object"
       },
+      "Basis": {
+        "properties": {
+          "lastOccurrence": {
+            "format": "date",
+            "type": "string"
+          },
+          "monthsObserved": {
+            "format": "int32",
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
       "Budget": {
         "properties": {
           "categoryId": {
@@ -481,6 +558,37 @@
             "type": "string"
           },
           "message": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "CardAdvice": {
+        "properties": {
+          "accountId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "closingDay": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "invoiceDue": {
+            "format": "date",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "nextClosing": {
+            "format": "date",
+            "type": "string"
+          },
+          "paidBySalaryOn": {
+            "format": "date",
+            "type": "string"
+          },
+          "warning": {
             "type": "string"
           }
         },
@@ -1505,6 +1613,20 @@
         },
         "type": "object"
       },
+      "Explanation": {
+        "properties": {
+          "headline": {
+            "type": "string"
+          },
+          "lines": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
       "FamilyAnalyticsResponse": {
         "properties": {
           "combined": {
@@ -1827,6 +1949,36 @@
         },
         "type": "object"
       },
+      "IncomePatternResponse": {
+        "properties": {
+          "advice": {
+            "$ref": "#/components/schemas/Advice"
+          },
+          "inferred": {
+            "$ref": "#/components/schemas/Inferred"
+          },
+          "message": {
+            "type": "string"
+          },
+          "preference": {
+            "$ref": "#/components/schemas/Preference"
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/SourcePattern"
+            },
+            "type": "array"
+          },
+          "status": {
+            "type": "string"
+          },
+          "today": {
+            "format": "date",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "IncomeSourceItem": {
         "properties": {
           "active": {
@@ -1925,6 +2077,39 @@
           },
           "variation": {
             "type": "number"
+          }
+        },
+        "type": "object"
+      },
+      "Inferred": {
+        "properties": {
+          "cadence": {
+            "type": "string"
+          },
+          "confidence": {
+            "type": "string"
+          },
+          "daysAfterLanding": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "monthsObserved": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "origin": {
+            "type": "string"
+          },
+          "purchasesPerMonth": {
+            "format": "double",
+            "type": "number"
+          },
+          "weekendShare": {
+            "format": "double",
+            "type": "number"
+          },
+          "weeklyDay": {
+            "type": "string"
           }
         },
         "type": "object"
@@ -2685,6 +2870,53 @@
         },
         "type": "object"
       },
+      "Occurrence": {
+        "properties": {
+          "amount": {
+            "type": "number"
+          },
+          "businessDayFromEnd": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "businessDayFromStart": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "date": {
+            "format": "date",
+            "type": "string"
+          },
+          "onBusinessDay": {
+            "type": "boolean"
+          },
+          "weekday": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "Offset": {
+        "properties": {
+          "max": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "median": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "min": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "pairs": {
+            "format": "int32",
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
       "OpenTicket": {
         "properties": {
           "appVersion": {
@@ -2833,6 +3065,47 @@
           },
           "unpaged": {
             "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
+      "Pattern": {
+        "properties": {
+          "confidence": {
+            "type": "string"
+          },
+          "expectedAmount": {
+            "type": "number"
+          },
+          "firstOccurrence": {
+            "format": "date",
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "lastOccurrence": {
+            "format": "date",
+            "type": "string"
+          },
+          "max": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "median": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "min": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "monthsObserved": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "rule": {
+            "type": "string"
           }
         },
         "type": "object"
@@ -2991,6 +3264,31 @@
           "updatedAt": {
             "format": "date-time",
             "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "Preference": {
+        "properties": {
+          "cadence": {
+            "type": "string"
+          },
+          "cardAccountId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "fundingKind": {
+            "type": "string"
+          },
+          "paymentMode": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "weekendPreferred": {
+            "type": "boolean"
           }
         },
         "type": "object"
@@ -3216,6 +3514,30 @@
         },
         "type": "object"
       },
+      "PurchasePreferenceRequest": {
+        "properties": {
+          "cadence": {
+            "type": "string"
+          },
+          "cardAccountId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "fundingKind": {
+            "type": "string"
+          },
+          "paymentMode": {
+            "type": "string"
+          },
+          "weekendPreferred": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "cadence"
+        ],
+        "type": "object"
+      },
       "PurchaseWish": {
         "properties": {
           "purchasedAt": {
@@ -3432,6 +3754,23 @@
           "name",
           "password"
         ],
+        "type": "object"
+      },
+      "Relation": {
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "linked": {
+            "type": "boolean"
+          },
+          "offsetBusinessDays": {
+            "$ref": "#/components/schemas/Offset"
+          },
+          "to": {
+            "type": "string"
+          }
+        },
         "type": "object"
       },
       "Report": {
@@ -3747,6 +4086,49 @@
           },
           "name": {
             "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "SourcePattern": {
+        "properties": {
+          "confirmed": {
+            "type": "boolean"
+          },
+          "incomeSourceId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "occurrences": {
+            "items": {
+              "$ref": "#/components/schemas/Occurrence"
+            },
+            "type": "array"
+          },
+          "origin": {
+            "type": "string"
+          },
+          "pattern": {
+            "$ref": "#/components/schemas/Pattern"
+          },
+          "relation": {
+            "$ref": "#/components/schemas/Relation"
+          },
+          "seriesId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "upcoming": {
+            "items": {
+              "$ref": "#/components/schemas/Upcoming"
+            },
+            "type": "array"
           }
         },
         "type": "object"
@@ -4197,6 +4579,35 @@
             "type": "number"
           },
           "type": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "Upcoming": {
+        "properties": {
+          "adjusted": {
+            "type": "boolean"
+          },
+          "basis": {
+            "type": "string"
+          },
+          "earliest": {
+            "format": "date",
+            "type": "string"
+          },
+          "expected": {
+            "format": "date",
+            "type": "string"
+          },
+          "latest": {
+            "format": "date",
+            "type": "string"
+          },
+          "month": {
+            "type": "string"
+          },
+          "origin": {
             "type": "string"
           }
         },
@@ -5541,6 +5952,73 @@
           }
         },
         "summary": "Quanto do período é dívida",
+        "tags": [
+          "Análise"
+        ]
+      }
+    },
+    "/api/v1/analytics/income-pattern": {
+      "get": {
+        "description": "Salário não cai 'dia 5': cai no Nº dia útil bancário (segunda a sexta, sem feriado nacional), e o vale costuma cair alguns dias úteis antes dele. O padrão é DERIVADO a cada leitura a partir das transações já vinculadas a cada fonte de renda — nada é gravado em income_sources nem em recurring_series aqui. `status`: READY (há recomendação), INSUFFICIENT_HISTORY (menos de 3 meses de histórico em toda fonte), NO_INCOME (nenhuma fonte de renda) ou CARD_CYCLE_UNKNOWN (pagamento no cartão sem dia de fechamento conhecido). `origin` MEASURED (extrato) ou INFORMED (dia declarado, sem histórico) viaja em todo número.",
+        "operationId": "incomePattern",
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/IncomePatternResponse"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "summary": "Padrão de entradas em dia útil e o melhor dia para as compras",
+        "tags": [
+          "Análise"
+        ]
+      }
+    },
+    "/api/v1/analytics/income-pattern/preference": {
+      "delete": {
+        "description": "Volta a deixar o app deduzir a cadência de compra pelo extrato.",
+        "operationId": "clearPreference",
+        "responses": {
+          "204": {
+            "description": "No Content"
+          }
+        },
+        "summary": "Apagar a preferência declarada",
+        "tags": [
+          "Análise"
+        ]
+      },
+      "put": {
+        "description": "Cadência (MONTHLY/WEEKLY), preferência por fim de semana e forma de pagamento (CASH/CARD) — o que o extrato sozinho não conta. CARD exige cardAccountId de um cartão seu; sem preferência salva, o app deduz pelo extrato (campo `inferred` do GET).",
+        "operationId": "savePreference",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PurchasePreferenceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/Preference"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "summary": "Declarar como você faz as compras de mercado",
         "tags": [
           "Análise"
         ]
