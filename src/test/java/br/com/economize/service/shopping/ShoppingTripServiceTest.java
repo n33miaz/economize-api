@@ -35,6 +35,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -415,6 +416,96 @@ class ShoppingTripServiceTest {
         assertThat(storeCaptor.getValue()).isEqualTo("mercado abc");
     }
 
+    // ------------------------------------------------------------ nota fiscal
+
+    /** Cupom de SP, 09/2026, CNPJ 12.345.678/0001-95, modelo 65, nº 123456. */
+    private static final String CHAVE = "35260912345678000195650010001234561123456788";
+
+    private ShoppingTrip compraAbertaDoDono(String clientId) {
+        ShoppingTrip trip = ShoppingTrip.builder().id(UUID.randomUUID())
+                .userId(user.getId()).clientId(clientId)
+                .status(ShoppingTrip.Status.OPEN).build();
+        when(tripRepository.findByUserIdAndClientId(user.getId(), clientId))
+                .thenReturn(Optional.of(trip));
+        // lenient: os casos de chave recusada nem chegam a salvar
+        lenient().when(tripRepository.save(any(ShoppingTrip.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
+        return trip;
+    }
+
+    @Test
+    @DisplayName("A chave do cupom entra na compra, e o CNPJ sai dela sem consultar ninguém")
+    void chaveDoCupomEntraComOCnpj() {
+        semCasa();
+        compraAbertaDoDono("compra1");
+        when(tripRepository.findByUserIdAndReceiptKey(user.getId(), CHAVE))
+                .thenReturn(Optional.empty());
+
+        ShoppingResponses.TripItem r = service.close(EMAIL, "compra1",
+                new ShoppingRequests.CloseTrip(null, CHAVE));
+
+        assertThat(r.receiptKey()).isEqualTo(CHAVE);
+        // os 14 dígitos do meio da chave SÃO o CNPJ de quem emitiu
+        assertThat(r.receiptIssuerCnpj()).isEqualTo("12345678000195");
+    }
+
+    @Test
+    @DisplayName("Chave com um dígito trocado é recusada — nota inexistente não se guarda")
+    void chaveTortaERecusada() {
+        semCasa();
+        compraAbertaDoDono("compra2");
+        String torta = CHAVE.substring(0, 43) + ((CHAVE.charAt(43) == '9') ? '0' : '9');
+
+        assertThatThrownBy(() -> service.close(EMAIL, "compra2",
+                new ShoppingRequests.CloseTrip(null, torta)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("não confere");
+    }
+
+    @Test
+    @DisplayName("A mesma nota em duas compras responde com a frase, não com erro de banco")
+    void mesmaNotaDuasVezes() {
+        semCasa();
+        compraAbertaDoDono("compra3");
+        ShoppingTrip outra = ShoppingTrip.builder().id(UUID.randomUUID())
+                .userId(user.getId()).clientId("compra-antiga").receiptKey(CHAVE).build();
+        when(tripRepository.findByUserIdAndReceiptKey(user.getId(), CHAVE))
+                .thenReturn(Optional.of(outra));
+
+        assertThatThrownBy(() -> service.close(EMAIL, "compra3",
+                new ShoppingRequests.CloseTrip(null, CHAVE)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("já está em outra compra");
+    }
+
+    @Test
+    @DisplayName("Reenviar a MESMA nota para a MESMA compra não reclama")
+    void mesmaNotaNaMesmaCompraPassa() {
+        semCasa();
+        ShoppingTrip trip = compraAbertaDoDono("compra4");
+        // a própria compra já tem a nota: fechar de novo não pode virar erro
+        when(tripRepository.findByUserIdAndReceiptKey(user.getId(), CHAVE))
+                .thenReturn(Optional.of(trip));
+
+        ShoppingResponses.TripItem r = service.close(EMAIL, "compra4",
+                new ShoppingRequests.CloseTrip(null, CHAVE));
+
+        assertThat(r.receiptKey()).isEqualTo(CHAVE);
+    }
+
+    @Test
+    @DisplayName("Fechar sem nota continua funcionando: a nota pode chegar depois")
+    void fecharSemNota() {
+        semCasa();
+        compraAbertaDoDono("compra5");
+
+        ShoppingResponses.TripItem r = service.close(EMAIL, "compra5",
+                new ShoppingRequests.CloseTrip(new java.math.BigDecimal("604.91"), null));
+
+        assertThat(r.receiptKey()).isNull();
+        assertThat(r.receiptTotal()).isEqualByComparingTo("604.91");
+    }
+
     // ------------------------------------------------------------ autorização
 
     @Test
@@ -454,7 +545,7 @@ class ShoppingTripServiceTest {
         when(tripRepository.findByUserIdAndClientId(user.getId(), "c1")).thenReturn(Optional.empty());
 
         ShoppingRequests.UpsertTrip request = new ShoppingRequests.UpsertTrip(
-                null, "Mercado X", null, null, null, null, null, null, true, List.of());
+                null, "Mercado X", null, null, null, null, null, null, null, true, List.of());
 
         assertThatThrownBy(() -> service.upsert(EMAIL, "c1", request))
                 .isInstanceOf(IllegalArgumentException.class)
@@ -476,7 +567,7 @@ class ShoppingTripServiceTest {
         when(itemRepository.findAllByTripIdOrderByCreatedAtAsc(trip.getId())).thenReturn(List.of());
 
         ShoppingRequests.UpsertTrip request = new ShoppingRequests.UpsertTrip(
-                null, null, null, null, null, null, null, null, false, List.of());
+                null, null, null, null, null, null, null, null, null, false, List.of());
 
         service.upsert(EMAIL, "c1", request);
 
@@ -487,7 +578,7 @@ class ShoppingTripServiceTest {
     @DisplayName("Identificador do corpo diferente do da rota é 400")
     void identificadorDivergenteE400() {
         ShoppingRequests.UpsertTrip request = new ShoppingRequests.UpsertTrip(
-                "outro", null, null, null, null, null, null, null, null, List.of());
+                "outro", null, null, null, null, null, null, null, null, null, List.of());
 
         assertThatThrownBy(() -> service.upsert(EMAIL, "c1", request))
                 .isInstanceOf(IllegalArgumentException.class);

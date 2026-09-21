@@ -5,6 +5,7 @@ import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.Digits;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
 import java.math.BigDecimal;
@@ -57,6 +58,14 @@ public final class ShoppingRequests {
             @DecimalMin(value = "0.00", message = "Total da nota não pode ser negativo")
             @Digits(integer = 15, fraction = 4, message = "Total da nota fora da faixa aceita")
             BigDecimal receiptTotal,
+
+            /**
+             * A chave de 44 dígitos do cupom. Vem pelo upsert, e não só pelo
+             * fechamento, porque é assim que a fila offline funciona: o app
+             * grava no aparelho e o PUT leva tudo junto quando a rede volta.
+             */
+            @Pattern(regexp = "^\\d{44}$", message = "A chave da nota tem 44 dígitos")
+            String receiptKey,
 
             @Size(max = 500, message = "Observações devem ter no máximo 500 caracteres")
             String notes,
@@ -111,7 +120,18 @@ public final class ShoppingRequests {
     public record CloseTrip(
             @DecimalMin(value = "0.00", message = "Total da nota não pode ser negativo")
             @Digits(integer = 15, fraction = 4, message = "Total da nota fora da faixa aceita")
-            BigDecimal receiptTotal
+            BigDecimal receiptTotal,
+
+            /**
+             * A chave de acesso do cupom, 44 dígitos, lida do QR. Opcional: a
+             * compra pode fechar sem nota, e a nota pode chegar depois.
+             *
+             * <p>O servidor confere o dígito verificador — chave digitada com
+             * um número trocado vira uma nota que não existe, guardada para
+             * sempre, e é barato não deixar isso acontecer.
+             */
+            @Pattern(regexp = "^\\d{44}$", message = "A chave da nota tem 44 dígitos")
+            String receiptKey
     ) {
     }
 

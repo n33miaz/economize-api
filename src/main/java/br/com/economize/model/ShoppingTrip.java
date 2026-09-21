@@ -85,6 +85,21 @@ public class ShoppingTrip {
     @Column(name = "receipt_total", precision = 19, scale = 4)
     private BigDecimal receiptTotal;
 
+    /**
+     * A chave de acesso do cupom, 44 dígitos — V43.
+     *
+     * <p>Ela identifica a nota de forma única e carrega, sem consultar
+     * ninguém, o estado, o mês, o CNPJ de quem emitiu, o modelo, a série e o
+     * número impresso no papel. Os ITENS não estão aqui: eles moram no portal
+     * da Fazenda de cada estado, e isso é outro projeto.
+     */
+    @Column(name = "receipt_key", length = 44)
+    private String receiptKey;
+
+    /** Sai da própria chave; guardado para "quanto eu gasto NESTE mercado". */
+    @Column(name = "receipt_issuer_cnpj", length = 14)
+    private String receiptIssuerCnpj;
+
     /** O lançamento do extrato que pagou esta compra, quando conciliada. */
     @Column(name = "reconciled_transaction_id")
     private UUID reconciledTransactionId;

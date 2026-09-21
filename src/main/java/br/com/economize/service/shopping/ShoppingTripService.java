@@ -265,9 +265,57 @@ public class ShoppingTripService {
         if (request != null && request.receiptTotal() != null) {
             trip.setReceiptTotal(positiveOrNull(request.receiptTotal()));
         }
+        if (request != null && request.receiptKey() != null && !request.receiptKey().isBlank()) {
+            aplicarNota(trip, request.receiptKey().trim());
+        }
         trip = tripRepository.save(trip);
         log.info("Compra {} encerrada por {}", LogSafe.value(trip.getClientId()), viewer.userId());
         return respond(trip);
+    }
+
+    /**
+     * Amarra a nota fiscal à compra, pela chave de acesso do cupom.
+     *
+     * <p>O dígito verificador é conferido AQUI, e não só no aplicativo: o
+     * servidor é o único lugar onde a regra vale para todo cliente, e uma
+     * chave com um número trocado viraria uma nota inexistente guardada para
+     * sempre. O CNPJ é extraído da própria chave — derivar toda vez seria
+     * possível, mas guardá-lo é o que permite perguntar "quanto eu gasto
+     * neste mercado" sem varrer 44 dígitos linha a linha.
+     *
+     * <p>A mesma nota duas vezes na mesma conta responde 400. O índice único
+     * existe por baixo, mas a mensagem daqui é a que a pessoa lê.
+     */
+    private void aplicarNota(ShoppingTrip trip, String chave) {
+        if (!chaveDeNotaValida(chave)) {
+            throw new IllegalArgumentException(
+                    "A chave da nota não confere — leia o QR do cupom outra vez");
+        }
+        tripRepository.findByUserIdAndReceiptKey(trip.getUserId(), chave)
+                .filter(outra -> !outra.getId().equals(trip.getId()))
+                .ifPresent(outra -> {
+                    throw new IllegalArgumentException(
+                            "Esta nota já está em outra compra sua");
+                });
+        trip.setReceiptKey(chave);
+        trip.setReceiptIssuerCnpj(chave.substring(6, 20));
+    }
+
+    /**
+     * Módulo 11 com pesos de 2 a 9 girando da direita para a esquerda — a
+     * mesma conta que o fisco usa para fechar a chave de acesso.
+     */
+    static boolean chaveDeNotaValida(String chave) {
+        if (chave == null || !chave.matches("\\d{44}")) return false;
+        int soma = 0;
+        int peso = 2;
+        for (int i = 42; i >= 0; i--) {
+            soma += Character.getNumericValue(chave.charAt(i)) * peso;
+            peso = peso == 9 ? 2 : peso + 1;
+        }
+        int resto = soma % 11;
+        int esperado = (resto == 0 || resto == 1) ? 0 : 11 - resto;
+        return esperado == Character.getNumericValue(chave.charAt(43));
     }
 
     /**
@@ -363,6 +411,11 @@ public class ShoppingTripService {
         // zero (ou negativo) é "tirei o teto": nulo já significa "não mexa"
         if (r.budget() != null) trip.setBudget(positiveOrNull(r.budget()));
         if (r.receiptTotal() != null) trip.setReceiptTotal(positiveOrNull(r.receiptTotal()));
+        // Mesma validação do fechamento: a chave chega pelos dois caminhos e
+        // não pode ser confiável num e não no outro
+        if (r.receiptKey() != null && !r.receiptKey().isBlank()) {
+            aplicarNota(trip, r.receiptKey().trim());
+        }
         if (r.startedAt() != null) trip.setStartedAt(r.startedAt());
         if (r.closedAt() != null) trip.setClosedAt(r.closedAt());
 
@@ -504,6 +557,7 @@ public class ShoppingTripService {
                 trip.getId(), trip.getClientId(), trip.getUserId(), names.get(trip.getUserId()),
                 trip.getFamilyGroupId(), trip.isShared(), trip.getStoreName(), trip.getStatus().name(),
                 trip.getBudget(), trip.getStartedAt(), trip.getClosedAt(), trip.getReceiptTotal(),
+                trip.getReceiptKey(), trip.getReceiptIssuerCnpj(),
                 trip.getReconciledTransactionId(), trip.getNotes(), total(items), alive, lines,
                 trip.getCreatedAt(), trip.getUpdatedAt());
     }
