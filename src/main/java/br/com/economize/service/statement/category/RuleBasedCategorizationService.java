@@ -81,20 +81,33 @@ public class RuleBasedCategorizationService {
             new Rule("FOOD_DELIVERY", "FOOD", BRAND, true,
                     List.of("ifd", "99food", "99 food", "aiqfome", "zedelivery", "ubereats")),
             new Rule("FOOD_GROCERIES", "FOOD", List.of("supermercado", "mercadinho", "minimercado", "mercearia", "adega", "hortifruti", "sacolao", "sacolão", "atacadao", "atacadão", "assai", "assaí", "carrefour", "roldao", "roldão", "pao de acucar", "pão de açúcar", "big bompreco", "extra super")),
-            new Rule("FOOD_COFFEE", "FOOD", List.of("padaria", "cafeteria", "starbucks", "confeitaria", "doceria")),
+            new Rule("FOOD_COFFEE", "FOOD", List.of("padaria", "cafeteria", "starbucks", "confeitaria", "doceria", "bistro")),
+            // "cafe" por palavra inteira: como pedaço vive dentro de "cafeteria"
+            // (que já é regra) e de nomes próprios; inteiro cobre "baruh cafe e
+            // bistro" e "grsa gr pao", medidos no cartão do dono
+            new Rule("FOOD_COFFEE", "FOOD", 0, true, List.of("cafe", "café", "pao")),
             // "restaurant"/"lanch" como prefixo cobrem restaurante(s), lanche(s) e
             // lanchonete(s). Era "lanche", que NÃO está dentro de "lanchonete"
             // (lanch-o-nete): medido no extrato real (EC-111), 6 compras em
             // lanchonetes ficavam sem categoria e 4 PIX para lanchonete caíam em
             // Transferências
-            new Rule("FOOD_RESTAURANT", "FOOD", List.of("restaurant", "lanch", "pizzaria", "churrascaria", "hamburgueria", "bar e ", "burger", "mc donalds", "mcdonald", "burger king", "subway", "outback", "habibs", "habib's")),
+            new Rule("FOOD_RESTAURANT", "FOOD", List.of("restaurant", "lanch", "pizzaria", "churrascaria", "hamburgueria", "bar e ", "burger", "mc donalds", "mcdonald", "burger king", "subway", "outback", "habibs", "habib's",
+                    // comida de rua e marmita, como chegam pela maquininha do
+                    // cartão ("choripan barueri bra", "carioca marmitex",
+                    // "pastel do neto"): 12 compras do dono sem categoria
+                    "choripan", "marmitex", "marmitaria", "pastel", "pastelaria", "esfiha", "esfiharia", "sushi", "salgados")),
             // Transporte
             // "uber" por palavra inteira: como pedaco vive dentro de "HUBERTO" e de
             // "UBERLANDIA", e o Pix para uma pessoa virava corrida. "UBEREATS"
             // colado saiu daqui e entrou no delivery, que e onde ele sempre foi
             new Rule("TRANSPORT_RIDE", "TRANSPORT", 0, true, List.of("uber")),
+            // "uberrides" e "dl uber" são como a corrida chega pelo cartão do
+            // Inter via conector ("dl uberrides sao paulo bra"): a palavra
+            // inteira "uber" não casa, e 21 corridas do dono ficaram sem
+            // categoria em setembro. "99 sao paulo" é o mesmo caso da 99.
             new Rule("TRANSPORT_RIDE", "TRANSPORT", List.of("99app", "99 pop", "99pop",
-                    "99 tecnologia", "99tecnologia", "cabify", "indriver")),
+                    "99 tecnologia", "99tecnologia", "cabify", "indriver",
+                    "uberrides", "dl uber", "99 sao paulo")),
             // "posto" por palavra inteira: como pedaco vive dentro de "IMPOSTO"
             // (20 linhas do extrato do dono) e de "COMPOSTO". Hoje o resultado
             // sai certo por sorte -- "imposto" tem 7 letras e vence "posto" no
@@ -104,7 +117,9 @@ public class RuleBasedCategorizationService {
             new Rule("TRANSPORT_FUEL", "TRANSPORT", List.of("gasolina", "ipiranga", "shell", "petrobras", "combustivel", "combustível", "etanol")),
             new Rule("TRANSPORT_PUBLIC", "TRANSPORT", 0, true, List.of("cptm", "metro", "metrô")),
             new Rule("TRANSPORT_PUBLIC", "TRANSPORT", List.of("autopass", "bilhete unico", "bilhete único", "meio de transporte", "onibus", "ônibus", "sptrans", "riocard", "bom cartao", "bom cartão",
-                    "prodata", "transporte e turismo", "recargapay *transport")),
+                    "prodata", "transporte e turismo", "recargapay *transport",
+                    // passagem rodoviária comprada pelo app: "bus servicos clickbus"
+                    "clickbus", "buser")),
             new Rule("TRANSPORT_PARKING", "TRANSPORT", List.of("estacionamento", "zona azul", "pedagio", "pedágio", "sem parar", "conectcar", "veloe", "parking")),
             // "pneus" entra ao lado de "pneu" porque palavra inteira nao flexiona
             new Rule("TRANSPORT_VEHICLE", "TRANSPORT", 0, true, List.of("ipva", "pneu", "pneus")),
@@ -115,13 +130,18 @@ public class RuleBasedCategorizationService {
             new Rule("HOUSING_PROPERTY_TAX", "HOUSING", 0, true, List.of("iptu")),
             new Rule("HOUSING_GOODS", "HOUSING", List.of("leroy merlin", "telhanorte", "casa e construcao", "casa e construção", "material de construcao", "material de construção",
                     "materiais para construcao", "materiais para construção",
-                    "materiais de construcao", "materiais de construção", "tok stok", "mobly", "madeiramadeira")),
+                    "materiais de construcao", "materiais de construção", "tok stok", "mobly", "madeiramadeira",
+                    "utilidades", "qcasa", "utilidades domesticas", "utilidades domésticas")),
             // Contas e serviços
             new Rule("UTILITIES_ELECTRICITY", "UTILITIES", 0, true, List.of("enel", "cpfl")),
             new Rule("UTILITIES_ELECTRICITY", "UTILITIES", List.of("energia", "eletropaulo", "cemig", "copel", "light servicos", "light serviços", "celesc", "coelba", "neoenergia")),
             new Rule("UTILITIES_WATER", "UTILITIES", List.of("sabesp", "saneamento", "cedae", "copasa", "sanepar", "embasa", "agua e esgoto", "água e esgoto")),
             new Rule("UTILITIES_GAS", "UTILITIES", List.of("comgas", "comgás", "naturgy", "ultragaz", "liquigas", "liquigás")),
-            new Rule("UTILITIES_INTERNET", "UTILITIES", List.of("internet", "banda larga", "net servicos", "net serviços", "sky ", "oi fibra", "vivo fibra", "telecomunicacoes", "telecomunicações")),
+            // "adapt link" e "cabo servicos" são provedores regionais que
+            // aparecem no boleto sem a palavra internet: o do dono caía em
+            // "Boletos e faturas" e a conta de internet sumia do orçamento
+            new Rule("UTILITIES_INTERNET", "UTILITIES", List.of("internet", "banda larga", "net servicos", "net serviços", "sky ", "oi fibra", "vivo fibra", "telecomunicacoes", "telecomunicações",
+                    "adapt link", "cabo servicos", "cabo serviços", "comunicacao multimidia", "comunicação multimídia")),
             // "recarga" é segura mesmo com a do transporte existindo: a keyword mais
             // longa vence, e "autopass"/"bilhete unico" são mais longas
             // operadoras são palavras curtas e comuns ("tim", "vivo", "claro"):
@@ -162,7 +182,9 @@ public class RuleBasedCategorizationService {
             new Rule("EDUCATION_SCHOOL", "EDUCATION", List.of("escola", "faculdade", "universidade", "colegio", "colégio", "mensalidade escolar", "creche")),
             new Rule("EDUCATION_BOOKS", "EDUCATION", List.of("livraria", "saraiva", "cultura livraria", "material escolar")),
             // Lazer
-            new Rule("LEISURE_STREAMING", "LEISURE", List.of("netflix", "spotify", "disney plus", "hbo max", "prime video", "deezer", "youtube premium", "globoplay", "paramount", "apple music", "apple tv")),
+            new Rule("LEISURE_STREAMING", "LEISURE", List.of("netflix", "spotify", "disney plus", "hbo max", "prime video", "deezer", "youtube premium", "globoplay", "paramount", "apple music", "apple tv",
+                    // assinaturas digitais que chegam pelo cartão internacional
+                    "openai", "chatgpt", "google one", "icloud", "microsoft 365")),
             new Rule("LEISURE_GAMES", "LEISURE", 0, true, List.of("xbox")),
             new Rule("LEISURE_GAMES", "LEISURE", List.of("steam", "playstation", "nintendo", "epic games", "riot games", "blizzard")),
             new Rule("LEISURE_EVENTS", "LEISURE", List.of("cinema", "cinemark", "ingresso", "ticketmaster", "sympla", "teatro", "show ", "eventim")),
@@ -197,7 +219,12 @@ public class RuleBasedCategorizationService {
                     "adiantamento salarial", "13o salario", "férias",
                     "liquido de vencimento", "líquido de vencimento", "vencimentos",
                     "remuneracao", "remuneração", "pro labore", "pró-labore")),
-            new Rule("INCOME_CASHBACK", "INCOME", List.of("cashback", "estorno", "reembolso", "devolucao", "devolução")),
+            // "resgate pontos"/"cred pontos" são pontos de fidelidade virando
+            // dinheiro ("Cred Pontos Meu Porquinho - Resgate Pontos"): a frase
+            // inteira vence "resgate" e "porquinho", que mandavam R$ 1 a R$ 5 de
+            // pontos para Renda fixa e os contavam como receita de investimento
+            new Rule("INCOME_CASHBACK", "INCOME", List.of("cashback", "estorno", "reembolso", "devolucao", "devolução",
+                    "resgate pontos", "cred pontos", "resgate de pontos")),
             new Rule("INCOME_YIELDS", "INCOME", 0, true, List.of("jcp")),
             new Rule("INCOME_YIELDS", "INCOME", List.of("rendimento", "dividendo", "juros sobre capital", "proventos")),
             new Rule("INCOME_BENEFITS", "INCOME", 0, true, List.of("inss")),
@@ -225,7 +252,12 @@ public class RuleBasedCategorizationService {
             // "ted" solto acha "limited"/"united"; "doc" acharia "documento"
             new Rule("TRANSFER_TED", "TRANSFER", METHOD_GENERIC, true,
                     List.of("ted", "doc ", "transferencia", "transferência")),
-            new Rule("TRANSFER_BILLS", "TRANSFER", List.of("fatura", "boleto", "pagamento efetuado", "pagamento de titulo", "pagamento de título")),
+            // "pagamento recebido" e "pagamento on line" são o crédito do
+            // pagamento da fatura visto DE DENTRO do cartão. Sem regra caíam no
+            // fallback (60%) na RAIZ Transferências — e, aprovados na revisão,
+            // ensinavam ao motor que pagar fatura é receita. Filha, nunca raiz.
+            new Rule("TRANSFER_BILLS", "TRANSFER", List.of("fatura", "boleto", "pagamento efetuado", "pagamento de titulo", "pagamento de título",
+                    "pagamento recebido", "pagamento on line", "pagamento online", "pagamento fatura")),
             new Rule("TRANSFER_CASH", "TRANSFER", List.of("saque", "deposito", "depósito", "banco24horas", "banco 24 horas")),
             new Rule("TRANSFER_SELF", "TRANSFER", List.of("entre contas", "mesma titularidade", "conta propria", "conta própria"))
     );

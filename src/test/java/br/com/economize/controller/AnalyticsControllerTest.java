@@ -2,6 +2,7 @@ package br.com.economize.controller;
 
 import br.com.economize.config.CorsConfig;
 import br.com.economize.dto.analytics.AnalysisWindow;
+import br.com.economize.dto.analytics.IncomePatternResponse;
 import br.com.economize.dto.analytics.MonthlyAnalyticsResponse;
 import br.com.economize.security.JwtAuthenticationFilter;
 import br.com.economize.security.JwtUtil;
@@ -13,6 +14,7 @@ import br.com.economize.service.DebtInsightService;
 import br.com.economize.service.InstallmentProjectionService;
 import br.com.economize.service.CategoryBudgetService;
 import br.com.economize.service.SubscriptionHunterService;
+import br.com.economize.service.wish.IncomePatternService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -20,6 +22,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.reactive.WebFluxTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.reactive.server.WebTestClient;
 
@@ -32,6 +35,7 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -64,6 +68,9 @@ class AnalyticsControllerTest {
 
     @MockitoBean
     private CategoryBudgetService categoryBudgetService;
+
+    @MockitoBean
+    private IncomePatternService incomePatternService;
 
     @Test
     @DisplayName("GET /monthly - month continua funcionando igual (retrocompatibilidade)")
@@ -321,5 +328,95 @@ class AnalyticsControllerTest {
 
     private String bearerToken() {
         return "Bearer " + jwtUtil.generateToken(EMAIL);
+    }
+
+    @Test
+    @DisplayName("GET /income-pattern - devolve o conselho quando READY")
+    void incomePatternReturnsAdviceWhenReady() {
+        when(incomePatternService.analyze(EMAIL)).thenReturn(readyIncomePattern());
+
+        webTestClient.get()
+                .uri("/api/v1/analytics/income-pattern")
+                .header(HttpHeaders.AUTHORIZATION, bearerToken())
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.status").isEqualTo("READY")
+                .jsonPath("$.advice.bestDay").isEqualTo("2026-10-03")
+                .jsonPath("$.advice.fundingSource").isEqualTo("MEAL_VOUCHER");
+    }
+
+    @Test
+    @DisplayName("GET /income-pattern - sem token responde 401")
+    void incomePatternRequiresAuthentication() {
+        webTestClient.get()
+                .uri("/api/v1/analytics/income-pattern")
+                .exchange()
+                .expectStatus().isUnauthorized();
+
+        verifyNoInteractions(incomePatternService);
+    }
+
+    @Test
+    @DisplayName("PUT /income-pattern/preference - cadência inválida responde 400")
+    void savePreferenceRejectsInvalidCadence() {
+        when(incomePatternService.savePreference(eq(EMAIL), eq("INVALID"), any(), any(), any(), any()))
+                .thenThrow(new IllegalArgumentException("Cadência inválida: use MONTHLY ou WEEKLY"));
+
+        webTestClient.put()
+                .uri("/api/v1/analytics/income-pattern/preference")
+                .header(HttpHeaders.AUTHORIZATION, bearerToken())
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"cadence\":\"INVALID\"}")
+                .exchange()
+                .expectStatus().isBadRequest()
+                .expectBody()
+                .jsonPath("$.detail").isEqualTo("Cadência inválida: use MONTHLY ou WEEKLY");
+    }
+
+    @Test
+    @DisplayName("PUT /income-pattern/preference - CARD sem cardAccountId responde 400")
+    void savePreferenceRejectsCardWithoutAccount() {
+        when(incomePatternService.savePreference(eq(EMAIL), eq("MONTHLY"), any(), eq("CARD"), isNull(), any()))
+                .thenThrow(new IllegalArgumentException("Informe o cartão quando o pagamento é CARD"));
+
+        webTestClient.put()
+                .uri("/api/v1/analytics/income-pattern/preference")
+                .header(HttpHeaders.AUTHORIZATION, bearerToken())
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue("{\"cadence\":\"MONTHLY\",\"paymentMode\":\"CARD\"}")
+                .exchange()
+                .expectStatus().isBadRequest()
+                .expectBody()
+                .jsonPath("$.detail").isEqualTo("Informe o cartão quando o pagamento é CARD");
+    }
+
+    @Test
+    @DisplayName("DELETE /income-pattern/preference - apaga a preferência e responde 204")
+    void clearPreferenceReturnsNoContent() {
+        webTestClient.delete()
+                .uri("/api/v1/analytics/income-pattern/preference")
+                .header(HttpHeaders.AUTHORIZATION, bearerToken())
+                .exchange()
+                .expectStatus().isNoContent();
+
+        verify(incomePatternService).clearPreference(EMAIL);
+    }
+
+    private IncomePatternResponse readyIncomePattern() {
+        IncomePatternResponse.Advice advice = new IncomePatternResponse.Advice(
+                "MONTHLY", "MEASURED", "CASH",
+                LocalDate.of(2026, 10, 3), "SATURDAY",
+                "MEAL_VOUCHER", LocalDate.of(2026, 9, 29), LocalDate.of(2026, 11, 9), 37,
+                null, null, List.of(), "MEDIUM",
+                new IncomePatternResponse.Explanation("Melhor dia para as compras: sáb 03/10",
+                        List.of("Comprando no sábado 03/10, a compra precisa durar até 09/11 (37 dias).")),
+                new IncomePatternResponse.Basis(3, LocalDate.of(2026, 8, 28)));
+
+        IncomePatternResponse.Inferred inferred = new IncomePatternResponse.Inferred(
+                "MONTHLY", 1.0, 0.8, 2, null, 6, "MEDIUM", "MEASURED");
+
+        return new IncomePatternResponse("READY", null, LocalDate.of(2026, 9, 15),
+                List.of(), null, inferred, advice);
     }
 }

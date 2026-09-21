@@ -150,6 +150,32 @@ public class BankTransaction {
     @Column(name = "refund_of_id")
     private UUID refundOfId;
 
+    /**
+     * No lado da COMPRA, quanto já voltou por estornos PARCIAIS vinculados
+     * (V40). Positivo; zero quando nada voltou.
+     *
+     * <p>É o que faz "abater a compra" valer em toda soma do app sem depender
+     * de o crédito cair na mesma janela consultada — o estorno costuma vir na
+     * fatura seguinte. Decisão do dono em 17/09/2026 sobre o caso real:
+     * R$ 18,50 devolvidos de uma compra de R$ 604,91.
+     */
+    @Column(name = "refunded_amount", nullable = false)
+    @Builder.Default
+    private BigDecimal refundedAmount = BigDecimal.ZERO;
+
+    /**
+     * O valor que CONTA: a compra menos o que dela já voltou.
+     *
+     * <p>Para uma compra de −604,91 com 18,50 devolvidos, −586,41. Para uma
+     * linha sem estorno parcial, o próprio {@code amount}. Toda soma em Java
+     * lê daqui; as consultas JPQL fazem a mesma conta inline.
+     */
+    public BigDecimal getNetAmount() {
+        if (amount == null) return null;
+        if (refundedAmount == null || refundedAmount.signum() == 0) return amount;
+        return amount.add(refundedAmount);
+    }
+
     /** Quem decidiu ignorar: a varredura de duplicatas, ou a pessoa. */
     @Enumerated(EnumType.STRING)
     @Column(name = "ignored_reason", length = 16)

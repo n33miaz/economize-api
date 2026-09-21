@@ -47,9 +47,13 @@ public class IncomeSourceService {
     // Os palpites são comparados contra o texto JÁ normalizado (sem acento, sem
     // pontuação, cercado de espaços). Por isso "vr" aparece como " vr ": solto,
     // ele casaria dentro de "livro". Palavra longa dispensa a cerca.
+    // "flash" entrou porque o VR do dono chega como "Pix recebido Flash
+    // Tecnologia" e como "Depósito transferido" no CSV da própria Flash — sem
+    // a marca, a maior entrada mensal depois do salário era sugerida como OTHER
+    // e nunca ganhava a relação "N dias úteis antes do salário"
     private static final List<String> MEAL_HINTS = List.of(
             " vr ", "vale refeicao", "refeicao", "alelo", "sodexo", "ticket",
-            "caju", "pluxee");
+            "caju", "pluxee", "flash");
 
     private static final List<String> FOOD_HINTS = List.of(
             " va ", "vale alimentacao", "alimentacao");

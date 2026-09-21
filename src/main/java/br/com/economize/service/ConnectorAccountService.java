@@ -47,7 +47,25 @@ public class ConnectorAccountService {
                                   ConnectorAccount.AccountType type,
                                   Integer statementClosingDay, Integer statementDueDay,
                                   UUID pluggyItemId,
-                                  BigDecimal reportedBalance, OffsetDateTime reportedBalanceAt) {
+                                  BigDecimal reportedBalance, OffsetDateTime reportedBalanceAt,
+                                  /**
+                                   * Limite total do cartão, quando o provedor o
+                                   * entrega (o Pluggy entrega para o Inter: R$ 5.330,01
+                                   * medidos na conta do dono em 17/09/2026). Nulo nos
+                                   * demais — e aí a pergunta ao usuário (V36) continua
+                                   * sendo a fonte.
+                                   */
+                                  BigDecimal creditLimit) {
+
+        /** Sem limite do provedor — como as chamadas anteriores à V36 montavam. */
+        public AccountSnapshot(String providerAccountId, String name, String institution,
+                               ConnectorAccount.AccountType type,
+                               Integer statementClosingDay, Integer statementDueDay,
+                               UUID pluggyItemId,
+                               BigDecimal reportedBalance, OffsetDateTime reportedBalanceAt) {
+            this(providerAccountId, name, institution, type, statementClosingDay,
+                    statementDueDay, pluggyItemId, reportedBalance, reportedBalanceAt, null);
+        }
 
         /** Sem saldo informado — é como as fontes que não têm essa noção chamam. */
         public AccountSnapshot(String providerAccountId, String name, String institution,
@@ -55,7 +73,7 @@ public class ConnectorAccountService {
                                Integer statementClosingDay, Integer statementDueDay,
                                UUID pluggyItemId) {
             this(providerAccountId, name, institution, type, statementClosingDay,
-                    statementDueDay, pluggyItemId, null, null);
+                    statementDueDay, pluggyItemId, null, null, null);
         }
     }
 
@@ -159,6 +177,13 @@ public class ConnectorAccountService {
         if (snapshot.reportedBalance() != null) {
             account.setReportedBalance(snapshot.reportedBalance());
             account.setReportedBalanceAt(snapshot.reportedBalanceAt());
+        }
+        // O limite do provedor só preenche o que está VAZIO: quem declarou o
+        // próprio limite, ou disse que este cartão divide o de outro, decidiu —
+        // e decisão de gente vence leitura de conector em qualquer direção
+        if (snapshot.creditLimit() != null && account.getCreditLimit() == null
+                && account.getCreditLimitSharedWith() == null) {
+            account.setCreditLimit(snapshot.creditLimit());
         }
         return accountRepository.save(account);
     }
@@ -293,6 +318,7 @@ public class ConnectorAccountService {
                     .statementDueDay(validDay(snapshot.statementDueDay()))
                     .reportedBalance(snapshot.reportedBalance())
                     .reportedBalanceAt(snapshot.reportedBalanceAt())
+                    .creditLimit(snapshot.creditLimit())
                     .build());
         } catch (DataIntegrityViolationException race) {
             log.info("Conta de origem já registrada por uma sincronização concorrente — reaproveitando");
