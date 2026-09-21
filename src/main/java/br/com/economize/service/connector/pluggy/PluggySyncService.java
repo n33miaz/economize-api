@@ -320,7 +320,13 @@ public class PluggySyncService {
                 decimalOrNull(account.get("balance")),
                 // A hora é a da leitura: o provedor não carimba o saldo, e sem
                 // hora o valor não serve de prova contra nada
-                OffsetDateTime.now());
+                OffsetDateTime.now(),
+                // O limite TOTAL do cartão vem no mesmo bloco de crédito. Era
+                // jogado fora enquanto o app perguntava ao usuário quanto é —
+                // metade da "ideia nova" do dono (15/09) já chegava de graça.
+                // `availableCreditLimit` fica de fora de propósito: é o limite
+                // menos o devido, e o devido já vem no balance
+                creditCard ? decimalOrNull(creditData.get("creditLimit")) : null);
     }
 
     private String accountLabel(Map<String, Object> account) {

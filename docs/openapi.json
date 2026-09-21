@@ -87,6 +87,64 @@
         },
         "type": "object"
       },
+      "Advice": {
+        "properties": {
+          "basis": {
+            "$ref": "#/components/schemas/Basis"
+          },
+          "bestDay": {
+            "format": "date",
+            "type": "string"
+          },
+          "bestDayWeekday": {
+            "type": "string"
+          },
+          "cadence": {
+            "type": "string"
+          },
+          "cadenceOrigin": {
+            "type": "string"
+          },
+          "card": {
+            "$ref": "#/components/schemas/CardAdvice"
+          },
+          "confidence": {
+            "type": "string"
+          },
+          "daysToCover": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "explanation": {
+            "$ref": "#/components/schemas/Explanation"
+          },
+          "fundingDate": {
+            "format": "date",
+            "type": "string"
+          },
+          "fundingSource": {
+            "type": "string"
+          },
+          "mustLastUntil": {
+            "format": "date",
+            "type": "string"
+          },
+          "nextDates": {
+            "items": {
+              "format": "date",
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "paymentMode": {
+            "type": "string"
+          },
+          "weeklyDay": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "AiKeyTestRequest": {
         "description": "Chave a testar; corpo ausente testa a chave já cadastrada",
         "properties": {
@@ -383,6 +441,9 @@
           "internalTransfer": {
             "type": "boolean"
           },
+          "netAmount": {
+            "type": "number"
+          },
           "normalizedDescription": {
             "type": "string"
           },
@@ -395,6 +456,9 @@
           },
           "refunded": {
             "type": "boolean"
+          },
+          "refundedAmount": {
+            "type": "number"
           },
           "reviewStatus": {
             "enum": [
@@ -455,6 +519,19 @@
         },
         "type": "object"
       },
+      "Basis": {
+        "properties": {
+          "lastOccurrence": {
+            "format": "date",
+            "type": "string"
+          },
+          "monthsObserved": {
+            "format": "int32",
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
       "Budget": {
         "properties": {
           "categoryId": {
@@ -481,6 +558,37 @@
             "type": "string"
           },
           "message": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "CardAdvice": {
+        "properties": {
+          "accountId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "closingDay": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "invoiceDue": {
+            "format": "date",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "nextClosing": {
+            "format": "date",
+            "type": "string"
+          },
+          "paidBySalaryOn": {
+            "format": "date",
+            "type": "string"
+          },
+          "warning": {
             "type": "string"
           }
         },
@@ -787,6 +895,15 @@
           "content",
           "role"
         ],
+        "type": "object"
+      },
+      "CloseTrip": {
+        "properties": {
+          "receiptTotal": {
+            "minimum": 0.0,
+            "type": "number"
+          }
+        },
         "type": "object"
       },
       "Combined": {
@@ -1496,6 +1613,20 @@
         },
         "type": "object"
       },
+      "Explanation": {
+        "properties": {
+          "headline": {
+            "type": "string"
+          },
+          "lines": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
       "FamilyAnalyticsResponse": {
         "properties": {
           "combined": {
@@ -1818,6 +1949,36 @@
         },
         "type": "object"
       },
+      "IncomePatternResponse": {
+        "properties": {
+          "advice": {
+            "$ref": "#/components/schemas/Advice"
+          },
+          "inferred": {
+            "$ref": "#/components/schemas/Inferred"
+          },
+          "message": {
+            "type": "string"
+          },
+          "preference": {
+            "$ref": "#/components/schemas/Preference"
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/SourcePattern"
+            },
+            "type": "array"
+          },
+          "status": {
+            "type": "string"
+          },
+          "today": {
+            "format": "date",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "IncomeSourceItem": {
         "properties": {
           "active": {
@@ -1916,6 +2077,39 @@
           },
           "variation": {
             "type": "number"
+          }
+        },
+        "type": "object"
+      },
+      "Inferred": {
+        "properties": {
+          "cadence": {
+            "type": "string"
+          },
+          "confidence": {
+            "type": "string"
+          },
+          "daysAfterLanding": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "monthsObserved": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "origin": {
+            "type": "string"
+          },
+          "purchasesPerMonth": {
+            "format": "double",
+            "type": "number"
+          },
+          "weekendShare": {
+            "format": "double",
+            "type": "number"
+          },
+          "weeklyDay": {
+            "type": "string"
           }
         },
         "type": "object"
@@ -2049,6 +2243,57 @@
         },
         "type": "object"
       },
+      "ItemResponse": {
+        "properties": {
+          "addedBy": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "addedByName": {
+            "type": "string"
+          },
+          "checked": {
+            "type": "boolean"
+          },
+          "clientId": {
+            "type": "string"
+          },
+          "clientUpdatedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "deleted": {
+            "type": "boolean"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "lineTotal": {
+            "type": "number"
+          },
+          "name": {
+            "type": "string"
+          },
+          "photoRef": {
+            "type": "string"
+          },
+          "promoNote": {
+            "type": "string"
+          },
+          "quantity": {
+            "type": "number"
+          },
+          "unitPrice": {
+            "type": "number"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "JoinFamily": {
         "properties": {
           "code": {
@@ -2060,6 +2305,24 @@
         "required": [
           "code"
         ],
+        "type": "object"
+      },
+      "LastTrip": {
+        "properties": {
+          "clientId": {
+            "type": "string"
+          },
+          "closedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "storeName": {
+            "type": "string"
+          },
+          "total": {
+            "type": "number"
+          }
+        },
         "type": "object"
       },
       "Line": {
@@ -2607,6 +2870,53 @@
         },
         "type": "object"
       },
+      "Occurrence": {
+        "properties": {
+          "amount": {
+            "type": "number"
+          },
+          "businessDayFromEnd": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "businessDayFromStart": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "date": {
+            "format": "date",
+            "type": "string"
+          },
+          "onBusinessDay": {
+            "type": "boolean"
+          },
+          "weekday": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "Offset": {
+        "properties": {
+          "max": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "median": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "min": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "pairs": {
+            "format": "int32",
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
       "OpenTicket": {
         "properties": {
           "appVersion": {
@@ -2755,6 +3065,47 @@
           },
           "unpaged": {
             "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
+      "Pattern": {
+        "properties": {
+          "confidence": {
+            "type": "string"
+          },
+          "expectedAmount": {
+            "type": "number"
+          },
+          "firstOccurrence": {
+            "format": "date",
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "lastOccurrence": {
+            "format": "date",
+            "type": "string"
+          },
+          "max": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "median": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "min": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "monthsObserved": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "rule": {
+            "type": "string"
           }
         },
         "type": "object"
@@ -2917,6 +3268,106 @@
         },
         "type": "object"
       },
+      "Preference": {
+        "properties": {
+          "cadence": {
+            "type": "string"
+          },
+          "cardAccountId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "fundingKind": {
+            "type": "string"
+          },
+          "paymentMode": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "weekendPreferred": {
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
+      "PriceHistory": {
+        "properties": {
+          "history": {
+            "items": {
+              "$ref": "#/components/schemas/PriceOccurrence"
+            },
+            "type": "array"
+          },
+          "name": {
+            "type": "string"
+          },
+          "normalizedName": {
+            "type": "string"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/PriceSummary"
+          }
+        },
+        "type": "object"
+      },
+      "PriceOccurrence": {
+        "properties": {
+          "checked": {
+            "type": "boolean"
+          },
+          "date": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "promoNote": {
+            "type": "string"
+          },
+          "quantity": {
+            "type": "number"
+          },
+          "storeName": {
+            "type": "string"
+          },
+          "tripClientId": {
+            "type": "string"
+          },
+          "unitPrice": {
+            "type": "number"
+          }
+        },
+        "type": "object"
+      },
+      "PriceSummary": {
+        "properties": {
+          "avgPrice": {
+            "type": "number"
+          },
+          "lastDate": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "lastPrice": {
+            "type": "number"
+          },
+          "lastStore": {
+            "type": "string"
+          },
+          "maxPrice": {
+            "type": "number"
+          },
+          "minPrice": {
+            "type": "number"
+          },
+          "occurrences": {
+            "format": "int32",
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
       "ProblemDetail": {
         "properties": {
           "detail": {
@@ -3063,6 +3514,30 @@
         },
         "type": "object"
       },
+      "PurchasePreferenceRequest": {
+        "properties": {
+          "cadence": {
+            "type": "string"
+          },
+          "cardAccountId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "fundingKind": {
+            "type": "string"
+          },
+          "paymentMode": {
+            "type": "string"
+          },
+          "weekendPreferred": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "cadence"
+        ],
+        "type": "object"
+      },
       "PurchaseWish": {
         "properties": {
           "purchasedAt": {
@@ -3095,6 +3570,44 @@
             "type": "integer"
           }
         },
+        "type": "object"
+      },
+      "ReconcileCandidate": {
+        "properties": {
+          "accountId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "amount": {
+            "type": "number"
+          },
+          "date": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "difference": {
+            "type": "number"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ReconcileTrip": {
+        "properties": {
+          "transactionId": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "transactionId"
+        ],
         "type": "object"
       },
       "RecurringSeriesResponse": {
@@ -3241,6 +3754,23 @@
           "name",
           "password"
         ],
+        "type": "object"
+      },
+      "Relation": {
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "linked": {
+            "type": "boolean"
+          },
+          "offsetBusinessDays": {
+            "$ref": "#/components/schemas/Offset"
+          },
+          "to": {
+            "type": "string"
+          }
+        },
         "type": "object"
       },
       "Report": {
@@ -3520,6 +4050,21 @@
         },
         "type": "object"
       },
+      "ShoppingSummary": {
+        "properties": {
+          "lastTrip": {
+            "$ref": "#/components/schemas/LastTrip"
+          },
+          "monthTotal": {
+            "type": "number"
+          },
+          "openTrips": {
+            "format": "int32",
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
       "SortObject": {
         "properties": {
           "empty": {
@@ -3541,6 +4086,49 @@
           },
           "name": {
             "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "SourcePattern": {
+        "properties": {
+          "confirmed": {
+            "type": "boolean"
+          },
+          "incomeSourceId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "occurrences": {
+            "items": {
+              "$ref": "#/components/schemas/Occurrence"
+            },
+            "type": "array"
+          },
+          "origin": {
+            "type": "string"
+          },
+          "pattern": {
+            "$ref": "#/components/schemas/Pattern"
+          },
+          "relation": {
+            "$ref": "#/components/schemas/Relation"
+          },
+          "seriesId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "upcoming": {
+            "items": {
+              "$ref": "#/components/schemas/Upcoming"
+            },
+            "type": "array"
           }
         },
         "type": "object"
@@ -3881,6 +4469,80 @@
         },
         "type": "object"
       },
+      "TripItem": {
+        "properties": {
+          "budget": {
+            "type": "number"
+          },
+          "clientId": {
+            "type": "string"
+          },
+          "closedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "familyGroupId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "itemCount": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ItemResponse"
+            },
+            "type": "array"
+          },
+          "notes": {
+            "type": "string"
+          },
+          "ownerId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "ownerName": {
+            "type": "string"
+          },
+          "receiptTotal": {
+            "type": "number"
+          },
+          "reconciledTransactionId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "sharedWithFamily": {
+            "type": "boolean"
+          },
+          "startedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "storeName": {
+            "type": "string"
+          },
+          "total": {
+            "type": "number"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "TrustedDeviceResponse": {
         "properties": {
           "createdAt": {
@@ -3917,6 +4579,35 @@
             "type": "number"
           },
           "type": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "Upcoming": {
+        "properties": {
+          "adjusted": {
+            "type": "boolean"
+          },
+          "basis": {
+            "type": "string"
+          },
+          "earliest": {
+            "format": "date",
+            "type": "string"
+          },
+          "expected": {
+            "format": "date",
+            "type": "string"
+          },
+          "latest": {
+            "format": "date",
+            "type": "string"
+          },
+          "month": {
+            "type": "string"
+          },
+          "origin": {
             "type": "string"
           }
         },
@@ -4247,6 +4938,101 @@
         "required": [
           "amount"
         ],
+        "type": "object"
+      },
+      "UpsertItem": {
+        "properties": {
+          "checked": {
+            "type": "boolean"
+          },
+          "clientId": {
+            "maxLength": 64,
+            "minLength": 0,
+            "type": "string"
+          },
+          "clientUpdatedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "deleted": {
+            "type": "boolean"
+          },
+          "name": {
+            "maxLength": 120,
+            "minLength": 0,
+            "type": "string"
+          },
+          "photoRef": {
+            "maxLength": 200,
+            "minLength": 0,
+            "type": "string"
+          },
+          "promoNote": {
+            "maxLength": 200,
+            "minLength": 0,
+            "type": "string"
+          },
+          "quantity": {
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "unitPrice": {
+            "minimum": 0.0,
+            "type": "number"
+          }
+        },
+        "required": [
+          "clientId",
+          "name"
+        ],
+        "type": "object"
+      },
+      "UpsertTrip": {
+        "properties": {
+          "budget": {
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "clientId": {
+            "maxLength": 64,
+            "minLength": 0,
+            "type": "string"
+          },
+          "closedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/UpsertItem"
+            },
+            "type": "array"
+          },
+          "notes": {
+            "maxLength": 500,
+            "minLength": 0,
+            "type": "string"
+          },
+          "receiptTotal": {
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "shareWithFamily": {
+            "type": "boolean"
+          },
+          "startedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "storeName": {
+            "maxLength": 120,
+            "minLength": 0,
+            "type": "string"
+          }
+        },
         "type": "object"
       },
       "UserMeResponse": {
@@ -5171,6 +5957,73 @@
         ]
       }
     },
+    "/api/v1/analytics/income-pattern": {
+      "get": {
+        "description": "Salário não cai 'dia 5': cai no Nº dia útil bancário (segunda a sexta, sem feriado nacional), e o vale costuma cair alguns dias úteis antes dele. O padrão é DERIVADO a cada leitura a partir das transações já vinculadas a cada fonte de renda — nada é gravado em income_sources nem em recurring_series aqui. `status`: READY (há recomendação), INSUFFICIENT_HISTORY (menos de 3 meses de histórico em toda fonte), NO_INCOME (nenhuma fonte de renda) ou CARD_CYCLE_UNKNOWN (pagamento no cartão sem dia de fechamento conhecido). `origin` MEASURED (extrato) ou INFORMED (dia declarado, sem histórico) viaja em todo número.",
+        "operationId": "incomePattern",
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/IncomePatternResponse"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "summary": "Padrão de entradas em dia útil e o melhor dia para as compras",
+        "tags": [
+          "Análise"
+        ]
+      }
+    },
+    "/api/v1/analytics/income-pattern/preference": {
+      "delete": {
+        "description": "Volta a deixar o app deduzir a cadência de compra pelo extrato.",
+        "operationId": "clearPreference",
+        "responses": {
+          "204": {
+            "description": "No Content"
+          }
+        },
+        "summary": "Apagar a preferência declarada",
+        "tags": [
+          "Análise"
+        ]
+      },
+      "put": {
+        "description": "Cadência (MONTHLY/WEEKLY), preferência por fim de semana e forma de pagamento (CASH/CARD) — o que o extrato sozinho não conta. CARD exige cardAccountId de um cartão seu; sem preferência salva, o app deduz pelo extrato (campo `inferred` do GET).",
+        "operationId": "savePreference",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PurchasePreferenceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/Preference"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "summary": "Declarar como você faz as compras de mercado",
+        "tags": [
+          "Análise"
+        ]
+      }
+    },
     "/api/v1/analytics/installments": {
       "get": {
         "description": "EC-213/EC-217: quantas parcelas faltam de cada série e o total a vencer. A projeção é por MÊS, não por dia: parcela cai em ciclo de fatura, não em aniversário da compra — na série real medida, os intervalos foram de 25 e 36 dias, mas o mês avançou exatamente um por parcela. O valor a vencer usa a parcela mais RECENTE como estimador, porque a primeira carrega o arredondamento da divisão (R$ 199,98 contra R$ 199,96). Financiamento longo (acima de 36 parcelas) fica de fora: somá-lo ao parcelamento de cartão misturaria duas coisas que a pessoa pensa separado.",
@@ -5470,7 +6323,7 @@
     "/api/v1/bank-statements": {
       "get": {
         "description": "Histórico inteiro do usuário, do mais recente para o mais antigo. É a fonte da aba Extrato; para recorte por janela/status/categoria use /transactions.",
-        "operationId": "list_8",
+        "operationId": "list_9",
         "responses": {
           "200": {
             "content": {
@@ -7384,7 +8237,7 @@
     "/api/v1/investments/summary": {
       "get": {
         "description": "Total aplicado, valor atual, lucro e cortes por tipo, instituição e indexador, mais os movimentos dos últimos 12 meses. currentValue soma só as posições que TÊM valor atual; as sem cotação aparecem em needsQuote para o app completar com o indicador ao vivo — a API nunca inventa um zero.",
-        "operationId": "summary",
+        "operationId": "summary_1",
         "responses": {
           "200": {
             "content": {
@@ -8195,6 +9048,281 @@
         "summary": "Detalhe de relatório",
         "tags": [
           "Relatórios"
+        ]
+      }
+    },
+    "/api/v1/shopping/price-history": {
+      "get": {
+        "description": "As últimas ocorrências do produto (nome comparado sem acento, minúsculo e com espaços colapsados) nas compras visíveis ao token, com o mercado, o preço e a data — e um resumo delas: último preço, menor, maior e média. `store` restringe a um mercado; `limit` vale 20 por padrão e 100 no máximo. Sem ocorrência, `summary` é nulo.",
+        "operationId": "priceHistory",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "store",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/PriceHistory"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "summary": "Quanto isto custou das outras vezes",
+        "tags": [
+          "Carrinho de compras"
+        ]
+      }
+    },
+    "/api/v1/shopping/summary": {
+      "get": {
+        "description": "Quantas compras estão abertas, a última encerrada (com o total: a nota quando informada, senão a soma dos itens) e quanto saiu no mercado este mês.",
+        "operationId": "summary",
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ShoppingSummary"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "summary": "Resumo para a Home",
+        "tags": [
+          "Carrinho de compras"
+        ]
+      }
+    },
+    "/api/v1/shopping/trips": {
+      "get": {
+        "description": "Da mais recente para a mais antiga, com os itens — inclusive os removidos (`deleted = true`), para o aparelho que ainda não soube da remoção. `status` filtra por OPEN, CLOSED ou RECONCILED; `limit` vale 50 por padrão e 200 no máximo. `total` é a soma de quantidade × preço dos itens pegos, calculada aqui.",
+        "operationId": "list_8",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/TripItem"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "summary": "Minhas compras e as da casa",
+        "tags": [
+          "Carrinho de compras"
+        ]
+      }
+    },
+    "/api/v1/shopping/trips/{clientId}": {
+      "put": {
+        "description": "Idempotente pelo id gerado no aparelho: reenviar não duplica. No cabeçalho, campo nulo mantém o que está gravado. Cada item funde pelo seu `clientId`: o mais novo por `clientUpdatedAt` vence, e `deleted = true` remove nos outros aparelhos também. `shareWithFamily` só vale para o dono; sem casa responde 400. RECONCILED não se alcança por aqui — é pela conciliação. Devolve a viagem consolidada com os ids do servidor. Compra de outra pessoa que a casa não compartilhou não existe para o token: cria-se uma nova com o mesmo id.",
+        "operationId": "upsert",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "clientId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpsertTrip"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/TripItem"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "summary": "Enviar a compra (cria ou funde)",
+        "tags": [
+          "Carrinho de compras"
+        ]
+      }
+    },
+    "/api/v1/shopping/trips/{clientId}/close": {
+      "post": {
+        "description": "Status CLOSED, com a hora do caixa se ainda não havia. `receiptTotal` é o total da nota, quando a pessoa já o tem; pode vir depois. Compra já conciliada responde 400.",
+        "operationId": "close_1",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "clientId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CloseTrip"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/TripItem"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "summary": "Passei no caixa",
+        "tags": [
+          "Carrinho de compras"
+        ]
+      }
+    },
+    "/api/v1/shopping/trips/{clientId}/reconcile": {
+      "post": {
+        "description": "Amarra a compra ao lançamento que a pagou e muda o status para RECONCILED. O lançamento tem que ser um DÉBITO do próprio token — lançamento de outra pessoa responde 404. Sem total da nota, o valor do lançamento passa a ser o total.",
+        "operationId": "reconcile",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "clientId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReconcileTrip"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/TripItem"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "summary": "Conciliar com o extrato",
+        "tags": [
+          "Carrinho de compras"
+        ]
+      }
+    },
+    "/api/v1/shopping/trips/{clientId}/reconcile-candidates": {
+      "get": {
+        "description": "Débitos do próprio token entre um dia antes do início e cinco dias depois do caixa, com valor entre 80% e 120% da referência (a nota, ou a soma dos itens), do mais próximo em valor para o mais distante, no máximo 10. Sem preço anotado não há referência, e a lista volta vazia.",
+        "operationId": "reconcileCandidates",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "clientId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ReconcileCandidate"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "summary": "Quem pode ter pago esta compra",
+        "tags": [
+          "Carrinho de compras"
         ]
       }
     },
@@ -9450,6 +10578,10 @@
     {
       "description": "EC-107 — o usuário escolhe provedor, modelo e traz a própria chave (BYOK). A chave é cifrada em repouso e NUNCA volta em resposta alguma. Quem não cadastrar nada continua usando a chave do servidor, exatamente como antes.",
       "name": "Opções de IA"
+    },
+    {
+      "description": "A compra registrada no mercado, offline: itens com preço e quantidade, total no corredor, fusão entre aparelhos da casa, conciliação com o extrato e histórico de preços",
+      "name": "Carrinho de compras"
     },
     {
       "description": "Importação multi-formato (OFX, CSV, XLSX, PDF, TXT) com idempotência por hash",

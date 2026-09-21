@@ -206,6 +206,41 @@ class ConnectorAccountServiceTest {
     }
 
     @Test
+    @DisplayName("O limite que o provedor entrega preenche o cartão sem limite — e nunca sobrescreve o declarado")
+    void connectorCreditLimitFillsOnlyWhatIsEmpty() {
+        // O Pluggy entrega o limite total do Inter (R$ 5.330,01 medidos na
+        // conta do dono em 17/09/2026); o app perguntava ao usuário o que o
+        // banco já dizia. Mas quem declarou o próprio limite decidiu, e
+        // decisão de gente vence leitura de conector
+        ConnectorAccount semLimite = account("acc-card", "GOLD ····8210", "Banco Inter",
+                ConnectorAccount.AccountType.CREDIT_CARD, null, null);
+        when(accountRepository.findByUserIdAndProviderAccountId(user.getId(), "acc-card"))
+                .thenReturn(Optional.of(semLimite));
+        when(accountRepository.save(any(ConnectorAccount.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        ConnectorAccount saved = service.register(user, new ConnectorAccountService.AccountSnapshot(
+                "acc-card", "GOLD ····8210", "Banco Inter", ConnectorAccount.AccountType.CREDIT_CARD,
+                null, 10, semLimite.getPluggyItemId(), null, null, new java.math.BigDecimal("5330.01")));
+        assertThat(saved.getCreditLimit()).isEqualByComparingTo("5330.01");
+
+        // declarado à mão: a leitura seguinte do conector não mexe
+        saved.setCreditLimit(new java.math.BigDecimal("6000"));
+        ConnectorAccount depois = service.register(user, new ConnectorAccountService.AccountSnapshot(
+                "acc-card", "GOLD ····8210", "Banco Inter", ConnectorAccount.AccountType.CREDIT_CARD,
+                null, 10, semLimite.getPluggyItemId(), null, null, new java.math.BigDecimal("5330.01")));
+        assertThat(depois.getCreditLimit()).isEqualByComparingTo("6000");
+
+        // e quem divide o limite de outro cartão continua dividindo
+        depois.setCreditLimit(null);
+        depois.setCreditLimitSharedWith(UUID.randomUUID());
+        ConnectorAccount compartilhado = service.register(user, new ConnectorAccountService.AccountSnapshot(
+                "acc-card", "GOLD ····8210", "Banco Inter", ConnectorAccount.AccountType.CREDIT_CARD,
+                null, 10, semLimite.getPluggyItemId(), null, null, new java.math.BigDecimal("5330.01")));
+        assertThat(compartilhado.getCreditLimit()).isNull();
+        assertThat(compartilhado.getCreditLimitSharedWith()).isNotNull();
+    }
+
+    @Test
     @DisplayName("DUAS órfãs com o mesmo rótulo são ambíguas: cria origem nova em vez de adivinhar qual é qual")
     void rebindRefusesToGuessBetweenTwoIdenticalOrphans() {
         ConnectorAccount uma = account("acc-a", "Cartão", "Nubank",

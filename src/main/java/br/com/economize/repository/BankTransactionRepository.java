@@ -8,6 +8,7 @@ import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.util.Collection;
 import java.util.List;
@@ -115,7 +116,7 @@ public interface BankTransactionRepository extends JpaRepository<BankTransaction
     // dobrava "Despesas do mês" e inventava uma receita do tamanho da fatura.
     @Query("""
             select t.categoryId as categoryId, t.type as type,
-                   sum(t.amount) as total, count(t) as txCount
+                   sum(t.amount + t.refundedAmount) as total, count(t) as txCount
             from BankTransaction t
             where t.user.id = :userId and t.date >= :start and t.date < :end
               and t.internalTransfer = false
@@ -155,7 +156,7 @@ public interface BankTransactionRepository extends JpaRepository<BankTransaction
 
     @Query("""
             select t.categoryId as categoryId, t.type as type,
-                   sum(t.amount) as total, count(t) as txCount
+                   sum(t.amount + t.refundedAmount) as total, count(t) as txCount
             from BankTransaction t
             where t.user.id = :userId and t.date >= :start and t.date < :end
               and t.internalTransfer = false
@@ -314,12 +315,30 @@ public interface BankTransactionRepository extends JpaRepository<BankTransaction
             + "where t.user.id = :userId and t.id in :ids")
     int clearIgnored(@Param("userId") UUID userId, @Param("ids") Collection<UUID> ids);
 
-    /** Solta as duas pernas do par e o vínculo entre elas. */
+    /**
+     * Solta as duas pernas do par e o vínculo entre elas — e zera o abate do
+     * estorno parcial (V40), que mora na compra: desfazer a passada tem de
+     * devolver a compra ao valor cheio, senão a categoria continuaria menor
+     * sem nenhum crédito explicando por quê.
+     */
     @Modifying
     @Transactional
-    @Query("update BankTransaction t set t.refunded = false, t.refundOfId = null "
+    @Query("update BankTransaction t set t.refunded = false, t.refundOfId = null, "
+            + "t.refundedAmount = 0 "
             + "where t.user.id = :userId and t.id in :ids")
     int clearRefund(@Param("userId") UUID userId, @Param("ids") Collection<UUID> ids);
+
+    /**
+     * Abate um estorno PARCIAL na compra (V40). Soma em vez de atribuir: uma
+     * compra pode receber dois créditos parciais em faturas diferentes.
+     */
+    @Modifying
+    @Transactional
+    @Query("update BankTransaction t set t.refundedAmount = t.refundedAmount + :amount "
+            + "where t.user.id = :userId and t.id = :compraId")
+    int applyPartialRefund(@Param("userId") UUID userId,
+                           @Param("compraId") UUID compraId,
+                           @Param("amount") BigDecimal amount);
 
     /** Liga o crédito à compra que ele estornou. Uma linha por par. */
     @Modifying

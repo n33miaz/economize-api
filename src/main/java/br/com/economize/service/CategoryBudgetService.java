@@ -116,7 +116,9 @@ public class CategoryBudgetService {
             // As mesmas exclusões de toda soma do app
             if (tx.isInternalTransfer() || tx.isIgnored() || tx.isRefunded()) continue;
             if (tx.getAmount().signum() >= 0 || tx.getCategoryId() == null) continue;
-            gastoPorCategoria.merge(tx.getCategoryId(), tx.getAmount().abs(), BigDecimal::add);
+            // O teto compara com o que a compra custou de fato: estorno parcial
+            // abate (V40), como em toda soma do app
+            gastoPorCategoria.merge(tx.getCategoryId(), tx.getNetAmount().abs(), BigDecimal::add);
         }
 
         // Dias já corridos DENTRO da janela: o gasto até hoje só se compara
