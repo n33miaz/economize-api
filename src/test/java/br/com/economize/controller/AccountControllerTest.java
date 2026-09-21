@@ -117,6 +117,14 @@ class AccountControllerTest {
                         new BigDecimal("900.00"), 12, false,
                         new CardInvoicesResponse.Reserve(UUID.randomUUID(), new BigDecimal("641.14"),
                                 null, "Mercado Pago ····7340", "deixei separado"),
+                        // A fatura do BANCO ao lado da deduzida: 1.234,56 é o que
+                        // nós somamos, 1.500,00 é o que o emissor fechou. A
+                        // diferença é o aviso de que falta lançamento
+                        new CardInvoicesResponse.ProviderBill(
+                                LocalDate.of(2026, 8, 10), LocalDate.of(2026, 8, 17),
+                                new BigDecimal("1500.00"), new BigDecimal("225.00"),
+                                BigDecimal.ZERO, true,
+                                java.time.OffsetDateTime.parse("2026-09-21T10:00:00Z")),
                         List.of()))));
 
         webTestClient.get()

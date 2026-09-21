@@ -60,6 +60,9 @@ class CardInvoiceServiceTest {
     @Mock
     private InvoiceReserveService reserveService;
 
+    @Mock
+    private br.com.economize.repository.CardBillRepository cardBillRepository;
+
     private CardInvoiceService service;
 
     private User user;
@@ -68,7 +71,11 @@ class CardInvoiceServiceTest {
     void setUp() {
         user = User.builder().id(UUID.randomUUID()).email(EMAIL).name("Teste").password("x").build();
         service = new CardInvoiceService(accountService, bankTransactionRepository, userRepository,
-                reserveService);
+                reserveService, cardBillRepository);
+        // sem fatura do provedor é o caso comum: o cartão pode não ter conector,
+        // ou o emissor pode não publicar fatura fechada
+        lenient().when(cardBillRepository.findByAccountIdOrderByClosingDateDesc(any()))
+                .thenReturn(java.util.List.of());
         // sem reserva é o caso comum; os testes do EC-181 sobrescrevem
         lenient().when(reserveService.byReference(any(), any())).thenReturn(Map.of());
         lenient().when(userRepository.findByEmail(EMAIL)).thenReturn(Optional.of(user));

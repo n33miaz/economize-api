@@ -308,4 +308,41 @@ public class PluggyClient {
         }
         return all;
     }
+    /**
+     * GET /bills?accountId= — as faturas FECHADAS de um cartão, todas as
+     * páginas.
+     *
+     * <p>É por conta, não por conexão: o Pluggy indexa fatura pelo cartão, e
+     * uma conexão pode ter mais de um. Sondado na conta do dono em 21/09/2026,
+     * responde 200 com 40 faturas nas cinco conexões dele — dado que o app
+     * ignorava enquanto DEDUZIA a fatura pelos lançamentos que tinha.
+     *
+     * <p>Volta cru ({@code Map}) pelo mesmo motivo de {@code investments}: os
+     * campos opcionais variam por emissor, e quem decide o que fazer com a
+     * ausência é o mapeador. Conta que não é cartão responde 4xx e o chamador
+     * trata como "não tem fatura" — perguntar antes custaria uma requisição a
+     * mais por conta, toda sincronização.
+     */
+    @SuppressWarnings("unchecked")
+    public List<Map<String, Object>> bills(String apiKey, String accountId) {
+        List<Map<String, Object>> all = new ArrayList<>();
+        String query = "?accountId=" + accountId;
+
+        for (int page = 0; page < MAX_PAGES && query != null && !query.isBlank(); page++) {
+            Map<String, Object> body = webClient.get()
+                    .uri(URI.create(baseUrl + "/bills" + query))
+                    .header("X-API-KEY", apiKey)
+                    .retrieve()
+                    .bodyToMono(new ParameterizedTypeReference<Map<String, Object>>() {
+                    })
+                    .block();
+            if (body == null) break;
+            Object results = body.get("results");
+            if (results instanceof List<?> list) {
+                all.addAll((List<Map<String, Object>>) list);
+            }
+            query = nextQuery(body.get("next"), baseUrl + "/bills");
+        }
+        return all;
+    }
 }
