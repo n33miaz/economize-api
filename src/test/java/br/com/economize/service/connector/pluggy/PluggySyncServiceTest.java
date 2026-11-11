@@ -316,8 +316,129 @@ class PluggySyncServiceTest {
     }
 
     @Test
-    @DisplayName("LIMITAÇÃO CONHECIDA: estorno também vira contrapartida (comportamento atual)")
-    void refundStillFeedsThePool() {
+    @DisplayName("estorno anunciado no cartão NÃO é pagamento de fatura: segue crédito comum, para abater a compra")
+    void announcedRefundOnCardIsNotABillPayment() {
+        stubCardAndBank(
+                List.of(
+                        Map.of("id", "c1", "amount", "100.00", "date", "2026-08-10",
+                                "description", "IFOOD RESTAURANTE"),
+                        // devolução da compra: o banco diz o que é na própria linha
+                        Map.of("id", "c2", "amount", "-100.00", "date", "2026-08-12",
+                                "description", "Estorno de \"IFOOD RESTAURANTE\""),
+                        // mesma coisa com acento e caixa alta, como o Inter escreve
+                        Map.of("id", "c3", "amount", "-18.50", "date", "2026-08-13",
+                                "description", "DEVOLUÇÃO PARCIAL MERCADO")),
+                List.of());
+
+        List<ParsedTransaction> parsed = syncAndCapture();
+
+        // Marcado como perna interna, o estorno aparecia na fatura como
+        // "pagamento" (não abatia a dívida) e ficava FORA da conciliação de
+        // estorno, que pula linha interna — a compra seguia inteira na despesa,
+        // contra a decisão do dono de que estorno abate a compra (V40)
+        assertThat(byId(parsed, "PLUGGY-c2").isInternalTransfer()).isFalse();
+        assertThat(byId(parsed, "PLUGGY-c2").getAmount()).isEqualByComparingTo("100.00");
+        assertThat(byId(parsed, "PLUGGY-c3").isInternalTransfer()).isFalse();
+        assertThat(byId(parsed, "PLUGGY-c1").isInternalTransfer()).isFalse();
+    }
+
+    @Test
+    @DisplayName("estorno anunciado no cartão já chega NEUTRO: crédito em cartão de crédito nunca é receita")
+    void announcedCardRefundArrivesOutOfTheSums() {
+        stubCardAndBank(
+                List.of(
+                        // "Estorno parcial" sem nome de loja: a conciliação não
+                        // tem como achar a compra, e sem a marca este crédito
+                        // entraria como RECEITA em todas as somas
+                        Map.of("id", "c1", "amount", "-18.50", "date", "2026-08-12",
+                                "description", "Estorno parcial"),
+                        Map.of("id", "c2", "amount", "50.00", "date", "2026-08-12",
+                                "description", "MERCADO")),
+                // na CONTA CORRENTE o mesmo texto é dinheiro que voltou de
+                // verdade: ali quem decide é a conciliação, com o par na mão
+                List.of(Map.of("id", "b1", "amount", "18.50", "date", "2026-08-12",
+                        "description", "Estorno compra no debito")));
+
+        List<ParsedTransaction> parsed = syncAndCapture();
+
+        assertThat(byId(parsed, "PLUGGY-c1").isRefunded()).isTrue();
+        assertThat(byId(parsed, "PLUGGY-c1").isInternalTransfer()).isFalse();
+        assertThat(byId(parsed, "PLUGGY-c2").isRefunded()).isFalse();
+        assertThat(byId(parsed, "PLUGGY-b1").isRefunded()).isFalse();
+    }
+
+    @Test
+    @DisplayName("estorno anunciado não serve de contrapartida: o débito de fatura de mesmo valor continua despesa")
+    void announcedRefundDoesNotFeedThePool() {
+        stubCardAndBank(
+                List.of(Map.of("id", "c1", "amount", "-100.00", "date", "2026-08-12",
+                        "description", "ESTORNO IFOOD RESTAURANTE")),
+                List.of(Map.of("id", "b1", "amount", "-100.00", "date", "2026-08-12",
+                        "description", "PAGAMENTO FATURA CARTAO")));
+
+        List<ParsedTransaction> parsed = syncAndCapture();
+
+        // Era a "limitação conhecida": o estorno entrava no conjunto e
+        // neutralizava um pagamento de fatura de valor coincidente. Agora o
+        // crédito que se anuncia como estorno não é oferecido — as duas linhas
+        // ficam como são: uma devolução e uma saída de dinheiro
+        assertThat(byId(parsed, "PLUGGY-c1").isInternalTransfer()).isFalse();
+        assertThat(byId(parsed, "PLUGGY-b1").isInternalTransfer()).isFalse();
+    }
+
+    @Test
+    @DisplayName("só o cartão conectado: pagamento de fatura sem contrapartida NÃO vira receita")
+    void billPaymentWithoutConnectedBankIsNeverIncome() {
+        when(userRepository.findByEmail(EMAIL)).thenReturn(Optional.of(user));
+        when(pluggyClient.isConfigured()).thenReturn(true);
+        when(pluggyClient.authenticate()).thenReturn("api-key");
+        when(pluggyItemRepository.findAllByUserIdOrderByCreatedAtAsc(user.getId()))
+                .thenReturn(List.of(PluggyItem.builder().id(UUID.randomUUID()).user(user).itemId("item-1").build()));
+        // a conta corrente que paga a fatura é de outro banco, não conectado
+        when(pluggyClient.accounts("api-key", "item-1")).thenReturn(List.of(
+                Map.of("id", "acc-card", "type", "CREDIT")));
+        when(pluggyClient.transactions(eq("api-key"), eq("acc-card"), any(LocalDate.class), any(LocalDate.class)))
+                .thenReturn(List.of(
+                        // o texto do Nubank: não tem a âncora "fatura" nem marca
+                        // de estorno — pelo texto, não dá para saber o que é
+                        Map.of("id", "c1", "amount", "-2500.00", "date", "2026-08-12",
+                                "description", "Pagamento recebido"),
+                        Map.of("id", "c2", "amount", "-2500.00", "date", "2026-09-12",
+                                "description", "Pagamento de fatura")));
+        when(bankStatementService.importFromConnector(eq(user), eq(StatementFormat.PLUGGY), anyList(), anyMap()))
+                .thenReturn(new BankStatementService.ImportResult(UUID.randomUUID(), 2, 0, 0, 0, false, "PLUGGY"));
+
+        List<ParsedTransaction> parsed = syncAndCapture();
+
+        // A contrapartida não existe nesta sync e nunca vai existir. Se a falta
+        // dela bastasse para a linha virar crédito comum, toda fatura paga
+        // entraria como RECEITA do mês — milhares de reais, todo mês. O erro
+        // escolhido é o outro: crédito de cartão que NÃO se anuncia como estorno
+        // continua perna interna. O custo é o estorno sem marca no texto seguir
+        // como hoje (lido como pagamento), que é raro e pequeno
+        assertThat(byId(parsed, "PLUGGY-c1").isInternalTransfer()).isTrue();
+        assertThat(byId(parsed, "PLUGGY-c2").isInternalTransfer()).isTrue();
+    }
+
+    @Test
+    @DisplayName("banco conectado mas débito sem a âncora 'fatura': o pagamento no cartão segue fora da receita")
+    void billPaymentWhoseBankLegHasNoAnchorIsNeverIncome() {
+        stubCardAndBank(
+                List.of(Map.of("id", "c1", "amount", "-2500.00", "date", "2026-08-12",
+                        "description", "Pagamento recebido")),
+                // é assim que o pagamento por Pix aparece na conta: sem "fatura"
+                List.of(Map.of("id", "b1", "amount", "-2500.00", "date", "2026-08-12",
+                        "description", "PIX ENVIADO NU PAGAMENTOS SA")));
+
+        List<ParsedTransaction> parsed = syncAndCapture();
+
+        // o par não fecha (a perna da conta exige a âncora), e mesmo assim o
+        // crédito do cartão não pode virar receita
+        assertThat(byId(parsed, "PLUGGY-c1").isInternalTransfer()).isTrue();
+        assertThat(byId(parsed, "PLUGGY-b1").isInternalTransfer()).isFalse();
+    }
+
+    private void stubCardAndBank(List<Map<String, Object>> card, List<Map<String, Object>> bank) {
         when(userRepository.findByEmail(EMAIL)).thenReturn(Optional.of(user));
         when(pluggyClient.isConfigured()).thenReturn(true);
         when(pluggyClient.authenticate()).thenReturn("api-key");
@@ -327,31 +448,20 @@ class PluggySyncServiceTest {
                 Map.of("id", "acc-bank", "type", "BANK"),
                 Map.of("id", "acc-card", "type", "CREDIT")));
         when(pluggyClient.transactions(eq("api-key"), eq("acc-card"), any(LocalDate.class), any(LocalDate.class)))
-                .thenReturn(List.of(
-                        // devolução de uma compra: no extrato do cartão ela é um
-                        // crédito igualzinho ao de um pagamento de fatura
-                        Map.of("id", "c1", "amount", "-100.00", "date", "2026-08-12",
-                                "description", "ESTORNO IFOOD RESTAURANTE")));
+                .thenReturn(card);
         when(pluggyClient.transactions(eq("api-key"), eq("acc-bank"), any(LocalDate.class), any(LocalDate.class)))
-                .thenReturn(List.of(Map.of("id", "b1", "amount", "-100.00", "date", "2026-08-12",
-                        "description", "PAGAMENTO FATURA CARTAO")));
+                .thenReturn(bank);
         when(bankStatementService.importFromConnector(eq(user), eq(StatementFormat.PLUGGY), anyList(), anyMap()))
                 .thenReturn(new BankStatementService.ImportResult(UUID.randomUUID(), 2, 0, 0, 0, false, "PLUGGY"));
+    }
 
+    private List<ParsedTransaction> syncAndCapture() {
         service.sync(EMAIL, 90);
-
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<ParsedTransaction>> captor = ArgumentCaptor.forClass(List.class);
         verify(bankStatementService).importFromConnector(eq(user), eq(StatementFormat.PLUGGY),
                 captor.capture(), anyMap());
-
-        // Este teste documenta o comportamento ATUAL, não um ideal: separar
-        // estorno de pagamento exigiria adivinhar pelo texto do descritivo, que é
-        // justamente o sinal frágil que o projeto recusa como critério único. O
-        // preço do erro é limitado — exige um débito de valor EXATAMENTE igual ao
-        // do estorno e com a âncora "fatura" na mesma janela.
-        assertThat(byId(captor.getValue(), "PLUGGY-c1").isInternalTransfer()).isTrue();
-        assertThat(byId(captor.getValue(), "PLUGGY-b1").isInternalTransfer()).isTrue();
+        return captor.getValue();
     }
 
     @Test

@@ -25,6 +25,14 @@ public class ParsedTransaction {
     // nenhum builder já escrito.
     boolean internalTransfer;
 
+    // Crédito que já chega FORA das somas por ser devolução anunciada dentro
+    // de um cartão de crédito: dinheiro entrando em cartão nunca é receita do
+    // titular. Não é perna interna (a fatura o lê como estorno e a conciliação
+    // ainda procura a compra dele para abater); é só neutro desde a gravação,
+    // sem depender de a varredura achar o par. Só o conector sabe o tipo da
+    // conta, então os parsers deixam no default false.
+    boolean refunded;
+
     // Origem do lançamento (EC-113): id da ConnectorAccount de onde ele veio.
     // Os PARSERS nunca sabem disso — o arquivo não diz a qual conta do usuário
     // pertence —, então eles deixam nulo e o campo não é obrigatório em builder
