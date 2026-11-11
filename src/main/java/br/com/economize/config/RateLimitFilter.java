@@ -1,5 +1,7 @@
 package br.com.economize.config;
 
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import io.github.bucket4j.Bandwidth;
 import io.github.bucket4j.Bucket;
 import io.github.bucket4j.ConsumptionProbe;
@@ -22,10 +24,13 @@ import org.springframework.web.server.WebFilter;
 import org.springframework.web.server.WebFilterChain;
 import reactor.core.publisher.Mono;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
+import java.util.Base64;
+import java.util.HashSet;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
 
 /**
  * Limite de requisições por cliente.
@@ -73,8 +78,34 @@ public class RateLimitFilter implements WebFilter {
             "/api/v1/chat", "/api/v1/reports", "/api/v1/ai/settings/test", "/api/v1/family/join",
             "/api/v1/auth/login");
 
-    private final ConcurrentMap<String, Bucket> standardBuckets = new ConcurrentHashMap<>();
-    private final ConcurrentMap<String, Bucket> expensiveBuckets = new ConcurrentHashMap<>();
+    /** A janela de reposição de todos os baldes. */
+    private static final Duration WINDOW = Duration.ofMinutes(1);
+
+    /**
+     * Quanto tempo um balde sem uso fica guardado.
+     *
+     * <p>Precisa ser MAIOR que a janela: depois de uma janela inteira parado o
+     * balde está cheio de novo, então descartá-lo e criar outro dá exatamente
+     * no mesmo. Menor que a janela seria um perdão — bastaria esperar a
+     * expiração para zerar o limite.
+     */
+    private static final Duration IDLE_EXPIRY = WINDOW.multipliedBy(2);
+
+    /**
+     * Teto de baldes guardados em CADA família (padrão e caro).
+     *
+     * <p>Este filtro roda antes da autenticação, então a chave vem de um
+     * cabeçalho que qualquer um escreve: um token aleatório por requisição
+     * criava um balde permanente por token, num mapa sem teto, e o servidor
+     * tem 512 MB. Dez mil clientes ativos por família estão muito acima do
+     * uso real e custam poucos MB no pior caso. Quando o teto estoura o
+     * Caffeine descarta os menos usados — o cliente descartado volta com o
+     * balde cheio, que é o erro seguro diante de memória esgotada.
+     */
+    private static final int MAX_BUCKETS = 10_000;
+
+    private final Cache<String, Bucket> standardBuckets;
+    private final Cache<String, Bucket> expensiveBuckets;
 
     private final CorsConfigurationSource corsConfigurationSource;
 
@@ -117,10 +148,45 @@ public class RateLimitFilter implements WebFilter {
                     long standardCapacity,
                     long expensiveCapacity,
                     TimeMeter relogio) {
+        this(corsConfigurationSource, standardCapacity, expensiveCapacity, relogio, MAX_BUCKETS);
+    }
+
+    RateLimitFilter(CorsConfigurationSource corsConfigurationSource,
+                    long standardCapacity,
+                    long expensiveCapacity,
+                    TimeMeter relogio,
+                    int maxBuckets) {
         this.corsConfigurationSource = corsConfigurationSource;
         this.standardCapacity = standardCapacity;
         this.expensiveCapacity = expensiveCapacity;
         this.relogio = relogio;
+        this.standardBuckets = newBucketCache(relogio, maxBuckets);
+        this.expensiveBuckets = newBucketCache(relogio, maxBuckets);
+    }
+
+    /**
+     * O relógio da expiração é o MESMO do balde, pelo mesmo motivo: o teste
+     * mede o filtro, não a máquina. A manutenção roda na própria thread da
+     * chamada ({@code Runnable::run}) para o teto valer na hora, sem depender
+     * de um pool que ninguém configurou.
+     */
+    private static Cache<String, Bucket> newBucketCache(TimeMeter relogio, int maxBuckets) {
+        return Caffeine.newBuilder()
+                .maximumSize(maxBuckets)
+                .expireAfterAccess(IDLE_EXPIRY)
+                .ticker(relogio::currentTimeNanos)
+                .executor(Runnable::run)
+                .build();
+    }
+
+    /** As chaves guardadas agora, das duas famílias — só para o teste conferir teto e conteúdo. */
+    Set<String> trackedKeys() {
+        standardBuckets.cleanUp();
+        expensiveBuckets.cleanUp();
+        Set<String> keys = new HashSet<>();
+        standardBuckets.asMap().keySet().forEach(key -> keys.add("standard:" + key));
+        expensiveBuckets.asMap().keySet().forEach(key -> keys.add("expensive:" + key));
+        return keys;
     }
 
     @Override
@@ -135,8 +201,8 @@ public class RateLimitFilter implements WebFilter {
         boolean expensive = EXPENSIVE_PREFIXES.stream().anyMatch(path::startsWith);
 
         Bucket bucket = expensive
-                ? expensiveBuckets.computeIfAbsent(key, k -> createBucket(expensiveCapacity, Duration.ofMinutes(1)))
-                : standardBuckets.computeIfAbsent(key, k -> createBucket(standardCapacity, Duration.ofMinutes(1)));
+                ? expensiveBuckets.get(key, k -> createBucket(expensiveCapacity, WINDOW))
+                : standardBuckets.get(key, k -> createBucket(standardCapacity, WINDOW));
 
         ConsumptionProbe probe = bucket.tryConsumeAndReturnRemaining(1);
         if (probe.isConsumed()) {
@@ -193,8 +259,26 @@ public class RateLimitFilter implements WebFilter {
     private String clientKey(ServerWebExchange exchange) {
         ServerHttpRequest request = exchange.getRequest();
         String auth = request.getHeaders().getFirst(HttpHeaders.AUTHORIZATION);
-        if (auth != null && auth.startsWith("Bearer ")) return "u:" + auth.substring(7);
+        if (auth != null && auth.startsWith("Bearer ")) return "u:" + hash(auth.substring(7));
         var remoteAddress = request.getRemoteAddress();
         return remoteAddress != null ? "ip:" + remoteAddress.getAddress().getHostAddress() : "anon";
+    }
+
+    /**
+     * A chave do balde é o SHA-256 do token, nunca o token.
+     *
+     * <p>Dois motivos: o token é uma credencial viva e não tem por que ficar
+     * parado na memória de um filtro (dump, log de chave), e o tamanho da
+     * chave deixa de ser escolhido por quem manda o cabeçalho — um "token" de
+     * vários KB ocupava esse tanto por entrada.
+     */
+    private static String hash(String token) {
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256").digest(token.getBytes(StandardCharsets.UTF_8));
+            return Base64.getUrlEncoder().withoutPadding().encodeToString(digest);
+        } catch (NoSuchAlgorithmException e) {
+            // SHA-256 é obrigatório em toda JVM; chegar aqui é ambiente quebrado
+            throw new IllegalStateException("SHA-256 indisponível", e);
+        }
     }
 }

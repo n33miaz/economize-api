@@ -16,8 +16,12 @@ import org.springframework.web.server.ServerWebExchange;
 import org.springframework.web.server.WebFilterChain;
 import reactor.core.publisher.Mono;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
+
+import static org.assertj.core.api.Assertions.assertThat;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
@@ -175,6 +179,89 @@ class RateLimitFilterTest {
         filter.filter(readFamily, chain).block();
         assertEquals(String.valueOf(STANDARD_CAPACITY - 1),
                 readFamily.getResponse().getHeaders().getFirst("X-RateLimit-Remaining"));
+    }
+
+    // ------------------------------------------------ memória dos baldes
+
+    @Test
+    @DisplayName("tokens Bearer distintos não acumulam baldes sem teto: o mapa tem limite")
+    void distinctBearerTokensShouldNotGrowWithoutBound() {
+        RateLimitFilter pequeno = new RateLimitFilter(corsSource(), 60, 10, RELOGIO_PARADO, 50);
+
+        // quem manda um token aleatório por requisição criava um balde
+        // permanente por token: em 512 MB isso derruba o servidor, e nem
+        // precisa de token válido — o filtro roda antes da autenticação
+        for (int i = 0; i < 500; i++) {
+            pequeno.filter(bearer("token-aleatorio-" + i, "/api/v1/indicators/all"), chain).block();
+            pequeno.filter(bearer("token-aleatorio-" + i, "/api/v1/chat"), chain).block();
+        }
+
+        // o teto vale para cada uma das duas famílias de balde
+        assertThat(pequeno.trackedKeys()).hasSizeLessThanOrEqualTo(100);
+    }
+
+    @Test
+    @DisplayName("o token nunca fica guardado: a chave do balde é o hash dele")
+    void rawTokenShouldNotBeRetainedAsKey() {
+        String token = "eyJhbGciOiJIUzI1NiJ9.segredo-do-usuario.assinatura";
+
+        filter.filter(bearer(token, "/api/v1/indicators/all"), chain).block();
+
+        // um dump de memória ou um log da chave não pode entregar a sessão
+        assertThat(filter.trackedKeys()).hasSize(1)
+                .noneMatch(key -> key.contains(token) || key.contains("segredo-do-usuario"));
+    }
+
+    @Test
+    @DisplayName("o mesmo token continua caindo no MESMO balde: o hash não afrouxa o limite")
+    void sameTokenShouldKeepSharingOneBucket() {
+        for (int i = 0; i < STANDARD_CAPACITY; i++) {
+            filter.filter(bearer("token-fixo", "/api/v1/indicators/all"), chain).block();
+        }
+        ServerWebExchange excedente = bearer("token-fixo", "/api/v1/indicators/all");
+        filter.filter(excedente, chain).block();
+
+        assertEquals(HttpStatus.TOO_MANY_REQUESTS, excedente.getResponse().getStatusCode());
+        // outro token tem o próprio balde, como antes
+        ServerWebExchange outro = bearer("outro-token", "/api/v1/indicators/all");
+        filter.filter(outro, chain).block();
+        assertThat(outro.getResponse().getStatusCode()).isNotEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+    }
+
+    @Test
+    @DisplayName("balde ocioso expira — e só depois de a janela já tê-lo reposto por inteiro")
+    void idleBucketShouldExpireOnlyAfterItWouldBeFullAgain() {
+        AtomicLong agora = new AtomicLong();
+        TimeMeter relogio = new TimeMeter() {
+            @Override
+            public long currentTimeNanos() {
+                return agora.get();
+            }
+
+            @Override
+            public boolean isWallClockBased() {
+                return false;
+            }
+        };
+        RateLimitFilter comRelogio = new RateLimitFilter(corsSource(), 60, 10, relogio, 50);
+        for (int i = 0; i < 10; i++) {
+            comRelogio.filter(bearer("token-fixo", "/api/v1/chat"), chain).block();
+        }
+
+        // 30 s depois o balde caro ainda está lá e ainda barra: expirar cedo
+        // seria um jeito de zerar o limite esperando
+        agora.set(Duration.ofSeconds(30).toNanos());
+        assertThat(comRelogio.trackedKeys()).hasSize(1);
+
+        // passado o tempo de expiração (maior que a janela de 1 min) o balde
+        // estaria cheio de qualquer forma: jogá-lo fora não perdoa ninguém
+        agora.set(Duration.ofMinutes(10).toNanos());
+        assertThat(comRelogio.trackedKeys()).isEmpty();
+    }
+
+    private ServerWebExchange bearer(String token, String path) {
+        return MockServerWebExchange.from(MockServerHttpRequest.get(path)
+                .header(HttpHeaders.AUTHORIZATION, "Bearer " + token));
     }
 
     private void exhaustBucket() {
