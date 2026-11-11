@@ -7,7 +7,9 @@ import br.com.economize.repository.BankTransactionRepository;
 import br.com.economize.repository.CategoryRepository;
 import br.com.economize.repository.StatementUploadRepository;
 import br.com.economize.repository.UserRepository;
+import br.com.economize.service.event.DomainEvent;
 import br.com.economize.service.event.DomainEventPublisher;
+import br.com.economize.service.event.StatementImportedEvent;
 import br.com.economize.service.statement.category.AiCategorySuggester;
 import br.com.economize.service.statement.category.CategorizationEngine;
 import br.com.economize.service.statement.category.DescriptionNormalizer;
@@ -337,6 +339,28 @@ class BankStatementImportPathsTest {
     }
 
     @Test
+    @DisplayName("Duas conexões publicam UM evento só, com o total e o upload principal")
+    void duasConexoesPublicamUmEventoSo() {
+        // quem escuta agenda a faxina do extrato inteiro do usuário: um evento
+        // por banco viraria N faxinas concorrentes sobre os mesmos lançamentos
+        BankStatementService.ImportResult resultado = service.importFromConnector(
+                user, StatementFormat.PLUGGY,
+                List.of(tx("PLUGGY-i1", "-45.90", "MERCADO", CONTA_INTER),
+                        tx("PLUGGY-n1", "-30.00", "IFOOD", CONTA_NUBANK),
+                        tx("PLUGGY-n2", "-12.00", "PADARIA", CONTA_NUBANK)),
+                DUAS_CONEXOES);
+
+        gravacoes(2);
+        ArgumentCaptor<DomainEvent> eventos = ArgumentCaptor.forClass(DomainEvent.class);
+        verify(eventPublisher, times(1)).publish(eventos.capture());
+        assertThat(eventos.getValue()).isInstanceOf(StatementImportedEvent.class);
+        StatementImportedEvent evento = (StatementImportedEvent) eventos.getValue();
+        assertThat(evento.getUserId()).isEqualTo(user.getId());
+        assertThat(evento.getTransactionsImported()).isEqualTo(3);
+        assertThat(evento.getUploadId()).isEqualTo(resultado.uploadId());
+    }
+
+    @Test
     @DisplayName("Mesmo dia e mesmo valor em bancos diferentes: as duas compras entram")
     void mesmoDiaEValorEmBancosDiferentesNaoViraDuplicata() {
         // É o caso que proíbe importar conexão por conexão: a segunda leria a
@@ -445,8 +469,8 @@ class BankStatementImportPathsTest {
         // o Nubank veio DEPOIS da falha do Inter e mesmo assim foi gravado
         List<Gravacao> tentativas = gravacoes(2);
         assertThat(tentativas).extracting(g -> g.upload().getFileName()).containsExactly("Inter", "Nubank");
-        // só o que de fato gravou é anunciado: um evento, o do Nubank
-        verify(eventPublisher, times(1)).publish(any());
+        // lote pela metade não é anunciado: a próxima sincronização publica
+        verify(eventPublisher, never()).publish(any());
         verify(bankTransactionRepository, never()).markAsInternalTransfer(any(), any());
     }
 

@@ -434,7 +434,9 @@ public class BankStatementService {
         // entrou e importa só o que faltou.
         List<StatementUpload> uploads = new ArrayList<>();
         // os hits das regras são do lote inteiro: vão junto com a primeira
-        // gravação que der certo, e uma vez só
+        // gravação que der certo, e uma vez só. Limitação conhecida: numa falha
+        // parcial, os hits das linhas que não gravaram são contados de novo na
+        // sincronização seguinte — o efeito fica só na métrica de acertos
         java.util.Collection<br.com.economize.model.CategoryRule> pendingRules = ctx.getDirtyRules();
         RuntimeException failure = null;
         List<String> failedSources = new ArrayList<>();
@@ -453,8 +455,6 @@ public class BankStatementService {
                         pendingRules);
                 pendingRules = List.of();
                 uploads.add(upload);
-                eventPublisher.publish(new StatementImportedEvent(
-                        user.getId(), format, group.getValue().size(), upload.getId()));
             } catch (RuntimeException e) {
                 failedSources.add(source.name());
                 if (failure == null) failure = e;
@@ -486,6 +486,11 @@ public class BankStatementService {
         for (StatementUpload upload : uploads) {
             if (upload.getTransactionsImported() > principal.getTransactionsImported()) principal = upload;
         }
+        // UM evento por importação, e só quando tudo gravou: quem escuta agenda
+        // a faxina do extrato INTEIRO do usuário, então um evento por banco
+        // dispararia N faxinas concorrentes sobre os mesmos lançamentos. Em
+        // falha parcial não sai nenhum — a próxima sincronização publica.
+        eventPublisher.publish(new StatementImportedEvent(user.getId(), format, toSave.size(), principal.getId()));
         return new ImportResult(principal.getId(), toSave.size(), suggested, uncategorized, reconciled, false,
                 format.name());
     }
