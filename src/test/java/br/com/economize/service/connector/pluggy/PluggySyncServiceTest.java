@@ -29,6 +29,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
@@ -124,7 +125,7 @@ class PluggySyncServiceTest {
                         // sem amount não há como classificar: linha é pulada
                         Map.of("id", "c3", "date", "2026-08-12", "description", "quebrada")));
 
-        when(bankStatementService.importFromConnector(eq(user), eq("Meu Pluggy"), eq(StatementFormat.PLUGGY), anyList()))
+        when(bankStatementService.importFromConnector(eq(user), eq(StatementFormat.PLUGGY), anyList(), anyMap()))
                 .thenReturn(new BankStatementService.ImportResult(UUID.randomUUID(), 3, 1, 0, 0, false, "PLUGGY"));
 
         PluggySyncService.SyncResult sync = service.sync(EMAIL, 90);
@@ -133,8 +134,8 @@ class PluggySyncServiceTest {
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<ParsedTransaction>> captor = ArgumentCaptor.forClass(List.class);
-        verify(bankStatementService).importFromConnector(eq(user), eq("Meu Pluggy"),
-                eq(StatementFormat.PLUGGY), captor.capture());
+        verify(bankStatementService).importFromConnector(eq(user), eq(StatementFormat.PLUGGY),
+                captor.capture(), anyMap());
         List<ParsedTransaction> parsed = captor.getValue();
         assertThat(parsed).hasSize(3);
 
@@ -202,15 +203,15 @@ class PluggySyncServiceTest {
                         Map.of("id", "b2", "amount", "-500.00", "date", "2026-08-14",
                                 "description", "ALUGUEL AGOSTO")));
 
-        when(bankStatementService.importFromConnector(eq(user), eq("Meu Pluggy"), eq(StatementFormat.PLUGGY), anyList()))
+        when(bankStatementService.importFromConnector(eq(user), eq(StatementFormat.PLUGGY), anyList(), anyMap()))
                 .thenReturn(new BankStatementService.ImportResult(UUID.randomUUID(), 4, 2, 0, 0, false, "PLUGGY"));
 
         service.sync(EMAIL, 90);
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<ParsedTransaction>> captor = ArgumentCaptor.forClass(List.class);
-        verify(bankStatementService).importFromConnector(eq(user), eq("Meu Pluggy"),
-                eq(StatementFormat.PLUGGY), captor.capture());
+        verify(bankStatementService).importFromConnector(eq(user), eq(StatementFormat.PLUGGY),
+                captor.capture(), anyMap());
         List<ParsedTransaction> parsed = captor.getValue();
 
         // (1) a compra é a única despesa de cartão que conta
@@ -260,15 +261,15 @@ class PluggySyncServiceTest {
                         Map.of("id", "b2", "amount", "-500.00", "date", "2026-08-12",
                                 "description", "PAGAMENTO FATURA OUTRO BANCO")));
 
-        when(bankStatementService.importFromConnector(eq(user), eq("Meu Pluggy"), eq(StatementFormat.PLUGGY), anyList()))
+        when(bankStatementService.importFromConnector(eq(user), eq(StatementFormat.PLUGGY), anyList(), anyMap()))
                 .thenReturn(new BankStatementService.ImportResult(UUID.randomUUID(), 3, 0, 0, 0, false, "PLUGGY"));
 
         service.sync(EMAIL, 90);
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<ParsedTransaction>> captor = ArgumentCaptor.forClass(List.class);
-        verify(bankStatementService).importFromConnector(eq(user), eq("Meu Pluggy"),
-                eq(StatementFormat.PLUGGY), captor.capture());
+        verify(bankStatementService).importFromConnector(eq(user), eq(StatementFormat.PLUGGY),
+                captor.capture(), anyMap());
         List<ParsedTransaction> parsed = captor.getValue();
 
         assertThat(byId(parsed, "PLUGGY-b1").isInternalTransfer()).isTrue();
@@ -300,15 +301,15 @@ class PluggySyncServiceTest {
                                 "description", "PAGAMENTO FATURA CARTAO"),
                         Map.of("id", "b2", "amount", "-500.00", "date", "2026-08-20",
                                 "description", "PAGAMENTO FATURA CARTAO")));
-        when(bankStatementService.importFromConnector(eq(user), eq("Meu Pluggy"), eq(StatementFormat.PLUGGY), anyList()))
+        when(bankStatementService.importFromConnector(eq(user), eq(StatementFormat.PLUGGY), anyList(), anyMap()))
                 .thenReturn(new BankStatementService.ImportResult(UUID.randomUUID(), 4, 0, 0, 0, false, "PLUGGY"));
 
         service.sync(EMAIL, 90);
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<ParsedTransaction>> captor = ArgumentCaptor.forClass(List.class);
-        verify(bankStatementService).importFromConnector(eq(user), eq("Meu Pluggy"),
-                eq(StatementFormat.PLUGGY), captor.capture());
+        verify(bankStatementService).importFromConnector(eq(user), eq(StatementFormat.PLUGGY),
+                captor.capture(), anyMap());
 
         assertThat(byId(captor.getValue(), "PLUGGY-b1").isInternalTransfer()).isTrue();
         assertThat(byId(captor.getValue(), "PLUGGY-b2").isInternalTransfer()).isTrue();
@@ -334,15 +335,15 @@ class PluggySyncServiceTest {
         when(pluggyClient.transactions(eq("api-key"), eq("acc-bank"), any(LocalDate.class), any(LocalDate.class)))
                 .thenReturn(List.of(Map.of("id", "b1", "amount", "-100.00", "date", "2026-08-12",
                         "description", "PAGAMENTO FATURA CARTAO")));
-        when(bankStatementService.importFromConnector(eq(user), eq("Meu Pluggy"), eq(StatementFormat.PLUGGY), anyList()))
+        when(bankStatementService.importFromConnector(eq(user), eq(StatementFormat.PLUGGY), anyList(), anyMap()))
                 .thenReturn(new BankStatementService.ImportResult(UUID.randomUUID(), 2, 0, 0, 0, false, "PLUGGY"));
 
         service.sync(EMAIL, 90);
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<ParsedTransaction>> captor = ArgumentCaptor.forClass(List.class);
-        verify(bankStatementService).importFromConnector(eq(user), eq("Meu Pluggy"),
-                eq(StatementFormat.PLUGGY), captor.capture());
+        verify(bankStatementService).importFromConnector(eq(user), eq(StatementFormat.PLUGGY),
+                captor.capture(), anyMap());
 
         // Este teste documenta o comportamento ATUAL, não um ideal: separar
         // estorno de pagamento exigiria adivinhar pelo texto do descritivo, que é
@@ -366,15 +367,15 @@ class PluggySyncServiceTest {
         when(pluggyClient.transactions(eq("api-key"), eq("acc-bank"), any(LocalDate.class), any(LocalDate.class)))
                 .thenReturn(List.of(Map.of("id", "b1", "amount", "-500.00", "date", "2026-08-12",
                         "description", "PAGAMENTO FATURA CARTAO")));
-        when(bankStatementService.importFromConnector(eq(user), eq("Meu Pluggy"), eq(StatementFormat.PLUGGY), anyList()))
+        when(bankStatementService.importFromConnector(eq(user), eq(StatementFormat.PLUGGY), anyList(), anyMap()))
                 .thenReturn(new BankStatementService.ImportResult(UUID.randomUUID(), 1, 0, 0, 0, false, "PLUGGY"));
 
         service.sync(EMAIL, 90);
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<ParsedTransaction>> captor = ArgumentCaptor.forClass(List.class);
-        verify(bankStatementService).importFromConnector(eq(user), eq("Meu Pluggy"),
-                eq(StatementFormat.PLUGGY), captor.capture());
+        verify(bankStatementService).importFromConnector(eq(user), eq(StatementFormat.PLUGGY),
+                captor.capture(), anyMap());
 
         // sem a compra na base, este débito é a ÚNICA representação do gasto do
         // cartão: neutralizá-lo faria as despesas do usuário sumirem sem nada
@@ -398,15 +399,15 @@ class PluggySyncServiceTest {
                                 "description", "IFOOD", "status", "POSTED"),
                         Map.of("id", "c2", "amount", "80.00", "date", "2026-08-14",
                                 "description", "UBER", "status", "PENDING")));
-        when(bankStatementService.importFromConnector(eq(user), eq("Meu Pluggy"), eq(StatementFormat.PLUGGY), anyList()))
+        when(bankStatementService.importFromConnector(eq(user), eq(StatementFormat.PLUGGY), anyList(), anyMap()))
                 .thenReturn(new BankStatementService.ImportResult(UUID.randomUUID(), 1, 0, 0, 0, false, "PLUGGY"));
 
         service.sync(EMAIL, 90);
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<ParsedTransaction>> captor = ArgumentCaptor.forClass(List.class);
-        verify(bankStatementService).importFromConnector(eq(user), eq("Meu Pluggy"),
-                eq(StatementFormat.PLUGGY), captor.capture());
+        verify(bankStatementService).importFromConnector(eq(user), eq(StatementFormat.PLUGGY),
+                captor.capture(), anyMap());
 
         assertThat(captor.getValue()).extracting(ParsedTransaction::getExternalId)
                 .containsExactly("PLUGGY-c1");
@@ -467,7 +468,7 @@ class PluggySyncServiceTest {
         when(pluggyItemRepository.findAllByUserIdOrderByCreatedAtAsc(user.getId()))
                 .thenReturn(List.of(seeded));
         when(pluggyClient.accounts("api-key", "env-1")).thenReturn(List.of());
-        when(bankStatementService.importFromConnector(eq(user), eq("Meu Pluggy"), eq(StatementFormat.PLUGGY), anyList()))
+        when(bankStatementService.importFromConnector(eq(user), eq(StatementFormat.PLUGGY), anyList(), anyMap()))
                 .thenReturn(new BankStatementService.ImportResult(null, 0, 0, 0, 0, false, "PLUGGY"));
 
         service.sync(EMAIL, 30);
@@ -531,7 +532,7 @@ class PluggySyncServiceTest {
         when(pluggyClient.transactions(eq("api-key"), eq("acc-card"), any(LocalDate.class), any(LocalDate.class)))
                 .thenReturn(List.of(Map.of("id", "c1", "amount", "100.00", "date", "2026-08-11",
                         "description", "IFOOD RESTAURANTE")));
-        when(bankStatementService.importFromConnector(eq(user), eq("Meu Pluggy"), eq(StatementFormat.PLUGGY), anyList()))
+        when(bankStatementService.importFromConnector(eq(user), eq(StatementFormat.PLUGGY), anyList(), anyMap()))
                 .thenReturn(new BankStatementService.ImportResult(UUID.randomUUID(), 2, 1, 0, 0, false, "PLUGGY"));
 
         service.sync(EMAIL, 90);
@@ -564,8 +565,8 @@ class PluggySyncServiceTest {
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<ParsedTransaction>> captor = ArgumentCaptor.forClass(List.class);
-        verify(bankStatementService).importFromConnector(eq(user), eq("Meu Pluggy"),
-                eq(StatementFormat.PLUGGY), captor.capture());
+        verify(bankStatementService).importFromConnector(eq(user), eq(StatementFormat.PLUGGY),
+                captor.capture(), anyMap());
 
         // cada linha sai do sync sabendo de onde veio — depois da gravação
         // ninguém mais teria como descobrir
@@ -596,7 +597,7 @@ class PluggySyncServiceTest {
         when(pluggyClient.transactions(eq("api-key"), eq("acc-card"), any(LocalDate.class), any(LocalDate.class)))
                 .thenReturn(List.of(Map.of("id", "c1", "amount", "100.00", "date", "2026-08-11",
                         "description", "IFOOD RESTAURANTE")));
-        when(bankStatementService.importFromConnector(eq(user), eq("Meu Pluggy"), eq(StatementFormat.PLUGGY), anyList()))
+        when(bankStatementService.importFromConnector(eq(user), eq(StatementFormat.PLUGGY), anyList(), anyMap()))
                 .thenReturn(new BankStatementService.ImportResult(UUID.randomUUID(), 1, 0, 0, 0, false, "PLUGGY"));
 
         service.sync(EMAIL, 90);
@@ -655,7 +656,7 @@ class PluggySyncServiceTest {
                 Map.of("id", "acc-card", "type", "CREDIT", "name", "Cartão")));
         when(pluggyClient.transactions(eq("api-key"), eq("acc-card"), any(LocalDate.class), any(LocalDate.class)))
                 .thenReturn(List.of());
-        when(bankStatementService.importFromConnector(eq(user), eq("Meu Pluggy"), eq(StatementFormat.PLUGGY), anyList()))
+        when(bankStatementService.importFromConnector(eq(user), eq(StatementFormat.PLUGGY), anyList(), anyMap()))
                 .thenReturn(new BankStatementService.ImportResult(null, 0, 0, 0, 0, false, "PLUGGY"));
 
         service.sync(EMAIL, 90);
@@ -691,15 +692,15 @@ class PluggySyncServiceTest {
         when(pluggyClient.transactions(eq("api-key"), eq("acc-bank"), any(LocalDate.class), any(LocalDate.class)))
                 .thenReturn(List.of(Map.of("id", "b1", "amount", "-500.00", "date", "2026-08-12",
                         "description", "PAGAMENTO FATURA CARTAO")));
-        when(bankStatementService.importFromConnector(eq(user), eq("Meu Pluggy"), eq(StatementFormat.PLUGGY), anyList()))
+        when(bankStatementService.importFromConnector(eq(user), eq(StatementFormat.PLUGGY), anyList(), anyMap()))
                 .thenReturn(new BankStatementService.ImportResult(UUID.randomUUID(), 3, 0, 0, 0, false, "PLUGGY"));
 
         service.sync(EMAIL, 90);
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<ParsedTransaction>> captor = ArgumentCaptor.forClass(List.class);
-        verify(bankStatementService).importFromConnector(eq(user), eq("Meu Pluggy"),
-                eq(StatementFormat.PLUGGY), captor.capture());
+        verify(bankStatementService).importFromConnector(eq(user), eq(StatementFormat.PLUGGY),
+                captor.capture(), anyMap());
         List<ParsedTransaction> parsed = captor.getValue();
         UUID cartao = ACCOUNT_IDS.get("acc-card");
         UUID conta = ACCOUNT_IDS.get("acc-bank");
@@ -723,6 +724,76 @@ class PluggySyncServiceTest {
         // a dimensão de conta NÃO reintroduziu a fatura como despesa nem como
         // receita: as duas pernas continuam marcadas, exatamente como na V15
         assertThat(parsed).filteredOn(ParsedTransaction::isInternalTransfer).hasSize(2);
+    }
+
+    // ------------------------------------------- uma fonte por conexão (banco)
+
+    /** Duas conexões, uma conta em cada, e devolve o mapa conta -> fonte entregue à importação. */
+    private Map<UUID, BankStatementService.UploadSource> syncTwoItems(String nameOfFirst, String nameOfSecond) {
+        when(userRepository.findByEmail(EMAIL)).thenReturn(Optional.of(user));
+        when(pluggyClient.isConfigured()).thenReturn(true);
+        when(pluggyClient.authenticate()).thenReturn("api-key");
+        when(pluggyItemRepository.findAllByUserIdOrderByCreatedAtAsc(user.getId())).thenReturn(List.of(
+                PluggyItem.builder().id(UUID.randomUUID()).user(user).itemId("item-1")
+                        .connectorName(nameOfFirst).build(),
+                PluggyItem.builder().id(UUID.randomUUID()).user(user).itemId("item-2")
+                        .connectorName(nameOfSecond).build()));
+        when(pluggyClient.accounts("api-key", "item-1")).thenReturn(List.of(
+                Map.of("id", "acc-bank", "type", "BANK")));
+        when(pluggyClient.accounts("api-key", "item-2")).thenReturn(List.of(
+                Map.of("id", "acc-card", "type", "CREDIT")));
+        when(pluggyClient.transactions(eq("api-key"), eq("acc-bank"), any(LocalDate.class), any(LocalDate.class)))
+                .thenReturn(List.of(Map.of("id", "b1", "amount", "-50.00", "date", "2026-08-10",
+                        "description", "PIX MERCADO CENTRAL")));
+        when(pluggyClient.transactions(eq("api-key"), eq("acc-card"), any(LocalDate.class), any(LocalDate.class)))
+                .thenReturn(List.of(Map.of("id", "c1", "amount", "100.00", "date", "2026-08-11",
+                        "description", "IFOOD RESTAURANTE")));
+        when(bankStatementService.importFromConnector(eq(user), eq(StatementFormat.PLUGGY), anyList(), anyMap()))
+                .thenReturn(new BankStatementService.ImportResult(UUID.randomUUID(), 2, 0, 0, 0, false, "PLUGGY"));
+
+        service.sync(EMAIL, 90);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<UUID, BankStatementService.UploadSource>> sources = ArgumentCaptor.forClass(Map.class);
+        // UMA chamada só: a decisão do que entra é tomada sobre a sincronização
+        // inteira; quem reparte em um upload por banco é a gravação
+        verify(bankStatementService).importFromConnector(eq(user), eq(StatementFormat.PLUGGY),
+                anyList(), sources.capture());
+        return sources.getValue();
+    }
+
+    @Test
+    @DisplayName("duas conexões: cada conta leva o nome do banco DELA, e nenhuma se chama Meu Pluggy")
+    void eachConnectionCarriesItsOwnBankName() {
+        Map<UUID, BankStatementService.UploadSource> sources = syncTwoItems("Inter", "Nubank");
+
+        assertThat(sources).hasSize(2);
+        assertThat(sources.get(ACCOUNT_IDS.get("acc-bank")))
+                .isEqualTo(new BankStatementService.UploadSource("item-1", "Inter"));
+        assertThat(sources.get(ACCOUNT_IDS.get("acc-card")))
+                .isEqualTo(new BankStatementService.UploadSource("item-2", "Nubank"));
+    }
+
+    @Test
+    @DisplayName("conexão sem nome de banco cai no rótulo genérico, sem contaminar a que tem nome")
+    void connectionWithoutNameFallsBackToGenericLabel() {
+        // em branco e nulo são o mesmo caso: o provedor não disse quem é
+        Map<UUID, BankStatementService.UploadSource> sources = syncTwoItems("  ", null);
+
+        assertThat(sources.get(ACCOUNT_IDS.get("acc-bank")))
+                .isEqualTo(new BankStatementService.UploadSource("item-1", "Meu Pluggy"));
+        assertThat(sources.get(ACCOUNT_IDS.get("acc-card")))
+                .isEqualTo(new BankStatementService.UploadSource("item-2", "Meu Pluggy"));
+    }
+
+    @Test
+    @DisplayName("duas conexões do MESMO banco continuam sendo duas fontes")
+    void twoConnectionsOfTheSameBankStayApart() {
+        Map<UUID, BankStatementService.UploadSource> sources = syncTwoItems("Inter", "Inter");
+
+        // o nome empata; o que separa é o id da conexão no provedor
+        assertThat(sources.get(ACCOUNT_IDS.get("acc-bank")))
+                .isNotEqualTo(sources.get(ACCOUNT_IDS.get("acc-card")));
     }
 
     private ParsedTransaction byId(List<ParsedTransaction> parsed, String externalId) {
