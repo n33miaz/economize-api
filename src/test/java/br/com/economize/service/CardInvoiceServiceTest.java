@@ -341,6 +341,54 @@ class CardInvoiceServiceTest {
         assertThat(fatura.paymentsTotal()).isEqualByComparingTo("200.00");
     }
 
+    @Test
+    @DisplayName("linha IGNORADA não entra na fatura: nem no total, nem na contagem, nem na lista")
+    void ignoredLinesStayOutOfTheInvoice() {
+        ConnectorAccount cartao = card(null, null);
+        owned(cartao);
+        YearMonth mes = YearMonth.now(ZoneOffset.UTC);
+
+        BankTransaction compra = tx(cartao, "-100.00", mes.atDay(4));
+        // a mesma compra lida uma segunda vez por outra fonte: a varredura de
+        // duplicatas a marcou, e todas as outras somas do app já a deixam de fora
+        BankTransaction duplicata = tx(cartao, "-100.00", mes.atDay(4));
+        duplicata.setIgnored(true);
+        duplicata.setIgnoredReason(BankTransaction.IgnoredReason.DUPLICATE);
+        // crédito ignorado também não conta: ignorar vale para os dois sinais
+        BankTransaction estornoIgnorado = tx(cartao, "30.00", mes.atDay(6));
+        estornoIgnorado.setType("CREDIT");
+        estornoIgnorado.setIgnored(true);
+        estornoIgnorado.setIgnoredReason(BankTransaction.IgnoredReason.USER);
+        transactions(cartao, compra, duplicata, estornoIgnorado);
+
+        CardInvoicesResponse.Invoice fatura = service.invoices(EMAIL, cartao.getId(), 1).invoices().get(0);
+
+        // antes a fatura dizia 200 de compras e 3 lançamentos, enquanto o mês
+        // do mesmo usuário mostrava 100 de despesa
+        assertThat(fatura.purchasesTotal()).isEqualByComparingTo("100.00");
+        assertThat(fatura.refundsTotal()).isEqualByComparingTo("0.00");
+        assertThat(fatura.total()).isEqualByComparingTo("100.00");
+        assertThat(fatura.transactionCount()).isEqualTo(1);
+        assertThat(fatura.transactions()).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("ciclo só com linhas ignoradas não vira fatura")
+    void cycleWithOnlyIgnoredLinesIsOmitted() {
+        ConnectorAccount cartao = card(null, null);
+        owned(cartao);
+        YearMonth mes = YearMonth.now(ZoneOffset.UTC);
+
+        BankTransaction ignorada = tx(cartao, "-100.00", mes.atDay(4));
+        ignorada.setIgnored(true);
+        ignorada.setIgnoredReason(BankTransaction.IgnoredReason.USER);
+        transactions(cartao, ignorada);
+
+        // é o mesmo "ciclo vazio" de um mês sem lançamento: fatura de zero com
+        // zero lançamentos seria um mês em branco na tela
+        assertThat(service.invoices(EMAIL, cartao.getId(), 1).invoices()).isEmpty();
+    }
+
     // ------------------------------------------------- a fatura que vence
 
     @Test

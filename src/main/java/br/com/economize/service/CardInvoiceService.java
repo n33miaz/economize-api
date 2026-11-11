@@ -115,7 +115,13 @@ public class CardInvoiceService {
         });
         List<CardInvoicesResponse.Invoice> invoices = new ArrayList<>();
         for (Cycle cycle : cycles) {
+            // Linha ignorada (duplicata de outra fonte, ou decisão do usuário)
+            // sai AQUI, antes de tudo: as demais somas do app já não a contam,
+            // e a fatura somando-a mostrava uma dívida maior do que o gasto do
+            // mês. Sair da lista junto mantém total, contagem e linhas falando
+            // a mesma coisa — ela continua visível no extrato, onde se desfaz
             List<BankTransaction> inCycle = transactions.stream()
+                    .filter(tx -> !tx.isIgnored())
                     .filter(tx -> cycle.contains(utcDay(tx.getDate())))
                     .toList();
             // ciclo vazio não vira fatura: o usuário abriria um mês em branco de
