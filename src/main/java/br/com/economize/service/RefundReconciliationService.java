@@ -272,7 +272,20 @@ public class RefundReconciliationService {
      * "Devolução", "DEVOLUCAO" e "devolucao" para a mesma coisa.
      */
     static boolean pareceEstorno(BankTransaction tx) {
-        String descricao = normalizar(tx.getDescription());
+        return anunciaEstorno(tx.getDescription());
+    }
+
+    /**
+     * A mesma pergunta, feita ANTES de a linha existir no banco.
+     *
+     * <p>É pública por causa da sincronização do conector: ela precisa decidir
+     * se um crédito no cartão é pagamento de fatura ou devolução, e as marcas
+     * têm de ser as MESMAS daqui — se a importação chamasse de estorno o que a
+     * varredura não reconhece (ou o contrário), a linha ficaria num limbo, fora
+     * das duas contas.
+     */
+    public static boolean anunciaEstorno(String descricaoBruta) {
+        String descricao = normalizar(descricaoBruta);
         if (descricao.isEmpty()) return false;
         return MARCAS_DE_ESTORNO.stream().anyMatch(descricao::contains);
     }

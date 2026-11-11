@@ -142,7 +142,9 @@ public class CardInvoiceService {
      * do Pluggy) e o que é crédito. Entre os créditos, o que separa PAGAMENTO de
      * ESTORNO é o sinal ESTRUTURAL que a V15 já grava, não heurística de texto:
      * pagamento de fatura é perna de movimentação entre contas do titular e vem
-     * marcado na importação; estorno de compra é crédito sem marca.
+     * marcado na importação; estorno de compra é crédito sem marca. No conector
+     * quem decide a marca é a sincronização: crédito no cartão é pagamento,
+     * salvo quando se anuncia como estorno (ver {@code PluggySyncService}).
      *
      * <p>A diferença muda o número que o usuário lê. Compra de 100 estornada no
      * mesmo ciclo deixa dívida ZERO — mas com os dois no mesmo balde a resposta
