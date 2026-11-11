@@ -19,6 +19,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.beans.factory.ObjectProvider;
@@ -30,8 +31,10 @@ import reactor.core.publisher.Flux;
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -46,6 +49,7 @@ import static org.mockito.Mockito.anyCollection;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -268,5 +272,194 @@ class BankStatementImportPathsTest {
 
         // Só a linha nova entra; a conhecida é pulada pelo id externo
         assertThat(resultado.transactionsImported()).isEqualTo(1);
+    }
+    // ------------------------------------------- um upload por conexão (banco)
+
+    private static final UUID CONTA_INTER = UUID.randomUUID();
+    private static final UUID CONTA_NUBANK = UUID.randomUUID();
+    private static final BankStatementService.UploadSource INTER =
+            new BankStatementService.UploadSource("item-1", "Inter");
+    private static final BankStatementService.UploadSource NUBANK =
+            new BankStatementService.UploadSource("item-2", "Nubank");
+    private static final Map<UUID, BankStatementService.UploadSource> DUAS_CONEXOES =
+            Map.of(CONTA_INTER, INTER, CONTA_NUBANK, NUBANK);
+
+    private ParsedTransaction tx(String id, String valor, String descricao, UUID conta) {
+        return tx(id, valor, descricao).toBuilder().accountId(conta).build();
+    }
+
+    /** O que foi entregue ao writer, um registro por chamada, na ordem. */
+    private record Gravacao(StatementUpload upload, List<BankTransaction> linhas) {
+    }
+
+    private List<Gravacao> gravacoes(int vezes) {
+        ArgumentCaptor<StatementUpload> uploads = ArgumentCaptor.forClass(StatementUpload.class);
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<BankTransaction>> linhas = ArgumentCaptor.forClass(List.class);
+        verify(importWriter, times(vezes)).write(uploads.capture(), linhas.capture(), anyCollection());
+        List<Gravacao> todas = new ArrayList<>();
+        for (int i = 0; i < uploads.getAllValues().size(); i++) {
+            todas.add(new Gravacao(uploads.getAllValues().get(i), linhas.getAllValues().get(i)));
+        }
+        return todas;
+    }
+
+    @Test
+    @DisplayName("Duas conexões viram dois uploads: rótulo do banco e contagem de cada uma")
+    void duasConexoesViramDoisUploads() {
+        BankStatementService.ImportResult resultado = service.importFromConnector(
+                user, StatementFormat.PLUGGY,
+                List.of(tx("PLUGGY-n1", "-30.00", "IFOOD", CONTA_NUBANK),
+                        tx("PLUGGY-i1", "-45.90", "MERCADO", CONTA_INTER),
+                        tx("PLUGGY-n2", "-12.00", "PADARIA", CONTA_NUBANK)),
+                DUAS_CONEXOES);
+
+        List<Gravacao> gravadas = gravacoes(2);
+        // a ordem dos uploads é a ordem em que cada conexão aparece no lote
+        assertThat(gravadas).extracting(g -> g.upload().getFileName()).containsExactly("Nubank", "Inter");
+        assertThat(gravadas).extracting(g -> g.upload().getTransactionsImported()).containsExactly(2, 1);
+        assertThat(gravadas.get(0).linhas()).extracting(BankTransaction::getTransactionId)
+                .containsExactly("PLUGGY-n1", "PLUGGY-n2");
+        assertThat(gravadas.get(1).linhas()).extracting(BankTransaction::getTransactionId)
+                .containsExactly("PLUGGY-i1");
+        // cada sincronização de cada conexão é um registro próprio no histórico
+        assertThat(gravadas.get(0).upload().getFileHash()).isNotEqualTo(gravadas.get(1).upload().getFileHash());
+
+        // a procedência (V41) é da LINHA e não muda com o rótulo do upload
+        assertThat(gravadas).flatExtracting(Gravacao::linhas)
+                .extracting(BankTransaction::getImportSourceStored)
+                .containsOnly(BankTransaction.ImportSource.CONNECTION);
+
+        // a resposta soma as conexões e aponta o upload que mais trouxe novidade
+        assertThat(resultado.transactionsImported()).isEqualTo(3);
+        assertThat(resultado.uploadId()).isEqualTo(gravadas.get(0).upload().getId());
+        assertThat(resultado.format()).isEqualTo("PLUGGY");
+    }
+
+    @Test
+    @DisplayName("Mesmo dia e mesmo valor em bancos diferentes: as duas compras entram")
+    void mesmoDiaEValorEmBancosDiferentesNaoViraDuplicata() {
+        // É o caso que proíbe importar conexão por conexão: a segunda leria a
+        // linha recém-gravada da primeira como "já existe" (dia + valor) e uma
+        // compra de verdade sumiria. A reconciliação olha o lote inteiro de uma
+        // vez, então o que acabou de chegar não reconcilia contra si mesmo.
+        service.importFromConnector(user, StatementFormat.PLUGGY,
+                List.of(tx("PLUGGY-i1", "-50.00", "POSTO SHELL", CONTA_INTER),
+                        tx("PLUGGY-n1", "-50.00", "POSTO IPIRANGA", CONTA_NUBANK)),
+                DUAS_CONEXOES);
+
+        assertThat(gravacoes(2)).extracting(g -> g.upload().getTransactionsImported()).containsExactly(1, 1);
+        // uma leitura só do que já existia: nenhuma conexão enxerga a outra
+        verify(bankTransactionRepository, times(1))
+                .findAllByUserIdAndDateGreaterThanEqualAndDateLessThanOrderByDateDesc(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("A segunda sincronização seguida importa zero em cada conexão")
+    void segundaSincronizacaoImportaZero() {
+        List<ParsedTransaction> lote = List.of(
+                tx("PLUGGY-i1", "-45.90", "MERCADO", CONTA_INTER),
+                tx("PLUGGY-n1", "-30.00", "IFOOD", CONTA_NUBANK));
+        service.importFromConnector(user, StatementFormat.PLUGGY, lote, DUAS_CONEXOES);
+        List<BankTransaction> jaGravadas = gravacoes(2).stream()
+                .flatMap(g -> g.linhas().stream())
+                .peek(linha -> linha.setId(UUID.randomUUID()))
+                .toList();
+        when(bankTransactionRepository
+                .findAllByUserIdAndDateGreaterThanEqualAndDateLessThanOrderByDateDesc(any(), any(), any()))
+                .thenReturn(jaGravadas);
+
+        BankStatementService.ImportResult segunda =
+                service.importFromConnector(user, StatementFormat.PLUGGY, lote, DUAS_CONEXOES);
+
+        assertThat(segunda.transactionsImported()).isZero();
+        // pulado pelo id externo, não "reconciliado": é a mesma linha, não outra parecida
+        assertThat(segunda.reconciled()).isZero();
+        // as duas conexões continuam registrando que foram sincronizadas, vazias
+        List<Gravacao> todas = gravacoes(4);
+        assertThat(todas.subList(2, 4)).extracting(g -> g.upload().getFileName())
+                .containsExactly("Inter", "Nubank");
+        assertThat(todas.subList(2, 4)).allSatisfy(g -> assertThat(g.linhas()).isEmpty());
+    }
+
+    @Test
+    @DisplayName("Arquivo x conector: o que o OFX já trouxe não entra de novo, em nenhuma das conexões")
+    void arquivoJaImportadoReconciliaComCadaConexao() {
+        BankTransaction doArquivo = BankTransaction.builder()
+                .id(UUID.randomUUID())
+                .user(user)
+                .transactionId("OFX-777")
+                .type("DEBIT")
+                .amount(new BigDecimal("-45.90"))
+                .description("MERCADO")
+                .normalizedDescription(DescriptionNormalizer.normalize("MERCADO"))
+                .date(OffsetDateTime.of(2026, 5, 10, 9, 0, 0, 0, ZoneOffset.UTC))
+                .reviewStatus(BankTransaction.ReviewStatus.CONFIRMED)
+                .build();
+        when(bankTransactionRepository
+                .findAllByUserIdAndDateGreaterThanEqualAndDateLessThanOrderByDateDesc(any(), any(), any()))
+                .thenReturn(List.of(doArquivo));
+
+        BankStatementService.ImportResult resultado = service.importFromConnector(
+                user, StatementFormat.PLUGGY,
+                List.of(tx("PLUGGY-i1", "-45.90", "MERCADO", CONTA_INTER),
+                        tx("PLUGGY-n1", "-30.00", "IFOOD", CONTA_NUBANK)),
+                DUAS_CONEXOES);
+
+        assertThat(resultado.reconciled()).isEqualTo(1);
+        assertThat(resultado.transactionsImported()).isEqualTo(1);
+        List<Gravacao> gravadas = gravacoes(2);
+        assertThat(gravadas.get(0).upload().getFileName()).isEqualTo("Inter");
+        assertThat(gravadas.get(0).linhas()).isEmpty();
+        assertThat(gravadas.get(1).linhas()).extracting(BankTransaction::getTransactionId)
+                .containsExactly("PLUGGY-n1");
+    }
+
+    @Test
+    @DisplayName("Falha parcial: a conexão que gravou fica, a outra é tentada, e a chamada termina em erro")
+    void falhaDeUmaConexaoNaoPerdeAsOutrasNemPassaEmSilencio() {
+        // COMPORTAMENTO ESCOLHIDO. Cada conexão é um commit próprio. Se uma
+        // falha: (1) as que já gravaram continuam gravadas — nada é desfeito;
+        // (2) as seguintes ainda são tentadas; (3) a chamada lança o erro
+        // original, para a sincronização não responder "ok" com um banco
+        // faltando; (4) as remarcações de pós-importação não rodam sobre um
+        // lote pela metade. A sincronização seguinte pula pelo id externo o
+        // que entrou e importa só o que faltou.
+        when(importWriter.write(any(StatementUpload.class), anyList(), anyCollection()))
+                .thenAnswer(inv -> {
+                    StatementUpload upload = inv.getArgument(0);
+                    if ("Inter".equals(upload.getFileName())) {
+                        throw new IllegalStateException("banco fora do ar");
+                    }
+                    upload.setId(UUID.randomUUID());
+                    return upload;
+                });
+
+        assertThatThrownBy(() -> service.importFromConnector(user, StatementFormat.PLUGGY,
+                List.of(tx("PLUGGY-i1", "-45.90", "MERCADO", CONTA_INTER),
+                        tx("PLUGGY-n1", "-30.00", "IFOOD", CONTA_NUBANK)),
+                DUAS_CONEXOES))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("banco fora do ar");
+
+        // o Nubank veio DEPOIS da falha do Inter e mesmo assim foi gravado
+        List<Gravacao> tentativas = gravacoes(2);
+        assertThat(tentativas).extracting(g -> g.upload().getFileName()).containsExactly("Inter", "Nubank");
+        // só o que de fato gravou é anunciado: um evento, o do Nubank
+        verify(eventPublisher, times(1)).publish(any());
+        verify(bankTransactionRepository, never()).markAsInternalTransfer(any(), any());
+    }
+
+    @Test
+    @DisplayName("Conta fora do mapa de conexões cai no rótulo genérico")
+    void contaSemConexaoConhecidaUsaRotuloGenerico() {
+        service.importFromConnector(user, StatementFormat.PLUGGY,
+                List.of(tx("PLUGGY-x1", "-45.90", "MERCADO", UUID.randomUUID()),
+                        tx("PLUGGY-x2", "-10.00", "PADARIA")),
+                DUAS_CONEXOES);
+
+        List<Gravacao> gravadas = gravacoes(1);
+        assertThat(gravadas.get(0).upload().getFileName()).isEqualTo("Meu Pluggy");
+        assertThat(gravadas.get(0).linhas()).hasSize(2);
     }
 }

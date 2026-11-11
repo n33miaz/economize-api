@@ -78,6 +78,13 @@ public class BankStatementService {
      */
     private static final int BACKFILL_CHUNK = 500;
 
+    /**
+     * Rótulo de quem não tem nome de banco para mostrar. Era o nome de TODO
+     * upload de conector; ficou só como recurso, para a conexão cujo provedor
+     * não informou a instituição.
+     */
+    public static final String FALLBACK_CONNECTOR_SOURCE = "Meu Pluggy";
+
     private final BankTransactionRepository bankTransactionRepository;
     private final StatementUploadRepository statementUploadRepository;
     private final UserRepository userRepository;
@@ -195,7 +202,9 @@ public class BankStatementService {
                     .toList();
             guardarSaldoDeclarado(user, accountId, parser, bytes);
         }
-        return persist(user, parsed, fileName, format, hash);
+        // arquivo é sempre UMA fonte só: um grupo, um upload, o hash do conteúdo
+        UploadSource arquivo = new UploadSource(hash, fileName);
+        return persist(user, parsed, format, tx -> arquivo, source -> hash);
     }
 
     /**
@@ -236,13 +245,52 @@ public class BankStatementService {
         if (parsed.isEmpty()) {
             return new ImportResult(null, 0, 0, 0, 0, false, format.name());
         }
-        String syntheticHash = sha256((sourceName + "|" + UUID.randomUUID())
-                .getBytes(java.nio.charset.StandardCharsets.UTF_8));
-        return persist(user, parsed, sourceName, format, syntheticHash);
+        UploadSource unica = new UploadSource(sourceName, sourceName);
+        return persist(user, parsed, format, tx -> unica, this::syntheticHash);
     }
 
-    private ImportResult persist(User user, List<ParsedTransaction> parsed, String fileName,
-                                 StatementFormat format, String hash) {
+    /**
+     * Sincronização com MAIS DE UMA conexão: um upload por conexão, cada um com
+     * o nome do banco dela. Antes saía um upload só para tudo, e com Inter +
+     * Nubank conectados qualquer rótulo único mentiria na lista de fontes.
+     *
+     * <p><b>Por que não chamar a importação uma vez por conexão.</b> Seria o
+     * caminho óbvio, e quebraria duas coisas em silêncio. A reconciliação
+     * enxergaria como "já existente" o que a conexão anterior acabou de gravar:
+     * duas compras de mesmo dia e mesmo valor em bancos diferentes passariam a
+     * ser tratadas como duplicata e uma delas sumiria. E o pagamento de fatura
+     * (débito num banco, crédito no cartão de outro) deixaria de se parear
+     * dentro do lote, mandando o crédito procurar no histórico um débito que
+     * não é o dele. Por isso a decisão do que entra continua sendo tomada UMA
+     * vez, sobre a sincronização inteira e na mesma ordem de sempre; só a
+     * GRAVAÇÃO é repartida por conexão.
+     *
+     * <p>{@code sourceByAccount} diz a qual conexão cada conta de origem
+     * pertence. Linha cuja conta não está no mapa cai na fonte genérica.
+     */
+    public ImportResult importFromConnector(User user, StatementFormat format,
+                                            List<ParsedTransaction> parsed,
+                                            Map<UUID, UploadSource> sourceByAccount) {
+        if (parsed.isEmpty()) {
+            return new ImportResult(null, 0, 0, 0, 0, false, format.name());
+        }
+        UploadSource generica = new UploadSource(FALLBACK_CONNECTOR_SOURCE, FALLBACK_CONNECTOR_SOURCE);
+        return persist(user, parsed, format,
+                tx -> tx.getAccountId() == null
+                        ? generica
+                        : sourceByAccount.getOrDefault(tx.getAccountId(), generica),
+                this::syntheticHash);
+    }
+
+    /** Hash sintético único: cada sincronização vira uma linha nova no histórico. */
+    private String syntheticHash(UploadSource source) {
+        return sha256((source.name() + "|" + UUID.randomUUID())
+                .getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    }
+
+    private ImportResult persist(User user, List<ParsedTransaction> parsed, StatementFormat format,
+                                 Function<ParsedTransaction, UploadSource> sourceOf,
+                                 Function<UploadSource, String> hashOf) {
         List<BankTransaction> existing = existingInWindow(user, parsed);
         // os ids já conhecidos saem da mesma leitura da janela: perguntar ao banco
         // uma vez por transação custava ~1 minuto num backfill de dois anos
@@ -318,11 +366,18 @@ public class BankStatementService {
         // o contador de acertos das regras com transações descartadas
         CategorizationEngine.Context ctx = categorizationEngine.contextFor(user.getId());
         List<BankTransaction> toSave = new ArrayList<>();
+        // Um grupo por fonte, na ordem em que cada uma aparece no lote. Toda
+        // fonte LIDA ganha grupo, mesmo sem lançamento novo: o upload vazio é o
+        // que registra "esta conexão foi sincronizada" no histórico.
+        Map<UploadSource, List<BankTransaction>> bySource = new java.util.LinkedHashMap<>();
+        for (ParsedTransaction tx : parsed) {
+            bySource.computeIfAbsent(sourceOf.apply(tx), k -> new ArrayList<>());
+        }
         for (Candidate candidate : fresh) {
             ParsedTransaction tx = candidate.tx();
             CategorizationEngine.Result result = categorizationEngine.categorize(
                     ctx, tx.getDescription(), tx.getType(), tx.isInternalTransfer());
-            toSave.add(BankTransaction.builder()
+            BankTransaction entity = BankTransaction.builder()
                     .user(user)
                     .transactionId(tx.getExternalId())
                     .type(tx.getType())
@@ -345,7 +400,9 @@ public class BankStatementService {
                     // sabe de qual conta puxou. Nulo no upload manual de arquivo,
                     // que não tem conta de provedor.
                     .accountId(tx.getAccountId())
-                    .build());
+                    .build();
+            toSave.add(entity);
+            bySource.get(sourceOf.apply(tx)).add(entity);
         }
 
         applyAiSuggestions(user, toSave);
@@ -365,26 +422,72 @@ public class BankStatementService {
             if (tx.getReviewStatus() == BankTransaction.ReviewStatus.UNCATEGORIZED) uncategorized++;
         }
 
-        // upload + transações + hits das regras num único commit (EC-075):
-        // qualquer falha desfaz o conjunto e o arquivo continua reenviável
-        StatementUpload upload = importWriter.write(
-                StatementUpload.builder()
-                        .user(user)
-                        .fileHash(hash)
-                        .fileName(fileName)
-                        .format(format.name())
-                        .transactionsImported(toSave.size())
-                        .build(),
-                toSave,
-                ctx.getDirtyRules());
+        // upload + transações + hits das regras num único commit (EC-075), UM
+        // COMMIT POR FONTE: qualquer falha desfaz o conjunto daquela fonte e ela
+        // continua reimportável.
+        //
+        // Falha parcial (uma conexão grava, a outra não): o que gravou FICA
+        // gravado e as demais ainda são tentadas — desfazer o Inter porque o
+        // Nubank falhou jogaria fora trabalho bom. Mas a chamada termina em
+        // erro, com a conexão que falhou dita no log: responder 200 esconderia
+        // o buraco. A próxima sincronização reconhece pelo id externo o que já
+        // entrou e importa só o que faltou.
+        List<StatementUpload> uploads = new ArrayList<>();
+        // os hits das regras são do lote inteiro: vão junto com a primeira
+        // gravação que der certo, e uma vez só
+        java.util.Collection<br.com.economize.model.CategoryRule> pendingRules = ctx.getDirtyRules();
+        RuntimeException failure = null;
+        List<String> failedSources = new ArrayList<>();
+        for (Map.Entry<UploadSource, List<BankTransaction>> group : bySource.entrySet()) {
+            UploadSource source = group.getKey();
+            try {
+                StatementUpload upload = importWriter.write(
+                        StatementUpload.builder()
+                                .user(user)
+                                .fileHash(hashOf.apply(source))
+                                .fileName(source.name())
+                                .format(format.name())
+                                .transactionsImported(group.getValue().size())
+                                .build(),
+                        group.getValue(),
+                        pendingRules);
+                pendingRules = List.of();
+                uploads.add(upload);
+                eventPublisher.publish(new StatementImportedEvent(
+                        user.getId(), format, group.getValue().size(), upload.getId()));
+            } catch (RuntimeException e) {
+                failedSources.add(source.name());
+                if (failure == null) failure = e;
+                else failure.addSuppressed(e);
+            }
+        }
+        if (failure != null) {
+            // Sem as passadas de remarcação abaixo, de propósito: elas olham o
+            // lote inteiro como se tivesse entrado, e parte dele não entrou. A
+            // próxima sincronização refaz as duas com o quadro completo.
+            if (bySource.size() > 1) {
+                log.error("Importação parcial ({}): {} de {} fonte(s) gravada(s); falharam: {}. "
+                                + "A próxima sincronização importa o que faltou. user={}",
+                        format, uploads.size(), bySource.size(), failedSources, user.getId());
+            }
+            throw failure;
+        }
 
         reconcileInternalLegs(user, parsed, existing, skippedInternal);
         backfillAccountOrigin(user, accountBackfill);
 
-        eventPublisher.publish(new StatementImportedEvent(user.getId(), format, toSave.size(), upload.getId()));
-        log.info("Importadas {} novas transações ({}): {} sugeridas, {} sem categoria, {} reconciliadas, user={}",
-                toSave.size(), format, suggested, uncategorized, reconciled, user.getId());
-        return new ImportResult(upload.getId(), toSave.size(), suggested, uncategorized, reconciled, false, format.name());
+        log.info("Importadas {} novas transações ({}) em {} upload(s): {} sugeridas, {} sem categoria, "
+                        + "{} reconciliadas, user={}",
+                toSave.size(), format, uploads.size(), suggested, uncategorized, reconciled, user.getId());
+        // A resposta tem lugar para UM upload ("revisar esta importação"). Com
+        // várias conexões vai o que mais trouxe novidade — o primeiro, no empate;
+        // os outros continuam alcançáveis pela lista de fontes.
+        StatementUpload principal = uploads.get(0);
+        for (StatementUpload upload : uploads) {
+            if (upload.getTransactionsImported() > principal.getTransactionsImported()) principal = upload;
+        }
+        return new ImportResult(principal.getId(), toSave.size(), suggested, uncategorized, reconciled, false,
+                format.name());
     }
 
     /**
@@ -718,6 +821,15 @@ public class BankStatementService {
         } catch (Exception e) {
             throw new IllegalStateException("Falha ao calcular hash", e);
         }
+    }
+
+    /**
+     * De onde veio um grupo de lançamentos. {@code key} separa os grupos (o id
+     * da conexão no provedor); {@code name} é o rótulo que o usuário lê. São
+     * dois campos porque duas conexões do MESMO banco (PF e PJ, por exemplo)
+     * têm o mesmo nome e continuam sendo importações distintas.
+     */
+    public record UploadSource(String key, String name) {
     }
 
     public record ImportResult(UUID uploadId, int transactionsImported, int suggested,
