@@ -115,15 +115,29 @@ public class CardInvoiceService {
         });
         List<CardInvoicesResponse.Invoice> invoices = new ArrayList<>();
         for (Cycle cycle : cycles) {
+            // Linha ignorada (duplicata de outra fonte, ou decisão do usuário)
+            // sai AQUI, antes de tudo: as demais somas do app já não a contam,
+            // e a fatura somando-a mostrava uma dívida maior do que o gasto do
+            // mês. Sair da lista junto mantém total, contagem e linhas falando
+            // a mesma coisa — ela continua visível no extrato, onde se desfaz
             List<BankTransaction> inCycle = transactions.stream()
+                    .filter(tx -> !tx.isIgnored())
                     .filter(tx -> cycle.contains(utcDay(tx.getDate())))
                     .toList();
-            // ciclo vazio não vira fatura: o usuário abriria um mês em branco de
-            // um cartão que só começou a ser sincronizado depois
-            if (inCycle.isEmpty()) continue;
-            invoices.add(toInvoice(cycle, inCycle, today,
-                    reservas.get(cycle.reference().toString()),
-                    doBanco.get(cycle.reference().toString())));
+            CardInvoicesResponse.Reserve reserva = reservas.get(cycle.reference().toString());
+            CardInvoicesResponse.ProviderBill fechada = doBanco.get(cycle.reference().toString());
+            if (inCycle.isEmpty()) {
+                // ciclo vazio não vira fatura: o usuário abriria um mês em
+                // branco de um cartão que só começou a ser sincronizado depois.
+                // A exceção é o ciclo que TINHA linhas e ficou vazio só porque
+                // todas foram ignoradas: se há reserva ou fatura do banco
+                // presas a ele, omiti-lo sumia com o dinheiro separado e com o
+                // valor que o emissor cobra. Ele aparece com zero do nosso lado
+                boolean soIgnoradas = transactions.stream()
+                        .anyMatch(tx -> cycle.contains(utcDay(tx.getDate())));
+                if (!soIgnoradas || (reserva == null && fechada == null)) continue;
+            }
+            invoices.add(toInvoice(cycle, inCycle, today, reserva, fechada));
         }
         return new CardInvoicesResponse(account.getId(), account.getName(), account.getType(),
                 account.getInstitution(), source, invoices);
@@ -136,7 +150,9 @@ public class CardInvoiceService {
      * do Pluggy) e o que é crédito. Entre os créditos, o que separa PAGAMENTO de
      * ESTORNO é o sinal ESTRUTURAL que a V15 já grava, não heurística de texto:
      * pagamento de fatura é perna de movimentação entre contas do titular e vem
-     * marcado na importação; estorno de compra é crédito sem marca.
+     * marcado na importação; estorno de compra é crédito sem marca. No conector
+     * quem decide a marca é a sincronização: crédito no cartão é pagamento,
+     * salvo quando se anuncia como estorno (ver {@code PluggySyncService}).
      *
      * <p>A diferença muda o número que o usuário lê. Compra de 100 estornada no
      * mesmo ciclo deixa dívida ZERO — mas com os dois no mesmo balde a resposta

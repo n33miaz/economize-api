@@ -396,6 +396,10 @@ public class BankStatementService {
                     // entre contas do titular (EC-106); daqui para frente
                     // ninguém mais teria como descobrir
                     .internalTransfer(tx.isInternalTransfer())
+                    // devolução dentro de cartão de crédito chega fora das
+                    // somas: crédito em cartão nunca é receita, e só o conector
+                    // sabe que a conta é um cartão
+                    .refunded(tx.isRefunded())
                     // ... e o mesmo vale para a ORIGEM (EC-113): só o conector
                     // sabe de qual conta puxou. Nulo no upload manual de arquivo,
                     // que não tem conta de provedor.

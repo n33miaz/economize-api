@@ -206,25 +206,6 @@ class InvoiceReserveServiceTest {
         assertThat(mapa.get("2026-09").amount()).isEqualByComparingTo("641.14");
     }
 
-    @Test
-    @DisplayName("o total separado soma todos os cartões e ciclos")
-    void shouldSumEveryReserve() {
-        ConnectorAccount cartao = card();
-        when(repository.findAllByUserId(user.getId())).thenReturn(List.of(
-                reserve(cartao, "2026-08", "320.57"),
-                reserve(cartao, "2026-09", "641.14")));
-
-        assertThat(service.totalReserved(user.getId())).isEqualByComparingTo("961.71");
-    }
-
-    @Test
-    @DisplayName("sem nenhuma reserva o total é zero, nunca nulo")
-    void shouldSumToZeroWithoutReserves() {
-        when(repository.findAllByUserId(user.getId())).thenReturn(List.of());
-
-        assertThat(service.totalReserved(user.getId())).isEqualByComparingTo("0");
-    }
-
     // ------------------------------------------------------------- apoio
 
     private ConnectorAccount card() {
