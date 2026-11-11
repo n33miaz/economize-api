@@ -245,6 +245,26 @@ class BankStatementAccountOriginTest {
     }
 
     @Test
+    @DisplayName("estorno de cartão que o conector mandou neutro é GRAVADO neutro")
+    void connectorRefundShouldPersistOutOfTheSums() {
+        emptyWindow();
+        UUID cartao = UUID.randomUUID();
+
+        service.importFromConnector(user, "Meu Pluggy", StatementFormat.PLUGGY, List.of(
+                ParsedTransaction.builder()
+                        .externalId("PLUGGY-c1").type("CREDIT").amount(new BigDecimal("18.50"))
+                        .description("Estorno parcial").date(day(2026, 8, 11)).accountId(cartao)
+                        .refunded(true).build()));
+
+        // toda soma de receita (mensal, por categoria, diária) filtra
+        // refunded = false: gravada assim, a linha nunca conta como receita,
+        // ache a conciliação a compra dela ou não
+        assertThat(saved()).singleElement().extracting(BankTransaction::isRefunded).isEqualTo(true);
+        // sem vínculo: é isso que diz à conciliação que a compra ainda não foi achada
+        assertThat(saved()).singleElement().extracting(BankTransaction::getRefundOfId).isNull();
+    }
+
+    @Test
     @DisplayName("a dedupe pular a linha não pode impedir o carimbo da origem no que já estava gravado")
     void dedupeMustNotBlockTheOriginBackfill() {
         UUID cartao = UUID.randomUUID();

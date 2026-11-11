@@ -343,6 +343,31 @@ class PluggySyncServiceTest {
     }
 
     @Test
+    @DisplayName("estorno anunciado no cartão já chega NEUTRO: crédito em cartão de crédito nunca é receita")
+    void announcedCardRefundArrivesOutOfTheSums() {
+        stubCardAndBank(
+                List.of(
+                        // "Estorno parcial" sem nome de loja: a conciliação não
+                        // tem como achar a compra, e sem a marca este crédito
+                        // entraria como RECEITA em todas as somas
+                        Map.of("id", "c1", "amount", "-18.50", "date", "2026-08-12",
+                                "description", "Estorno parcial"),
+                        Map.of("id", "c2", "amount", "50.00", "date", "2026-08-12",
+                                "description", "MERCADO")),
+                // na CONTA CORRENTE o mesmo texto é dinheiro que voltou de
+                // verdade: ali quem decide é a conciliação, com o par na mão
+                List.of(Map.of("id", "b1", "amount", "18.50", "date", "2026-08-12",
+                        "description", "Estorno compra no debito")));
+
+        List<ParsedTransaction> parsed = syncAndCapture();
+
+        assertThat(byId(parsed, "PLUGGY-c1").isRefunded()).isTrue();
+        assertThat(byId(parsed, "PLUGGY-c1").isInternalTransfer()).isFalse();
+        assertThat(byId(parsed, "PLUGGY-c2").isRefunded()).isFalse();
+        assertThat(byId(parsed, "PLUGGY-b1").isRefunded()).isFalse();
+    }
+
+    @Test
     @DisplayName("estorno anunciado não serve de contrapartida: o débito de fatura de mesmo valor continua despesa")
     void announcedRefundDoesNotFeedThePool() {
         stubCardAndBank(

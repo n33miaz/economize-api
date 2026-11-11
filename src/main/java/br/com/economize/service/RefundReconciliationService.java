@@ -134,7 +134,7 @@ public class RefundReconciliationService {
             // sair, e pare-la so inflaria o relatorio de estornos com pares que
             // nao mudam numero nenhum. O estorno de aplicacao do dono e o caso:
             // as duas pernas ja sao movimento conta <-> investimento (EC-214)
-            if (tx.isIgnored() || tx.isRefunded() || tx.isInternalTransfer()) continue;
+            if (foraDaVarredura(tx) && !aguardaCompra(tx)) continue;
             porValor.computeIfAbsent(tx.getAmount().abs().stripTrailingZeros(),
                     k -> new ArrayList<>()).add(tx);
         }
@@ -152,7 +152,8 @@ public class RefundReconciliationService {
         // mesmo preço que por acaso esteja mais perto no tempo.
         Set<UUID> consumidos = new HashSet<>();
         for (BankTransaction credito : todas) {
-            if (foraDaVarredura(credito) || credito.getAmount().signum() <= 0) continue;
+            if (credito.getAmount().signum() <= 0) continue;
+            if (foraDaVarredura(credito) && !aguardaCompra(credito)) continue;
             String nome = nomeDaCompraCitada(credito.getDescription());
             if (nome == null) continue;
 
@@ -332,6 +333,28 @@ public class RefundReconciliationService {
     /** Linha que já saiu das somas por outro motivo não entra na varredura. */
     private static boolean foraDaVarredura(BankTransaction tx) {
         return tx.isIgnored() || tx.isRefunded() || tx.isInternalTransfer();
+    }
+
+    /**
+     * Crédito que já está fora das somas mas ainda NÃO achou a compra.
+     *
+     * <p>É o estorno anunciado dentro de um cartão de crédito: o conector o
+     * grava neutro na chegada, porque crédito em cartão nunca é receita do
+     * titular — esperar a varredura para neutralizá-lo deixava como RECEITA
+     * todo estorno cuja compra não é encontrada ("Estorno parcial" sem nome
+     * de loja, compra fora da janela). Só que neutro não pode significar
+     * esquecido: a compra dele continua inteira na despesa até alguém abatê-la
+     * (V40), e quem faz isso é esta varredura.
+     *
+     * <p>O que o distingue do par já fechado é a AUSÊNCIA do vínculo: a V29
+     * criou a marca e o {@code refundOfId} juntos, e todo pareamento daqui
+     * grava os dois no crédito. Com vínculo, a compra já foi achada e a linha
+     * fica de fora como sempre.
+     */
+    private static boolean aguardaCompra(BankTransaction tx) {
+        return tx.isRefunded() && tx.getRefundOfId() == null
+                && !tx.isIgnored() && !tx.isInternalTransfer()
+                && tx.getAmount().signum() > 0;
     }
 
     /**

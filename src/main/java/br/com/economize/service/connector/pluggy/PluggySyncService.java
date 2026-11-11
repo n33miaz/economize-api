@@ -294,6 +294,14 @@ public class PluggySyncService {
                 .description(description)
                 .date(parseDate(String.valueOf(dateRaw)))
                 .internalTransfer(isInternalTransferLeg(creditCard, amount, description, cardCredits))
+                // Crédito em cartão de crédito NUNCA é receita. O pagamento sai
+                // das somas como perna interna (linha acima); a devolução sai
+                // por aqui, já na gravação. Deixá-la como crédito comum à
+                // espera da conciliação fazia virar receita todo estorno cuja
+                // compra não é achada. A conciliação continua procurando a
+                // compra dela para abater (ver RefundReconciliationService)
+                .refunded(creditCard && amount.signum() > 0
+                        && RefundReconciliationService.anunciaEstorno(description))
                 // a origem viaja com a linha até a gravação: depois dela ninguém
                 // mais saberia de qual conta a transação veio (EC-113)
                 .accountId(accountId)
@@ -417,7 +425,9 @@ public class PluggySyncService {
      * conciliação de estorno, que pula linha interna, então a compra devolvida
      * seguia inteira na despesa — contra a decisão de que estorno abate a
      * compra (V40). O que separa as duas é o crédito se ANUNCIAR como estorno,
-     * pelas mesmas marcas que a conciliação usa.
+     * pelas mesmas marcas que a conciliação usa. A devolução também não vira
+     * receita: ela é gravada já fora das somas ({@code refunded}), sem vínculo,
+     * e a conciliação a liga à compra quando a encontra.
      *
      * <p><b>Por que a regra não é "interno só com contrapartida na conta".</b>
      * Seria o desenho mais limpo, e infla a receita: quem conecta só o cartão
