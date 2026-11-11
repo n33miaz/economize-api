@@ -41,7 +41,9 @@ public class IntegrationSecurityConfig {
                                                                     IntegrationKeyService keyService) {
         return http
                 .securityMatcher(ServerWebExchangeMatchers.pathMatchers(INTEGRATION_PATHS))
-                .csrf(ServerHttpSecurity.CsrfSpec::disable)
+                // CSRF fica LIGADO, de propósito: a cadeia só aceita GET, que o
+                // filtro de CSRF não toca; qualquer verbo de escrita morre nele
+                // antes mesmo da regra de autorização
                 .authorizeExchange(exchanges -> exchanges
                         // A autoridade, e não só "autenticado": se um dia outro
                         // filtro autenticar nesta cadeia por engano, ele não
