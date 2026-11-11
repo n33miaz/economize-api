@@ -389,6 +389,61 @@ class CardInvoiceServiceTest {
         assertThat(service.invoices(EMAIL, cartao.getId(), 1).invoices()).isEmpty();
     }
 
+    @Test
+    @DisplayName("ciclo só com ignoradas mas com fatura do BANCO continua aparecendo, com total zero do nosso lado")
+    void ignoredOnlyCycleKeepsTheProviderBill() {
+        ConnectorAccount cartao = card(10, 17);
+        owned(cartao);
+        LocalDate fechamento = closing(YearMonth.now(ZoneOffset.UTC), 10);
+        BankTransaction ignorada = tx(cartao, "-100.00", fechamento.minusDays(2));
+        ignorada.setIgnored(true);
+        ignorada.setIgnoredReason(BankTransaction.IgnoredReason.USER);
+        transactions(cartao, ignorada);
+        when(cardBillRepository.findByAccountIdOrderByClosingDateDesc(cartao.getId()))
+                .thenReturn(java.util.List.of(bill(fechamento, "2311.49", "347.63")));
+
+        // sumir com o ciclo levava junto a fatura que o emissor fechou — o
+        // valor a pagar de verdade e o mínimo, que não existem em outra tela
+        CardInvoicesResponse.Invoice fatura = service.invoices(EMAIL, cartao.getId(), 6).invoices().get(0);
+
+        assertThat(fatura.providerBill().total()).isEqualByComparingTo("2311.49");
+        assertThat(fatura.total()).isEqualByComparingTo("0");
+        assertThat(fatura.transactionCount()).isZero();
+        assertThat(fatura.transactions()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("ciclo só com ignoradas mas com RESERVA continua aparecendo: o dinheiro separado não some da tela")
+    void ignoredOnlyCycleKeepsTheReserve() {
+        ConnectorAccount cartao = card(null, null);
+        owned(cartao);
+        YearMonth mes = YearMonth.now(ZoneOffset.UTC);
+        BankTransaction ignorada = tx(cartao, "-100.00", mes.atDay(4));
+        ignorada.setIgnored(true);
+        ignorada.setIgnoredReason(BankTransaction.IgnoredReason.DUPLICATE);
+        transactions(cartao, ignorada);
+        when(reserveService.byReference(user.getId(), cartao.getId())).thenReturn(Map.of(mes.toString(),
+                new CardInvoicesResponse.Reserve(UUID.randomUUID(), new BigDecimal("320.57"), null, null, null)));
+
+        CardInvoicesResponse.Invoice fatura = service.invoices(EMAIL, cartao.getId(), 1).invoices().get(0);
+
+        assertThat(fatura.reserve().amount()).isEqualByComparingTo("320.57");
+        assertThat(fatura.total()).isEqualByComparingTo("0");
+        assertThat(fatura.transactionCount()).isZero();
+    }
+
+    @Test
+    @DisplayName("ciclo sem lançamento NENHUM segue omitido mesmo com fatura do banco, como sempre foi")
+    void trulyEmptyCycleStaysOmittedEvenWithProviderBill() {
+        ConnectorAccount cartao = card(10, 17);
+        owned(cartao);
+        transactions(cartao);
+        when(cardBillRepository.findByAccountIdOrderByClosingDateDesc(cartao.getId()))
+                .thenReturn(java.util.List.of(bill(closing(YearMonth.now(ZoneOffset.UTC), 10), "2311.49", "347.63")));
+
+        assertThat(service.invoices(EMAIL, cartao.getId(), 6).invoices()).isEmpty();
+    }
+
     // ------------------------------------------------- a fatura que vence
 
     @Test

@@ -124,12 +124,20 @@ public class CardInvoiceService {
                     .filter(tx -> !tx.isIgnored())
                     .filter(tx -> cycle.contains(utcDay(tx.getDate())))
                     .toList();
-            // ciclo vazio não vira fatura: o usuário abriria um mês em branco de
-            // um cartão que só começou a ser sincronizado depois
-            if (inCycle.isEmpty()) continue;
-            invoices.add(toInvoice(cycle, inCycle, today,
-                    reservas.get(cycle.reference().toString()),
-                    doBanco.get(cycle.reference().toString())));
+            CardInvoicesResponse.Reserve reserva = reservas.get(cycle.reference().toString());
+            CardInvoicesResponse.ProviderBill fechada = doBanco.get(cycle.reference().toString());
+            if (inCycle.isEmpty()) {
+                // ciclo vazio não vira fatura: o usuário abriria um mês em
+                // branco de um cartão que só começou a ser sincronizado depois.
+                // A exceção é o ciclo que TINHA linhas e ficou vazio só porque
+                // todas foram ignoradas: se há reserva ou fatura do banco
+                // presas a ele, omiti-lo sumia com o dinheiro separado e com o
+                // valor que o emissor cobra. Ele aparece com zero do nosso lado
+                boolean soIgnoradas = transactions.stream()
+                        .anyMatch(tx -> cycle.contains(utcDay(tx.getDate())));
+                if (!soIgnoradas || (reserva == null && fechada == null)) continue;
+            }
+            invoices.add(toInvoice(cycle, inCycle, today, reserva, fechada));
         }
         return new CardInvoicesResponse(account.getId(), account.getName(), account.getType(),
                 account.getInstitution(), source, invoices);
