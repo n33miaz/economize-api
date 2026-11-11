@@ -1,5 +1,6 @@
 package br.com.economize.controller;
 
+import br.com.economize.config.ClientIpResolver;
 import br.com.economize.dto.auth.AuthRequest;
 import br.com.economize.dto.auth.AuthResponse;
 import br.com.economize.dto.auth.ForgotPasswordRequest;
@@ -151,21 +152,19 @@ public class AuthController {
     }
 
     /**
-     * O IP de quem chamou. Atrás do proxy do Render o endereço do soquete é o do
-     * proxy, e o do cliente vem em {@code X-Forwarded-For} — o PRIMEIRO da
-     * lista, que é quem entrou; os seguintes são os saltos.
+     * O IP de quem chamou, pelo MESMO resolvedor do limite de requisições
+     * ({@link ClientIpResolver}): atrás do proxy do Render o endereço do
+     * soquete é o do proxy, e o do cliente é o primeiro endereço público da
+     * cadeia {@code X-Forwarded-For} lida da direita para a esquerda.
      *
-     * <p>Só serve ao AVISO de acesso de lugar novo, nunca a barrar nada:
-     * cabeçalho vindo do cliente é palpite, não prova.
+     * <p>Aqui ele alimenta o AVISO de acesso de lugar novo (o hash guardado no
+     * dispositivo confiável). Antes era o primeiro da lista, que é a ponta que
+     * o cliente escreve: quem forjasse o cabeçalho escolhia o "lugar" de onde
+     * dizia estar entrando.
      */
     private String clientIp(ServerWebExchange exchange) {
         if (exchange == null) return null;
-        String forwarded = exchange.getRequest().getHeaders().getFirst("X-Forwarded-For");
-        if (forwarded != null && !forwarded.isBlank()) {
-            return forwarded.split(",")[0].trim();
-        }
-        var remote = exchange.getRequest().getRemoteAddress();
-        return remote == null ? null : remote.getAddress().getHostAddress();
+        return ClientIpResolver.resolve(exchange.getRequest());
     }
 
     /** Carimba o último acesso e devolve o nome que a resposta do login leva. */

@@ -107,6 +107,28 @@ public class RateLimitFilter implements WebFilter {
     private final Cache<String, Bucket> standardBuckets;
     private final Cache<String, Bucket> expensiveBuckets;
 
+    /**
+     * Os baldes cuja chave é o IP, em caches PRÓPRIOS.
+     *
+     * <p>Separados dos de token porque o teto é por cache e quem descarta é o
+     * menos usado: no mesmo cache, uma enxurrada de tokens aleatórios (que
+     * qualquer um fabrica) expulsaria os baldes de IP — e balde expulso volta
+     * cheio. É justamente o de IP que segura as tentativas de login.
+     */
+    private final Cache<String, Bucket> ipStandardBuckets;
+    private final Cache<String, Bucket> ipExpensiveBuckets;
+
+    /**
+     * Nestas rotas o {@code Authorization} é IGNORADO e a chave é só o IP.
+     *
+     * <p>São as rotas de quem ainda não tem sessão: aqui um Bearer não prova
+     * nada, é texto livre — e como cada token novo abria um balde cheio,
+     * mandar um aleatório por requisição tirava o teto das tentativas de
+     * senha e do segundo fator. O IP vem do {@link ClientIpResolver}, que não
+     * lê a parte do cabeçalho que o cliente escreve.
+     */
+    private static final String AUTH_PREFIX = "/api/v1/auth/";
+
     private final CorsConfigurationSource corsConfigurationSource;
 
     /**
@@ -162,6 +184,8 @@ public class RateLimitFilter implements WebFilter {
         this.relogio = relogio;
         this.standardBuckets = newBucketCache(relogio, maxBuckets);
         this.expensiveBuckets = newBucketCache(relogio, maxBuckets);
+        this.ipStandardBuckets = newBucketCache(relogio, maxBuckets);
+        this.ipExpensiveBuckets = newBucketCache(relogio, maxBuckets);
     }
 
     /**
@@ -179,14 +203,19 @@ public class RateLimitFilter implements WebFilter {
                 .build();
     }
 
-    /** As chaves guardadas agora, das duas famílias — só para o teste conferir teto e conteúdo. */
+    /** As chaves guardadas agora, de todos os caches — só para o teste conferir teto e conteúdo. */
     Set<String> trackedKeys() {
-        standardBuckets.cleanUp();
-        expensiveBuckets.cleanUp();
         Set<String> keys = new HashSet<>();
-        standardBuckets.asMap().keySet().forEach(key -> keys.add("standard:" + key));
-        expensiveBuckets.asMap().keySet().forEach(key -> keys.add("expensive:" + key));
+        collectKeys(keys, "standard:", standardBuckets);
+        collectKeys(keys, "expensive:", expensiveBuckets);
+        collectKeys(keys, "ip-standard:", ipStandardBuckets);
+        collectKeys(keys, "ip-expensive:", ipExpensiveBuckets);
         return keys;
+    }
+
+    private static void collectKeys(Set<String> keys, String prefix, Cache<String, Bucket> cache) {
+        cache.cleanUp();
+        cache.asMap().keySet().forEach(key -> keys.add(prefix + key));
     }
 
     @Override
@@ -197,12 +226,15 @@ public class RateLimitFilter implements WebFilter {
         }
 
         String path = exchange.getRequest().getPath().value();
-        String key = clientKey(exchange);
+        String key = clientKey(exchange, path);
         boolean expensive = EXPENSIVE_PREFIXES.stream().anyMatch(path::startsWith);
+        boolean byToken = key.startsWith(TOKEN_KEY_PREFIX);
 
-        Bucket bucket = expensive
-                ? expensiveBuckets.get(key, k -> createBucket(expensiveCapacity, WINDOW))
-                : standardBuckets.get(key, k -> createBucket(standardCapacity, WINDOW));
+        Cache<String, Bucket> buckets = expensive
+                ? (byToken ? expensiveBuckets : ipExpensiveBuckets)
+                : (byToken ? standardBuckets : ipStandardBuckets);
+        Bucket bucket = buckets.get(key,
+                k -> createBucket(expensive ? expensiveCapacity : standardCapacity, WINDOW));
 
         ConsumptionProbe probe = bucket.tryConsumeAndReturnRemaining(1);
         if (probe.isConsumed()) {
@@ -256,12 +288,19 @@ public class RateLimitFilter implements WebFilter {
                 .build();
     }
 
-    private String clientKey(ServerWebExchange exchange) {
+    private static final String TOKEN_KEY_PREFIX = "u:";
+
+    private String clientKey(ServerWebExchange exchange, String path) {
         ServerHttpRequest request = exchange.getRequest();
-        String auth = request.getHeaders().getFirst(HttpHeaders.AUTHORIZATION);
-        if (auth != null && auth.startsWith("Bearer ")) return "u:" + hash(auth.substring(7));
-        var remoteAddress = request.getRemoteAddress();
-        return remoteAddress != null ? "ip:" + remoteAddress.getAddress().getHostAddress() : "anon";
+        if (!path.startsWith(AUTH_PREFIX)) {
+            String auth = request.getHeaders().getFirst(HttpHeaders.AUTHORIZATION);
+            if (auth != null && auth.startsWith("Bearer ")) return TOKEN_KEY_PREFIX + hash(auth.substring(7));
+        }
+        // O endereço do soquete, atrás do proxy, é o do PROXY: usá-lo como
+        // chave punha todo mundo sem token no mesmo balde. O resolvedor acha
+        // o cliente na cadeia sem ler o que o próprio cliente escreveu nela
+        String ip = ClientIpResolver.resolve(request);
+        return ip != null ? "ip:" + ip : "anon";
     }
 
     /**

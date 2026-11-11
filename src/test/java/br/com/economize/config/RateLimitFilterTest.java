@@ -16,8 +16,10 @@ import org.springframework.web.server.ServerWebExchange;
 import org.springframework.web.server.WebFilterChain;
 import reactor.core.publisher.Mono;
 
+import java.net.InetSocketAddress;
 import java.time.Duration;
 import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -203,13 +205,16 @@ class RateLimitFilterTest {
     @Test
     @DisplayName("o token nunca fica guardado: a chave do balde é o hash dele")
     void rawTokenShouldNotBeRetainedAsKey() {
-        String token = "eyJhbGciOiJIUzI1NiJ9.segredo-do-usuario.assinatura";
+        // montado em tempo de execução, e não um literal com cara de JWT: o
+        // varredor de segredos da esteira lê literal assim como chave vazada
+        String miolo = "miolo-" + UUID.randomUUID();
+        String credencial = String.join(".", "cabecalho", miolo, "assinatura");
 
-        filter.filter(bearer(token, "/api/v1/indicators/all"), chain).block();
+        filter.filter(bearer(credencial, "/api/v1/indicators/all"), chain).block();
 
         // um dump de memória ou um log da chave não pode entregar a sessão
         assertThat(filter.trackedKeys()).hasSize(1)
-                .noneMatch(key -> key.contains(token) || key.contains("segredo-do-usuario"));
+                .noneMatch(key -> key.contains(credencial) || key.contains(miolo));
     }
 
     @Test
@@ -257,6 +262,66 @@ class RateLimitFilterTest {
         // estaria cheio de qualquer forma: jogá-lo fora não perdoa ninguém
         agora.set(Duration.ofMinutes(10).toNanos());
         assertThat(comRelogio.trackedKeys()).isEmpty();
+    }
+
+    // ------------------------------------------------ login: só por IP
+
+    @Test
+    @DisplayName("login: Bearer aleatório por requisição NÃO ganha balde novo — a chave é o IP")
+    void randomBearerOnLoginShouldNotGetAFreshBucket() {
+        // era o contorno do limite de tentativas: o filtro roda antes da
+        // autenticação, qualquer texto serve de "token", e cada token novo
+        // abria um balde cheio — a senha e o segundo fator ficavam sem teto
+        for (int i = 0; i < 10; i++) {
+            ServerWebExchange tentativa = login("token-aleatorio-" + i, "203.0.113.7, 10.0.0.5");
+            filter.filter(tentativa, chain).block();
+            assertThat(tentativa.getResponse().getStatusCode()).isNotEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+        }
+        ServerWebExchange excedente = login("mais-um-token", "203.0.113.7, 10.0.0.5");
+        filter.filter(excedente, chain).block();
+
+        assertEquals(HttpStatus.TOO_MANY_REQUESTS, excedente.getResponse().getStatusCode());
+        assertThat(filter.trackedKeys()).hasSize(1).noneMatch(key -> key.contains("u:"));
+        // outro cliente, atrás do MESMO proxy, tem o próprio balde: o limite
+        // não virou um balde único para todo mundo
+        ServerWebExchange vizinho = login(null, "198.51.100.44, 10.0.0.5");
+        filter.filter(vizinho, chain).block();
+        assertThat(vizinho.getResponse().getStatusCode()).isNotEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+    }
+
+    @Test
+    @DisplayName("login: X-Forwarded-For forjado à esquerda não muda o balde")
+    void forgedForwardedForOnLoginShouldNotChangeTheBucket() {
+        for (int i = 0; i < 10; i++) {
+            filter.filter(login(null, "9.9.9." + i + ", 203.0.113.7, 10.0.0.5"), chain).block();
+        }
+        ServerWebExchange excedente = login(null, "1.2.3.4, 203.0.113.7, 10.0.0.5");
+        filter.filter(excedente, chain).block();
+
+        assertEquals(HttpStatus.TOO_MANY_REQUESTS, excedente.getResponse().getStatusCode());
+        assertThat(filter.trackedKeys()).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("fora do /auth o Bearer continua sendo a chave, e os baldes de IP ficam em cache separado")
+    void bearerStillKeysEverythingElse() {
+        filter.filter(MockServerWebExchange.from(MockServerHttpRequest.get("/api/v1/indicators/all")
+                .remoteAddress(new InetSocketAddress("10.0.0.9", 443))
+                .header("X-Forwarded-For", "203.0.113.7, 10.0.0.5")
+                .header(HttpHeaders.AUTHORIZATION, "Bearer token-fixo")), chain).block();
+        filter.filter(login(null, "203.0.113.7, 10.0.0.5"), chain).block();
+
+        assertThat(filter.trackedKeys()).hasSize(2)
+                .anyMatch(key -> key.startsWith("standard:u:"))
+                .anyMatch(key -> key.equals("ip-expensive:ip:203.0.113.7"));
+    }
+
+    private ServerWebExchange login(String token, String forwardedFor) {
+        MockServerHttpRequest.BodyBuilder request = MockServerHttpRequest.post("/api/v1/auth/login")
+                .remoteAddress(new InetSocketAddress("10.0.0.9", 443))
+                .header("X-Forwarded-For", forwardedFor);
+        if (token != null) request.header(HttpHeaders.AUTHORIZATION, "Bearer " + token);
+        return MockServerWebExchange.from(request);
     }
 
     private ServerWebExchange bearer(String token, String path) {
