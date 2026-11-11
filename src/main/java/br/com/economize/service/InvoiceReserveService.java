@@ -108,17 +108,6 @@ public class InvoiceReserveService {
                         (a, b) -> b));
     }
 
-    /**
-     * Total separado pelo usuário, somando todos os cartões e ciclos. É o número
-     * que a previsão de saldo desconta do disponível.
-     */
-    @Transactional(readOnly = true)
-    public BigDecimal totalReserved(UUID userId) {
-        return repository.findAllByUserId(userId).stream()
-                .map(InvoiceReserve::getAmount)
-                .reduce(BigDecimal.ZERO, BigDecimal::add);
-    }
-
     static CardInvoicesResponse.Reserve toResponse(InvoiceReserve reserva) {
         ConnectorAccount cofre = reserva.getHeldInAccount();
         return new CardInvoicesResponse.Reserve(

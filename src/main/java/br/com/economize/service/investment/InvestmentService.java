@@ -28,10 +28,13 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
+import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.UUID;
 
@@ -70,6 +73,7 @@ public class InvestmentService {
     private final InvestmentMovementService movementService;
     // presente só com economize.pluggy.enabled=true
     private final ObjectProvider<PluggyClient> pluggyClient;
+    private final ExchangeRateLookup exchangeRates;
     private final int maxManualPositions;
 
     public InvestmentService(InvestmentPositionRepository positionRepository,
@@ -77,12 +81,14 @@ public class InvestmentService {
                              UserRepository userRepository,
                              InvestmentMovementService movementService,
                              ObjectProvider<PluggyClient> pluggyClient,
+                             ExchangeRateLookup exchangeRates,
                              @Value("${economize.investments.max-manual-positions:200}") int maxManualPositions) {
         this.positionRepository = positionRepository;
         this.pluggyItemRepository = pluggyItemRepository;
         this.userRepository = userRepository;
         this.movementService = movementService;
         this.pluggyClient = pluggyClient;
+        this.exchangeRates = exchangeRates;
         this.maxManualPositions = maxManualPositions;
     }
 
@@ -315,6 +321,12 @@ public class InvestmentService {
         LinkedHashMap<String, BigDecimal> byInstitution = new LinkedHashMap<>();
         LinkedHashMap<String, BigDecimal> byIndexer = new LinkedHashMap<>();
         TreeSet<Source> sources = new TreeSet<>();
+        List<InvestmentResponses.UnconvertedPosition> unconverted = new ArrayList<>();
+        // câmbio por moeda, consultado no máximo UMA vez por resumo e só se
+        // alguma posição precisar: carteira toda em reais não paga a consulta
+        Map<String, Optional<ExchangeRateLookup.Rate>> rates = new HashMap<>();
+        // as cotações que de fato converteram alguma coisa, em ordem estável
+        TreeMap<String, ExchangeRateLookup.Rate> usedRates = new TreeMap<>();
 
         for (InvestmentPosition p : positions) {
             sources.add(p.getSource());
@@ -322,24 +334,60 @@ public class InvestmentService {
             if (p.getUpdatedAt() != null && (updatedAt == null || p.getUpdatedAt().isAfter(updatedAt))) {
                 updatedAt = p.getUpdatedAt();
             }
-            if (p.getInvestedAmount() != null) totalInvested = totalInvested.add(p.getInvestedAmount());
-            if (p.getCurrentValue() == null) {
-                if (p.getCode() != null) needsQuote.add(p.getCode());
-                continue;
+            if (p.getCurrentValue() == null && p.getCode() != null) needsQuote.add(p.getCode());
+
+            // Os valores da posição estão na moeda DELA (o provedor devolve a
+            // conta da corretora americana em dólar; a manual em USD é digitada
+            // em dólar). Somá-los direto contava US$ 120 como R$ 120 no
+            // patrimônio e no lucro. Aqui todo valor vira real antes de entrar
+            // em QUALQUER total — aplicado, atual, lucro e as três fatias —
+            // para os números continuarem fechando entre si.
+            BigDecimal rate = BigDecimal.ONE;
+            if (isForeign(p)) {
+                String currency = p.getCurrency().trim().toUpperCase(Locale.ROOT);
+                ExchangeRateLookup.Rate found = rates.computeIfAbsent(currency, exchangeRates::rate)
+                        .orElse(null);
+                if (found == null) {
+                    // Sem cotação não existe valor em reais, e inventar um
+                    // (ou usar 1) é o defeito original. A posição sai de TODOS
+                    // os totais e vai declarada, na moeda de origem, para o
+                    // app dizer que o patrimônio está incompleto.
+                    // Um aviso só por posição: a que nem valor atual tem já
+                    // está em needsQuote (é por lá que o app busca a cotação
+                    // do papel e completa o total) e não se repete aqui
+                    boolean jaAvisada = p.getCurrentValue() == null && p.getCode() != null;
+                    if (!jaAvisada) {
+                        unconverted.add(new InvestmentResponses.UnconvertedPosition(p.getId(), p.getName(),
+                                p.getCode(), p.getCurrency(), p.getInvestedAmount(), p.getCurrentValue()));
+                    }
+                    continue;
+                }
+                rate = found.value();
+                if (p.getInvestedAmount() != null || p.getCurrentValue() != null) {
+                    usedRates.put(currency, found);
+                }
             }
+            BigDecimal invested = toBrl(p.getInvestedAmount(), rate);
+            BigDecimal current = toBrl(p.getCurrentValue(), rate);
+
+            if (invested != null) totalInvested = totalInvested.add(invested);
+            if (current == null) continue;
             priced++;
-            currentValue = currentValue.add(p.getCurrentValue());
-            byType.merge(p.getType().name(), p.getCurrentValue(), BigDecimal::add);
+            currentValue = currentValue.add(current);
+            byType.merge(p.getType().name(), current, BigDecimal::add);
             byInstitution.merge(p.getInstitution() != null ? p.getInstitution() : "Não informada",
-                    p.getCurrentValue(), BigDecimal::add);
+                    current, BigDecimal::add);
             byIndexer.merge(p.getIndexer() != null ? p.getIndexer().name() : Indexer.NONE.name(),
-                    p.getCurrentValue(), BigDecimal::add);
-            if (p.getInvestedAmount() != null) {
+                    current, BigDecimal::add);
+            if (invested != null) {
                 // lucro só onde os DOIS lados são conhecidos: somar o aplicado
-                // da ETF sem cotação faria o total parecer um prejuízo
+                // da ETF sem cotação faria o total parecer um prejuízo.
+                // Na estrangeira os dois lados usam o câmbio de HOJE: o lucro
+                // é o do papel, sem a variação do dólar desde a compra — o
+                // câmbio do dia da aplicação não é guardado em lugar nenhum
                 pairs++;
-                pricedInvested = pricedInvested.add(p.getInvestedAmount());
-                profit = profit.add(p.getCurrentValue().subtract(p.getInvestedAmount()));
+                pricedInvested = pricedInvested.add(invested);
+                profit = profit.add(current.subtract(invested));
             }
         }
 
@@ -366,7 +414,29 @@ public class InvestmentService {
                 sources.stream().map(Enum::name).toList(),
                 new InvestmentResponses.MovementTotals12m(totals.applied(), totals.redeemed(), totals.yield(),
                         movements.netInvested()),
-                new ArrayList<>(needsQuote));
+                new ArrayList<>(needsQuote),
+                unconverted,
+                usedRates.entrySet().stream()
+                        .map(e -> new InvestmentResponses.ExchangeRateUsed(e.getKey(), e.getValue().value(),
+                                e.getValue().asOf(), e.getValue().stale()))
+                        .toList());
+    }
+
+    /** Moeda ausente é real: é o default do modelo e o que toda linha antiga tem. */
+    private static boolean isForeign(InvestmentPosition p) {
+        String currency = p.getCurrency();
+        return currency != null && !currency.isBlank() && !"BRL".equalsIgnoreCase(currency.trim());
+    }
+
+    /**
+     * Valor em reais. O real passa INTACTO (sem multiplicar nem arredondar,
+     * para a carteira em reais sair exatamente como saía); o convertido fica
+     * com centavos, como a cotação em reais do {@code ForeignQuoteService}.
+     */
+    private static BigDecimal toBrl(BigDecimal amount, BigDecimal rate) {
+        if (amount == null) return null;
+        if (BigDecimal.ONE.equals(rate)) return amount;
+        return amount.multiply(rate).setScale(2, RoundingMode.HALF_UP);
     }
 
     private interface SliceFactory<T> {

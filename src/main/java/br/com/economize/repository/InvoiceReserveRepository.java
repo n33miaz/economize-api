@@ -11,8 +11,6 @@ import java.util.UUID;
 @Repository
 public interface InvoiceReserveRepository extends JpaRepository<InvoiceReserve, UUID> {
 
-    List<InvoiceReserve> findAllByUserId(UUID userId);
-
     // A tela de faturas pede um cartão de cada vez e precisa de todos os ciclos
     // dele numa consulta só — a fatura é montada em memória e cada uma procura
     // a sua reserva na lista

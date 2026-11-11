@@ -7,6 +7,7 @@ import br.com.economize.repository.PluggyItemRepository;
 import br.com.economize.repository.UserRepository;
 import br.com.economize.service.BankStatementService;
 import br.com.economize.service.ConnectorAccountService;
+import br.com.economize.service.RefundReconciliationService;
 import br.com.economize.service.recurrence.MerchantKeyExtractor;
 import br.com.economize.service.statement.parser.ParsedTransaction;
 import br.com.economize.service.statement.parser.StatementFormat;
@@ -183,9 +184,9 @@ public class PluggySyncService {
         // corrente for mapeada
         accounts.sort((a, b) -> Boolean.compare(b.creditCard(), a.creditCard()));
 
-        // Créditos vistos DENTRO de cartões — pagamento de fatura e estorno. São
-        // eles a contrapartida que autoriza neutralizar o débito equivalente na
-        // conta corrente, UM PARA UM (ver CardCreditPool).
+        // Pagamentos de fatura vistos DENTRO de cartões. São eles a contrapartida
+        // que autoriza neutralizar o débito equivalente na conta corrente, UM
+        // PARA UM (ver CardCreditPool). Estorno anunciado não entra aqui.
         CardCreditPool cardCredits = new CardCreditPool();
         List<ParsedTransaction> parsed = new ArrayList<>();
         // a qual conexão cada conta de origem pertence: é por aqui que a
@@ -293,6 +294,14 @@ public class PluggySyncService {
                 .description(description)
                 .date(parseDate(String.valueOf(dateRaw)))
                 .internalTransfer(isInternalTransferLeg(creditCard, amount, description, cardCredits))
+                // Crédito em cartão de crédito NUNCA é receita. O pagamento sai
+                // das somas como perna interna (linha acima); a devolução sai
+                // por aqui, já na gravação. Deixá-la como crédito comum à
+                // espera da conciliação fazia virar receita todo estorno cuja
+                // compra não é achada. A conciliação continua procurando a
+                // compra dela para abater (ver RefundReconciliationService)
+                .refunded(creditCard && amount.signum() > 0
+                        && RefundReconciliationService.anunciaEstorno(description))
                 // a origem viaja com a linha até a gravação: depois dela ninguém
                 // mais saberia de qual conta a transação veio (EC-113)
                 .accountId(accountId)
@@ -409,9 +418,26 @@ public class PluggySyncService {
      * não é receita nem despesa — o dinheiro só troca de bolso, e a despesa
      * verdadeira já foi contada na compra.
      *
-     * <p>Perna do CARTÃO: dinheiro ENTRANDO numa conta de cartão nunca é receita
-     * do titular — ou quita a fatura, ou estorna uma compra. Não depende de
-     * texto nenhum, então vale sempre.
+     * <p>Perna do CARTÃO: dinheiro ENTRANDO numa conta de cartão ou quita a
+     * fatura, ou devolve uma compra — e são coisas diferentes. O pagamento é
+     * perna interna. A devolução NÃO: marcada como interna ela aparecia na
+     * fatura como "pagamento" (não abatia a dívida) e ficava fora da
+     * conciliação de estorno, que pula linha interna, então a compra devolvida
+     * seguia inteira na despesa — contra a decisão de que estorno abate a
+     * compra (V40). O que separa as duas é o crédito se ANUNCIAR como estorno,
+     * pelas mesmas marcas que a conciliação usa. A devolução também não vira
+     * receita: ela é gravada já fora das somas ({@code refunded}), sem vínculo,
+     * e a conciliação a liga à compra quando a encontra.
+     *
+     * <p><b>Por que a regra não é "interno só com contrapartida na conta".</b>
+     * Seria o desenho mais limpo, e infla a receita: quem conecta só o cartão
+     * nunca tem a contrapartida, e mesmo com o banco conectado o par só fecha
+     * se o débito trouxer a âncora "fatura" — pagamento por Pix não traz. Em
+     * todos esses casos a fatura paga viraria RECEITA, o mês inteiro, todo
+     * mês. Então o padrão continua sendo o seguro (crédito no cartão não é
+     * receita) e só sai dele quem diz, no texto, que é devolução. O custo
+     * assumido: estorno que o banco escreve sem marca nenhuma segue lido como
+     * pagamento, como era antes.
      *
      * <p>Perna da CONTA CORRENTE: exige DOIS sinais independentes, porque aqui
      * um falso positivo APAGA uma despesa real. (1) a descrição casa com a
@@ -429,7 +455,9 @@ public class PluggySyncService {
      */
     private boolean isInternalTransferLeg(boolean creditCard, BigDecimal amount, String description,
                                           CardCreditPool cardCredits) {
-        if (creditCard) return amount.signum() > 0;
+        if (creditCard) {
+            return amount.signum() > 0 && !RefundReconciliationService.anunciaEstorno(description);
+        }
         if (amount.signum() >= 0) return false;
         if (!"fatura".equals(MerchantKeyExtractor.extract(description).anchor())) return false;
         return cardCredits.consume(amount);
@@ -446,12 +474,12 @@ public class PluggySyncService {
      * de uma contrapartida só. Com contagem, cada crédito neutraliza no máximo
      * um débito; o excedente volta a ser despesa comum, que é o erro seguro.
      *
-     * <p><b>Limitação conhecida e documentada:</b> estorno de compra também
-     * entra aqui, porque no extrato ele é indistinguível de um pagamento sem
-     * apelar para heurística de texto — e texto é exatamente o que este projeto
-     * não aceita como sinal único (ADR-015). O estrago possível é pequeno e
-     * pedido duplo: exige um débito na conta corrente com o valor EXATO do
-     * estorno e com a âncora "fatura" na descrição.
+     * <p><b>Estorno anunciado não entra aqui.</b> Só é oferecido o crédito que
+     * a sincronização leu como pagamento de fatura; o que se anuncia como
+     * devolução fica de fora e não neutraliza débito nenhum. Resta a limitação
+     * menor: estorno que o banco escreve SEM marca é indistinguível de um
+     * pagamento e ainda entra — o estrago exige um débito na conta corrente com
+     * o valor EXATO dele e com a âncora "fatura" na descrição.
      */
     static final class CardCreditPool {
 

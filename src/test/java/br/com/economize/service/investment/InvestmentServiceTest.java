@@ -28,6 +28,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -65,6 +66,8 @@ class InvestmentServiceTest {
     private ObjectProvider<PluggyClient> pluggyClientProvider;
     @Mock
     private PluggyClient pluggyClient;
+    @Mock
+    private ExchangeRateLookup exchangeRates;
 
     private InvestmentService service;
     private User user;
@@ -90,8 +93,12 @@ class InvestmentServiceTest {
         when(pluggyClient.authenticate()).thenReturn("api-key");
         when(pluggyItemRepository.findAllByUserIdOrderByCreatedAtAsc(user.getId())).thenReturn(List.of(inter));
 
+        // padrão da suíte: nenhuma cotação disponível. Quem testa conversão
+        // declara o câmbio no próprio teste
+        when(exchangeRates.rate(any())).thenReturn(Optional.empty());
+
         service = new InvestmentService(positionRepository, pluggyItemRepository, userRepository,
-                movementService, pluggyClientProvider, 3);
+                movementService, pluggyClientProvider, exchangeRates, 3);
     }
 
     // ------------------------------------------------------------------ sync
@@ -333,9 +340,15 @@ class InvestmentServiceTest {
 
         assertThat(s.positionsCount()).isEqualTo(3);
         assertThat(s.pricedPositions()).isEqualTo(2);
-        // o aplicado soma TUDO; o valor atual e o lucro só onde há cotação —
-        // somar os 5000 da ETF sem valor faria o total parecer prejuízo
-        assertThat(s.totalInvested()).isEqualByComparingTo("8000");
+        // o aplicado soma tudo que está EM REAIS; o valor atual e o lucro só
+        // onde há cotação. A ETF tem 5000 aplicados em DÓLAR e não há câmbio
+        // nesta suíte: somá-los como reais (era 8000) misturava duas moedas
+        assertThat(s.totalInvested()).isEqualByComparingTo("3000");
+        // sem valor atual ela já está em needsQuote (assertado abaixo), que é
+        // por onde o app busca a cotação e completa o total. Repeti-la em
+        // unconverted seria avisar duas vezes da mesma posição
+        assertThat(s.unconverted()).isEmpty();
+        assertThat(s.exchangeRates()).isEmpty();
         assertThat(s.currentValue()).isEqualByComparingTo("3200");
         assertThat(s.profit()).isEqualByComparingTo("200");
         assertThat(s.profitPercent()).isEqualByComparingTo("6.67");
@@ -363,6 +376,110 @@ class InvestmentServiceTest {
     }
 
     @Test
+    @DisplayName("posição em dólar entra no patrimônio CONVERTIDA pela cotação, nunca como se já fosse real")
+    void resumoConverteMoedaEstrangeira() {
+        OffsetDateTime agora = OffsetDateTime.now(ZoneOffset.UTC);
+        InvestmentPosition cdb = InvestmentPosition.builder()
+                .id(UUID.randomUUID()).user(user).source(Source.CONNECTOR).name("CDB Inter").type(Type.FIXED_INCOME)
+                .indexer(Indexer.CDI).institution("Banco Inter").currency("BRL")
+                .investedAmount(new BigDecimal("1000")).currentValue(new BigDecimal("1100"))
+                .positionDate(LocalDate.now(ZoneOffset.UTC)).updatedAt(agora).build();
+        // o provedor devolve a posição da corretora americana em DÓLAR
+        InvestmentPosition aapl = InvestmentPosition.builder()
+                .id(UUID.randomUUID()).user(user).source(Source.CONNECTOR).name("Apple Inc").type(Type.EQUITY)
+                .code("AAPL").indexer(Indexer.USD).institution("Avenue").currency("USD")
+                .investedAmount(new BigDecimal("100")).currentValue(new BigDecimal("120"))
+                .positionDate(LocalDate.now(ZoneOffset.UTC)).updatedAt(agora).build();
+        when(positionRepository.findAllByUserIdOrderByNameAsc(user.getId())).thenReturn(List.of(aapl, cdb));
+        Instant medida = Instant.parse("2026-11-05T18:00:00Z");
+        when(exchangeRates.rate("USD")).thenReturn(Optional.of(
+                new ExchangeRateLookup.Rate(new BigDecimal("5.00"), medida, true)));
+
+        InvestmentResponses.Summary s = service.summary(EMAIL);
+
+        // antes: 1220 de patrimônio e 120 de lucro — US$ 120 somados como R$ 120
+        assertThat(s.totalInvested()).isEqualByComparingTo("1500");
+        assertThat(s.currentValue()).isEqualByComparingTo("1700");
+        assertThat(s.profit()).isEqualByComparingTo("200");
+        assertThat(s.pricedPositions()).isEqualTo(2);
+        assertThat(s.unconverted()).isEmpty();
+        // o resumo diz COM QUE dólar converteu e que ele é velho: sem isso o
+        // patrimônio de um snapshot de dias atrás passava por número de hoje
+        assertThat(s.exchangeRates()).singleElement().satisfies(usada -> {
+            assertThat(usada.currency()).isEqualTo("USD");
+            assertThat(usada.rate()).isEqualByComparingTo("5.00");
+            assertThat(usada.asOf()).isEqualTo(medida);
+            assertThat(usada.stale()).isTrue();
+        });
+        // as fatias usam o mesmo valor convertido, senão não fechariam em 1
+        assertThat(s.byType().get(0).type()).isEqualTo("FIXED_INCOME");
+        assertThat(s.byType().get(0).share()).isEqualByComparingTo("0.6471");
+        assertThat(s.byType().get(1).currentValue()).isEqualByComparingTo("600");
+        assertThat(s.byType().get(1).share()).isEqualByComparingTo("0.3529");
+    }
+
+    @Test
+    @DisplayName("sem cotação a posição em dólar fica FORA dos totais em reais e é sinalizada em unconverted")
+    void resumoSemCotacaoNaoSomaComoReal() {
+        OffsetDateTime agora = OffsetDateTime.now(ZoneOffset.UTC);
+        InvestmentPosition cdb = InvestmentPosition.builder()
+                .id(UUID.randomUUID()).user(user).source(Source.CONNECTOR).name("CDB Inter").type(Type.FIXED_INCOME)
+                .indexer(Indexer.CDI).institution("Banco Inter").currency("BRL")
+                .investedAmount(new BigDecimal("1000")).currentValue(new BigDecimal("1100"))
+                .positionDate(LocalDate.now(ZoneOffset.UTC)).updatedAt(agora).build();
+        InvestmentPosition aapl = InvestmentPosition.builder()
+                .id(UUID.randomUUID()).user(user).source(Source.CONNECTOR).name("Apple Inc").type(Type.EQUITY)
+                .code("AAPL").indexer(Indexer.USD).institution("Avenue").currency("USD")
+                .investedAmount(new BigDecimal("100")).currentValue(new BigDecimal("120"))
+                .positionDate(LocalDate.now(ZoneOffset.UTC)).updatedAt(agora).build();
+        when(positionRepository.findAllByUserIdOrderByNameAsc(user.getId())).thenReturn(List.of(aapl, cdb));
+        // provedor fora e nenhum snapshot: não há dólar para converter
+
+        InvestmentResponses.Summary s = service.summary(EMAIL);
+
+        // patrimônio menor e declarado incompleto é melhor que um número que
+        // mistura moedas: ninguém confere a soma de dólar com real
+        assertThat(s.totalInvested()).isEqualByComparingTo("1000");
+        assertThat(s.currentValue()).isEqualByComparingTo("1100");
+        assertThat(s.profit()).isEqualByComparingTo("100");
+        assertThat(s.pricedPositions()).isEqualTo(1);
+        assertThat(s.positionsCount()).isEqualTo(2);
+        assertThat(s.byType()).hasSize(1);
+        assertThat(s.byInstitution()).extracting(InvestmentResponses.InstitutionSlice::institution)
+                .containsExactly("Banco Inter");
+        assertThat(s.unconverted()).hasSize(1);
+        InvestmentResponses.UnconvertedPosition fora = s.unconverted().get(0);
+        assertThat(fora.id()).isEqualTo(aapl.getId());
+        assertThat(fora.code()).isEqualTo("AAPL");
+        assertThat(fora.currency()).isEqualTo("USD");
+        // os valores vão na moeda de ORIGEM, para o app converter se tiver o câmbio
+        assertThat(fora.investedAmount()).isEqualByComparingTo("100");
+        assertThat(fora.currentValue()).isEqualByComparingTo("120");
+        // tem valor atual, só não tem câmbio: não é caso de buscar cotação do papel
+        assertThat(s.needsQuote()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("carteira só em reais não consulta câmbio nenhum")
+    void resumoEmReaisNaoConsultaCambio() {
+        InvestmentPosition cdb = InvestmentPosition.builder()
+                .id(UUID.randomUUID()).user(user).source(Source.CONNECTOR).name("CDB Inter").type(Type.FIXED_INCOME)
+                .currency("BRL").investedAmount(new BigDecimal("1000")).currentValue(new BigDecimal("1100")).build();
+        // moeda ausente é real: é o default do modelo e de toda linha antiga
+        InvestmentPosition antiga = InvestmentPosition.builder()
+                .id(UUID.randomUUID()).user(user).source(Source.STATEMENT).name("Poupança").type(Type.OTHER)
+                .investedAmount(new BigDecimal("50")).currentValue(new BigDecimal("50")).build();
+        when(positionRepository.findAllByUserIdOrderByNameAsc(user.getId())).thenReturn(List.of(cdb, antiga));
+
+        InvestmentResponses.Summary s = service.summary(EMAIL);
+
+        assertThat(s.currentValue()).isEqualByComparingTo("1150");
+        assertThat(s.unconverted()).isEmpty();
+        assertThat(s.exchangeRates()).isEmpty();
+        verify(exchangeRates, never()).rate(any());
+    }
+
+    @Test
     @DisplayName("sem posição nenhuma o resumo é zero, sem lucro e sem fatias — nunca erro")
     void resumoVazio() {
         when(positionRepository.findAllByUserIdOrderByNameAsc(user.getId())).thenReturn(List.of());
@@ -376,6 +493,7 @@ class InvestmentServiceTest {
         assertThat(s.profitPercent()).isNull();
         assertThat(s.byType()).isEmpty();
         assertThat(s.needsQuote()).isEmpty();
+        assertThat(s.unconverted()).isEmpty();
         assertThat(s.updatedAt()).isNull();
     }
 
