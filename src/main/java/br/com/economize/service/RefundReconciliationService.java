@@ -225,7 +225,15 @@ public class RefundReconciliationService {
                     // A compra vem ANTES do estorno, nunca depois: dinheiro não
                     // volta de uma compra que ainda não aconteceu
                     boolean naOrdem = !candidata.getDate().isAfter(credito.getDate());
-                    if (dias <= JANELA_DIAS && naOrdem) {
+                    // Valor igual em contas DIFERENTES é coincidência: o estorno
+                    // de uma compra volta para a conta em que ela foi feita. Sem
+                    // isto, o estorno de 50,00 do cartão apagava o mercado de
+                    // 50,00 pago no débito. Só barra quando os DOIS lados dizem
+                    // a conta — linha de arquivo antigo não tem, e segue como era
+                    boolean mesmaConta = credito.getAccountId() == null
+                            || candidata.getAccountId() == null
+                            || credito.getAccountId().equals(candidata.getAccountId());
+                    if (dias <= JANELA_DIAS && naOrdem && mesmaConta) {
                         compra = candidata;
                         break;
                     }

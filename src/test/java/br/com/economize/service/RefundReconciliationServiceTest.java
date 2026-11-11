@@ -259,6 +259,42 @@ class RefundReconciliationServiceTest {
     }
 
     @Test
+    @DisplayName("Par por valor não atravessa contas: estorno no cartão não casa com débito da conta corrente")
+    void parPorValorExigeAMesmaConta() {
+        UUID cartao = UUID.randomUUID();
+        UUID corrente = UUID.randomUUID();
+        BankTransaction estorno = tx("2026-09-04", "50.00", "Estorno compra");
+        estorno.setAccountId(cartao);
+        // mesmo valor, mesmo dia, OUTRA conta: é coincidência, não a compra
+        BankTransaction mercado = tx("2026-09-04", "-50.00", "MERCADO DO BAIRRO");
+        mercado.setAccountId(corrente);
+        when(bankTransactionRepository.findAllByUserIdOrderByDateDesc(user.getId()))
+                .thenReturn(List.of(estorno, mercado));
+
+        assertThat(service.sweep(EMAIL, false).pairs()).isZero();
+        verify(bankTransactionRepository, never()).markAsRefundPair(any(), any());
+    }
+
+    @Test
+    @DisplayName("Na mesma conta o par por valor fecha — e linha sem conta (arquivo antigo) segue pareando")
+    void parPorValorNaMesmaContaOuSemConta() {
+        UUID cartao = UUID.randomUUID();
+        BankTransaction estorno = tx("2026-09-04", "50.00", "Estorno compra");
+        estorno.setAccountId(cartao);
+        BankTransaction compra = tx("2026-09-03", "-50.00", "LOJA");
+        compra.setAccountId(cartao);
+        // importada de arquivo antes de existir a dimensão de conta: sem ela
+        // não há o que comparar, e barrar aqui desfaria os pares de sempre
+        BankTransaction estornoSemConta = tx("2026-09-10", "7.00", "Estorno tarifa");
+        BankTransaction tarifa = tx("2026-09-10", "-7.00", "TARIFA");
+        tarifa.setAccountId(cartao);
+        when(bankTransactionRepository.findAllByUserIdOrderByDateDesc(user.getId()))
+                .thenReturn(List.of(estornoSemConta, tarifa, estorno, compra));
+
+        assertThat(service.sweep(EMAIL, false).pairs()).isEqualTo(2);
+    }
+
+    @Test
     @DisplayName("Acento e caixa não decidem: DEVOLUÇÃO, devolucao e Devolução são a mesma coisa")
     void acentoENaoDecide() {
         for (String texto : List.of("DEVOLUÇÃO de compra", "devolucao de compra",
