@@ -21,8 +21,10 @@ import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 /**
  * Sincroniza as conexões Pluggy DO USUÁRIO autenticado (tabela pluggy_items —
@@ -173,7 +175,7 @@ public class PluggySyncService {
                     continue;
                 }
                 accounts.add(new SyncAccount(providerAccountId, creditCard,
-                        snapshotOf(item, account, providerAccountId, creditCard)));
+                        snapshotOf(item, account, providerAccountId, creditCard), sourceOf(item)));
             }
         }
         // cartões primeiro, de propósito: o conjunto de valores das pernas de
@@ -186,6 +188,9 @@ public class PluggySyncService {
         // conta corrente, UM PARA UM (ver CardCreditPool).
         CardCreditPool cardCredits = new CardCreditPool();
         List<ParsedTransaction> parsed = new ArrayList<>();
+        // a qual conexão cada conta de origem pertence: é por aqui que a
+        // gravação reparte o lote em um upload por banco
+        Map<UUID, BankStatementService.UploadSource> sourceByAccount = new HashMap<>();
         for (SyncAccount account : accounts) {
             List<Map<String, Object>> raw = pluggyClient.transactions(apiKey, account.id(), from, to);
             // A ORIGEM (EC-113) só passa a existir DEPOIS de o extrato dela ter
@@ -203,6 +208,7 @@ public class PluggySyncService {
             // o re-find já não enxerga a linha do vencedor: volta o 500 da sync
             // concorrente, e nenhum teste desta suíte avisa.
             ConnectorAccount origin = accountService.register(user, account.snapshot());
+            sourceByAccount.put(origin.getId(), account.source());
             for (Map<String, Object> tx : raw) {
                 ParsedTransaction mapped = mapTransaction(tx, account.creditCard(), origin.getId(), cardCredits);
                 if (mapped == null) continue;
@@ -224,7 +230,7 @@ public class PluggySyncService {
         log.info("Pluggy sync: {} transações na janela {}..{} em {} item(ns) para user={}",
                 parsed.size(), from, to, items.size(), user.getId());
         BankStatementService.ImportResult result =
-                bankStatementService.importFromConnector(user, "Meu Pluggy", StatementFormat.PLUGGY, parsed);
+                bankStatementService.importFromConnector(user, StatementFormat.PLUGGY, parsed, sourceByAccount);
 
         // As faturas do provedor vêm DEPOIS do extrato e nunca o derrubam:
         // extrato é o produto, fatura é enriquecimento. Foi assim que o
@@ -476,7 +482,23 @@ public class PluggySyncService {
      * dela for lido com sucesso.
      */
     private record SyncAccount(String id, boolean creditCard,
-                               ConnectorAccountService.AccountSnapshot snapshot) {
+                               ConnectorAccountService.AccountSnapshot snapshot,
+                               BankStatementService.UploadSource source) {
+    }
+
+    /**
+     * A fonte que o usuário vai ler na lista de importações: o nome do banco
+     * daquela conexão. A lista mostrava "Meu Pluggy" para tudo, que é o nome do
+     * nosso encanamento e não diz de onde o dinheiro veio. Sem nome informado
+     * pelo provedor, o rótulo antigo segue como recurso — melhor genérico do
+     * que em branco.
+     */
+    private static BankStatementService.UploadSource sourceOf(PluggyItem item) {
+        String name = item.getConnectorName();
+        return new BankStatementService.UploadSource(item.getItemId(),
+                name == null || name.isBlank()
+                        ? BankStatementService.FALLBACK_CONNECTOR_SOURCE
+                        : name.trim());
     }
 
     private OffsetDateTime parseDate(String raw) {
