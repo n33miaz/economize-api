@@ -28,6 +28,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -94,7 +95,7 @@ class InvestmentServiceTest {
 
         // padrão da suíte: nenhuma cotação disponível. Quem testa conversão
         // declara o câmbio no próprio teste
-        when(exchangeRates.brlPerUnit(any())).thenReturn(Optional.empty());
+        when(exchangeRates.rate(any())).thenReturn(Optional.empty());
 
         service = new InvestmentService(positionRepository, pluggyItemRepository, userRepository,
                 movementService, pluggyClientProvider, exchangeRates, 3);
@@ -343,8 +344,11 @@ class InvestmentServiceTest {
         // onde há cotação. A ETF tem 5000 aplicados em DÓLAR e não há câmbio
         // nesta suíte: somá-los como reais (era 8000) misturava duas moedas
         assertThat(s.totalInvested()).isEqualByComparingTo("3000");
-        assertThat(s.unconverted()).extracting(InvestmentResponses.UnconvertedPosition::name)
-                .containsExactly("Vanguard Total World");
+        // sem valor atual ela já está em needsQuote (assertado abaixo), que é
+        // por onde o app busca a cotação e completa o total. Repeti-la em
+        // unconverted seria avisar duas vezes da mesma posição
+        assertThat(s.unconverted()).isEmpty();
+        assertThat(s.exchangeRates()).isEmpty();
         assertThat(s.currentValue()).isEqualByComparingTo("3200");
         assertThat(s.profit()).isEqualByComparingTo("200");
         assertThat(s.profitPercent()).isEqualByComparingTo("6.67");
@@ -387,7 +391,9 @@ class InvestmentServiceTest {
                 .investedAmount(new BigDecimal("100")).currentValue(new BigDecimal("120"))
                 .positionDate(LocalDate.now(ZoneOffset.UTC)).updatedAt(agora).build();
         when(positionRepository.findAllByUserIdOrderByNameAsc(user.getId())).thenReturn(List.of(aapl, cdb));
-        when(exchangeRates.brlPerUnit("USD")).thenReturn(Optional.of(new BigDecimal("5.00")));
+        Instant medida = Instant.parse("2026-11-05T18:00:00Z");
+        when(exchangeRates.rate("USD")).thenReturn(Optional.of(
+                new ExchangeRateLookup.Rate(new BigDecimal("5.00"), medida, true)));
 
         InvestmentResponses.Summary s = service.summary(EMAIL);
 
@@ -397,6 +403,14 @@ class InvestmentServiceTest {
         assertThat(s.profit()).isEqualByComparingTo("200");
         assertThat(s.pricedPositions()).isEqualTo(2);
         assertThat(s.unconverted()).isEmpty();
+        // o resumo diz COM QUE dólar converteu e que ele é velho: sem isso o
+        // patrimônio de um snapshot de dias atrás passava por número de hoje
+        assertThat(s.exchangeRates()).singleElement().satisfies(usada -> {
+            assertThat(usada.currency()).isEqualTo("USD");
+            assertThat(usada.rate()).isEqualByComparingTo("5.00");
+            assertThat(usada.asOf()).isEqualTo(medida);
+            assertThat(usada.stale()).isTrue();
+        });
         // as fatias usam o mesmo valor convertido, senão não fechariam em 1
         assertThat(s.byType().get(0).type()).isEqualTo("FIXED_INCOME");
         assertThat(s.byType().get(0).share()).isEqualByComparingTo("0.6471");
@@ -461,7 +475,8 @@ class InvestmentServiceTest {
 
         assertThat(s.currentValue()).isEqualByComparingTo("1150");
         assertThat(s.unconverted()).isEmpty();
-        verify(exchangeRates, never()).brlPerUnit(any());
+        assertThat(s.exchangeRates()).isEmpty();
+        verify(exchangeRates, never()).rate(any());
     }
 
     @Test

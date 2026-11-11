@@ -43,7 +43,9 @@ public class InvestmentController {
                     + "as sem cotação aparecem em needsQuote para o app completar com o indicador ao vivo — "
                     + "a API nunca inventa um zero. Todos os totais são em reais: posição em moeda estrangeira "
                     + "entra convertida pela cotação do dia e, sem cotação, fica fora dos totais e vem listada "
-                    + "em unconverted, com os valores na moeda de origem.")
+                    + "em unconverted, com os valores na moeda de origem (a que nem valor atual tem aparece só "
+                    + "em needsQuote). exchangeRates diz o câmbio usado por moeda, a data da cotação (asOf) e "
+                    + "stale=true quando ela veio do último snapshot guardado, que pode ter até 7 dias.")
     @GetMapping("/summary")
     public Mono<InvestmentResponses.Summary> summary(@AuthenticationPrincipal String email) {
         return Mono.fromCallable(() -> investmentService.summary(email))

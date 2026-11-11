@@ -141,8 +141,12 @@ public final class InvestmentResponses {
      * @param sources         origens presentes: CONNECTOR, STATEMENT, MANUAL
      * @param needsQuote      códigos das posições sem valor atual — o app busca
      *                        a cotação e completa o total do lado dele
-     * @param unconverted     posições em moeda estrangeira deixadas fora dos
-     *                        totais por falta de câmbio; vazio no caso normal
+     * @param unconverted     posições em moeda estrangeira COM valor atual
+     *                        deixadas fora dos totais por falta de câmbio;
+     *                        vazio no caso normal. A que nem valor atual tem
+     *                        aparece só em {@code needsQuote}
+     * @param exchangeRates   o câmbio usado em cada moeda convertida, com a
+     *                        data da cotação e se ela veio de snapshot velho
      */
     public record Summary(
             BigDecimal totalInvested,
@@ -159,8 +163,24 @@ public final class InvestmentResponses {
             List<String> sources,
             MovementTotals12m movements12m,
             List<String> needsQuote,
-            List<UnconvertedPosition> unconverted
+            List<UnconvertedPosition> unconverted,
+            List<ExchangeRateUsed> exchangeRates
     ) {
+    }
+
+    /**
+     * O câmbio com que uma moeda entrou nos totais em reais.
+     *
+     * <p>Existe para o app poder dizer a IDADE do número: quando o provedor
+     * cai, a cotação vem do último snapshot bom, que pode ter até 7 dias —
+     * e patrimônio convertido por dólar velho sem aviso é número que parece
+     * de hoje e não é.
+     *
+     * @param rate  reais por unidade de {@code currency}
+     * @param asOf  quando o provedor mediu a cotação; nulo se ele não informou
+     * @param stale true quando a cotação veio do snapshot, não de leitura viva
+     */
+    public record ExchangeRateUsed(String currency, BigDecimal rate, java.time.Instant asOf, boolean stale) {
     }
 
     /**

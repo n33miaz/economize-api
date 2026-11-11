@@ -13,6 +13,7 @@ import reactor.core.scheduler.Schedulers;
 
 import java.math.BigDecimal;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
@@ -49,10 +50,31 @@ class ExchangeRateLookupTest {
                 indicator("currency_EUR", "6.10"),
                 indicator("currency_USD", "5.42"))));
 
-        assertThat(lookup.brlPerUnit("USD")).contains(new BigDecimal("5.42"));
+        assertThat(lookup.rate("USD")).map(ExchangeRateLookup.Rate::value).contains(new BigDecimal("5.42"));
         // o código chega como o provedor escreveu
-        assertThat(lookup.brlPerUnit(" usd ")).contains(new BigDecimal("5.42"));
-        assertThat(lookup.brlPerUnit("EUR")).contains(new BigDecimal("6.10"));
+        assertThat(lookup.rate(" usd ")).map(ExchangeRateLookup.Rate::value).contains(new BigDecimal("5.42"));
+        assertThat(lookup.rate("EUR")).map(ExchangeRateLookup.Rate::value).contains(new BigDecimal("6.10"));
+    }
+
+    @Test
+    @DisplayName("a cotação leva junto a idade: quando foi medida e se veio do snapshot")
+    void rateCarriesItsAge() {
+        Instant medida = Instant.parse("2026-11-05T18:00:00Z");
+        Indicator viva = indicator("currency_EUR", "6.10");
+        viva.setAsOf(Instant.parse("2026-11-11T18:00:00Z"));
+        // provedor fora do ar: o IndicatorService serve o último snapshot bom,
+        // que pode ter até 7 dias, e o marca como stale
+        Indicator velha = indicator("currency_USD", "5.42");
+        velha.setAsOf(medida);
+        velha.setStale(true);
+        when(indicatorService.getAllIndicators()).thenReturn(Mono.just(List.of(viva, velha)));
+
+        ExchangeRateLookup.Rate dolar = lookup.rate("USD").orElseThrow();
+        assertThat(dolar.stale()).isTrue();
+        assertThat(dolar.asOf()).isEqualTo(medida);
+        ExchangeRateLookup.Rate euro = lookup.rate("EUR").orElseThrow();
+        assertThat(euro.stale()).isFalse();
+        assertThat(euro.asOf()).isEqualTo(Instant.parse("2026-11-11T18:00:00Z"));
     }
 
     @Test
@@ -60,7 +82,7 @@ class ExchangeRateLookupTest {
     void unknownCurrencyIsEmpty() {
         when(indicatorService.getAllIndicators()).thenReturn(Mono.just(List.of(indicator("currency_USD", "5.42"))));
 
-        assertThat(lookup.brlPerUnit("CHF")).isEmpty();
+        assertThat(lookup.rate("CHF")).isEmpty();
     }
 
     @Test
@@ -69,8 +91,8 @@ class ExchangeRateLookupTest {
         when(indicatorService.getAllIndicators()).thenReturn(Mono.just(List.of(
                 indicator("currency_USD", null), indicator("currency_EUR", "0"))));
 
-        assertThat(lookup.brlPerUnit("USD")).isEmpty();
-        assertThat(lookup.brlPerUnit("EUR")).isEmpty();
+        assertThat(lookup.rate("USD")).isEmpty();
+        assertThat(lookup.rate("EUR")).isEmpty();
     }
 
     @Test
@@ -80,15 +102,15 @@ class ExchangeRateLookupTest {
                 .thenReturn(Mono.error(new IllegalStateException("provedor fora")))
                 .thenReturn(Mono.empty());
 
-        assertThat(lookup.brlPerUnit("USD")).isEmpty();
-        assertThat(lookup.brlPerUnit("USD")).isEmpty();
+        assertThat(lookup.rate("USD")).isEmpty();
+        assertThat(lookup.rate("USD")).isEmpty();
     }
 
     @Test
     @DisplayName("moeda em branco não consulta nada")
     void blankCurrencyIsEmpty() {
-        assertThat(lookup.brlPerUnit(null)).isEmpty();
-        assertThat(lookup.brlPerUnit("  ")).isEmpty();
+        assertThat(lookup.rate(null)).isEmpty();
+        assertThat(lookup.rate("  ")).isEmpty();
         verify(indicatorService, never()).getAllIndicators();
     }
 
@@ -97,7 +119,7 @@ class ExchangeRateLookupTest {
     void neverBlocksANonBlockingThread() {
         // Schedulers.parallel() é thread não bloqueante, como as do Netty: um
         // block() ali lança IllegalStateException. O vazio é o caminho tratado
-        Optional<BigDecimal> rate = Mono.fromCallable(() -> lookup.brlPerUnit("USD"))
+        Optional<ExchangeRateLookup.Rate> rate = Mono.fromCallable(() -> lookup.rate("USD"))
                 .subscribeOn(Schedulers.parallel())
                 .block(Duration.ofSeconds(5));
 

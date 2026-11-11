@@ -9,6 +9,7 @@ import reactor.core.scheduler.Schedulers;
 
 import java.math.BigDecimal;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
@@ -23,6 +24,11 @@ import java.util.Optional;
  * a mesma que o {@code ForeignQuoteService} faz para o {@code priceBrl}: o
  * {@code buy} do indicador, quando positivo. Assim o patrimônio e a cotação
  * da ação estrangeira nunca usam dois dólares diferentes.
+ *
+ * <p><b>Cotação velha vai declarada.</b> Quando o provedor cai, o que chega é
+ * o último snapshot bom (até 7 dias). Ele serve — dólar de terça é muito
+ * melhor que dólar nenhum —, desde que saia marcado: por isso a resposta é um
+ * {@link Rate}, com a data da medição e a marca de snapshot.
  *
  * <p><b>Sem cotação, sem número.</b> Vazio é resposta prevista (provedor fora
  * e nenhum snapshot, moeda que a Home não acompanha) e quem chama decide o
@@ -42,8 +48,20 @@ public class ExchangeRateLookup {
 
     private final IndicatorService indicatorService;
 
-    /** Reais por unidade de {@code currency} (ISO de 3 letras), ou vazio se não há cotação. */
-    public Optional<BigDecimal> brlPerUnit(String currency) {
+    /**
+     * A cotação e a IDADE dela.
+     *
+     * @param value reais por unidade da moeda
+     * @param asOf  quando o provedor mediu esse preço; nulo se ele não disse
+     * @param stale true quando veio do último snapshot bom (provedor fora do
+     *              ar) em vez de uma cotação viva — pode ter até 7 dias
+     */
+    public record Rate(BigDecimal value, Instant asOf, boolean stale) {
+    }
+
+
+    /** A cotação de {@code currency} (ISO de 3 letras) em reais, com a idade dela; vazio se não há. */
+    public Optional<Rate> rate(String currency) {
         if (currency == null || currency.isBlank()) return Optional.empty();
         // Este método BLOQUEIA, e quem o chama já está fora do event loop (o
         // controller manda o resumo para o boundedElastic). Se um dia alguém
@@ -56,8 +74,10 @@ public class ExchangeRateLookup {
             if (indicators == null) return Optional.empty();
             return indicators.stream()
                     .filter(indicator -> id.equals(indicator.getId()))
-                    .map(Indicator::getBuy)
-                    .filter(buy -> buy != null && buy.signum() > 0)
+                    .filter(indicator -> indicator.getBuy() != null && indicator.getBuy().signum() > 0)
+                    // a idade viaja com o número: snapshot velho é melhor que
+                    // nada, mas só se quem lê o resumo souber que é velho
+                    .map(indicator -> new Rate(indicator.getBuy(), indicator.getAsOf(), indicator.isStale()))
                     .findFirst();
         } catch (RuntimeException e) {
             log.warn("Câmbio [{}] indisponível para o resumo de investimentos: {}", id, e.getMessage());

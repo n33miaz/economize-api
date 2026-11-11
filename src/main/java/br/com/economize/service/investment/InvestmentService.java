@@ -34,6 +34,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.UUID;
 
@@ -323,7 +324,9 @@ public class InvestmentService {
         List<InvestmentResponses.UnconvertedPosition> unconverted = new ArrayList<>();
         // câmbio por moeda, consultado no máximo UMA vez por resumo e só se
         // alguma posição precisar: carteira toda em reais não paga a consulta
-        Map<String, Optional<BigDecimal>> rates = new HashMap<>();
+        Map<String, Optional<ExchangeRateLookup.Rate>> rates = new HashMap<>();
+        // as cotações que de fato converteram alguma coisa, em ordem estável
+        TreeMap<String, ExchangeRateLookup.Rate> usedRates = new TreeMap<>();
 
         for (InvestmentPosition p : positions) {
             sources.add(p.getSource());
@@ -341,16 +344,27 @@ public class InvestmentService {
             // para os números continuarem fechando entre si.
             BigDecimal rate = BigDecimal.ONE;
             if (isForeign(p)) {
-                rate = rates.computeIfAbsent(p.getCurrency().trim().toUpperCase(Locale.ROOT),
-                        exchangeRates::brlPerUnit).orElse(null);
-                if (rate == null) {
+                String currency = p.getCurrency().trim().toUpperCase(Locale.ROOT);
+                ExchangeRateLookup.Rate found = rates.computeIfAbsent(currency, exchangeRates::rate)
+                        .orElse(null);
+                if (found == null) {
                     // Sem cotação não existe valor em reais, e inventar um
                     // (ou usar 1) é o defeito original. A posição sai de TODOS
                     // os totais e vai declarada, na moeda de origem, para o
-                    // app dizer que o patrimônio está incompleto
-                    unconverted.add(new InvestmentResponses.UnconvertedPosition(p.getId(), p.getName(),
-                            p.getCode(), p.getCurrency(), p.getInvestedAmount(), p.getCurrentValue()));
+                    // app dizer que o patrimônio está incompleto.
+                    // Um aviso só por posição: a que nem valor atual tem já
+                    // está em needsQuote (é por lá que o app busca a cotação
+                    // do papel e completa o total) e não se repete aqui
+                    boolean jaAvisada = p.getCurrentValue() == null && p.getCode() != null;
+                    if (!jaAvisada) {
+                        unconverted.add(new InvestmentResponses.UnconvertedPosition(p.getId(), p.getName(),
+                                p.getCode(), p.getCurrency(), p.getInvestedAmount(), p.getCurrentValue()));
+                    }
                     continue;
+                }
+                rate = found.value();
+                if (p.getInvestedAmount() != null || p.getCurrentValue() != null) {
+                    usedRates.put(currency, found);
                 }
             }
             BigDecimal invested = toBrl(p.getInvestedAmount(), rate);
@@ -401,7 +415,11 @@ public class InvestmentService {
                 new InvestmentResponses.MovementTotals12m(totals.applied(), totals.redeemed(), totals.yield(),
                         movements.netInvested()),
                 new ArrayList<>(needsQuote),
-                unconverted);
+                unconverted,
+                usedRates.entrySet().stream()
+                        .map(e -> new InvestmentResponses.ExchangeRateUsed(e.getKey(), e.getValue().value(),
+                                e.getValue().asOf(), e.getValue().stale()))
+                        .toList());
     }
 
     /** Moeda ausente é real: é o default do modelo e o que toda linha antiga tem. */
