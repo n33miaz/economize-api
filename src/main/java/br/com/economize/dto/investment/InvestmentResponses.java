@@ -126,6 +126,10 @@ public final class InvestmentResponses {
     /**
      * O painel.
      *
+     * <p>Todo total aqui é em REAIS. Posição em moeda estrangeira entra
+     * convertida pela cotação do dia; sem cotação ela não entra em total
+     * nenhum e aparece em {@code unconverted}.
+     *
      * @param totalInvested   soma do aplicado em TODAS as posições que o informam
      * @param currentValue    soma do valor atual das posições que o TÊM — as sem
      *                        cotação ficam fora, e {@code needsQuote} diz quais
@@ -137,6 +141,8 @@ public final class InvestmentResponses {
      * @param sources         origens presentes: CONNECTOR, STATEMENT, MANUAL
      * @param needsQuote      códigos das posições sem valor atual — o app busca
      *                        a cotação e completa o total do lado dele
+     * @param unconverted     posições em moeda estrangeira deixadas fora dos
+     *                        totais por falta de câmbio; vazio no caso normal
      */
     public record Summary(
             BigDecimal totalInvested,
@@ -152,7 +158,26 @@ public final class InvestmentResponses {
             int stalePositions,
             List<String> sources,
             MovementTotals12m movements12m,
-            List<String> needsQuote
+            List<String> needsQuote,
+            List<UnconvertedPosition> unconverted
+    ) {
+    }
+
+    /**
+     * Posição em moeda estrangeira que ficou FORA dos totais em reais do
+     * resumo porque não havia cotação da moeda na hora.
+     *
+     * <p>Os dois valores vão na moeda de ORIGEM ({@code currency}), como estão
+     * guardados: o app pode convertê-los se tiver o câmbio, ou só avisar que o
+     * patrimônio mostrado está incompleto. Nunca vêm somados a nada.
+     */
+    public record UnconvertedPosition(
+            UUID id,
+            String name,
+            String code,
+            String currency,
+            BigDecimal investedAmount,
+            BigDecimal currentValue
     ) {
     }
 

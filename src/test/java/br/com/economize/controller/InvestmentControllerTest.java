@@ -87,7 +87,7 @@ class InvestmentControllerTest {
                 OffsetDateTime.now(), 1, List.of("CONNECTOR", "MANUAL"),
                 new InvestmentResponses.MovementTotals12m(new BigDecimal("3000"), new BigDecimal("500"),
                         new BigDecimal("42.10"), new BigDecimal("2500")),
-                List.of("VT")));
+                List.of("VT"), List.of()));
 
         webTestClient.get().uri("/api/v1/investments/summary")
                 .header(HttpHeaders.AUTHORIZATION, bearer())
