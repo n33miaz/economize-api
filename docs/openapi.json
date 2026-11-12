@@ -959,8 +959,16 @@
           "cycleMonth": {
             "type": "string"
           },
+          "end": {
+            "format": "date",
+            "type": "string"
+          },
           "leftover": {
             "type": "number"
+          },
+          "start": {
+            "format": "date",
+            "type": "string"
           }
         },
         "type": "object"
