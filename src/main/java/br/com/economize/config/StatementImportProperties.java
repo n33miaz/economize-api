@@ -57,10 +57,12 @@ public class StatementImportProperties {
      * descomprime durante a leitura de um PDF (object streams, xref, fontes,
      * formulários). O teto por fluxo sozinho não basta: dezenas de object
      * streams logo abaixo de 16 MB cada caberiam num upload de 10 MB, e o
-     * PDFBox guarda os objetos lidos de cada um. Um extrato real soma poucos
-     * MB (o conteúdo de página com FlateDecode simples é lido em fluxo, sem
-     * buffer, e nem entra na conta); 64 MB dá folga a fontes embutidas
-     * inteiras e ainda deixa dois terços do heap livres.
+     * PDFBox guarda os objetos lidos de cada um. O conteúdo de cada página
+     * também entra na conta (o PDFBox 3.0.8 decodifica o fluxo inteiro em
+     * memória), então o total cresce com o número de páginas. Medido em
+     * 12/11/2026 nos extratos reais do dono: o maior somou 0,42 MB. 64 MB
+     * deixa folga larga para os 200 páginas do teto e para fontes embutidas,
+     * e ainda dois terços do heap livres.
      */
     private DataSize maxPdfDecodedTotal = DataSize.ofMegabytes(64);
 
