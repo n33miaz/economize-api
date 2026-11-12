@@ -56,6 +56,7 @@ public class WishContributionService {
     private final WishContributionRepository contributionRepository;
     private final WishRepository wishRepository;
     private final UserRepository userRepository;
+    private final WishProjectionService projectionService;
 
     /**
      * Registra um aporte e atualiza o saldo da meta.
@@ -83,6 +84,12 @@ public class WishContributionService {
 
         String ciclo = normalizarCiclo(cycleMonth);
         if (ciclo != null) {
+            if (!projectionService.isCycleClosed(user.getId(), YearMonth.parse(ciclo))) {
+                // A sobra só existe quando a janela acabou: antes disso é uma
+                // projeção parcial e chamá-la de medida faria o histórico mentir.
+                throw new IllegalArgumentException(
+                        "A sobra medida só pode ser guardada depois que o ciclo fechar");
+            }
             contributionRepository.findByWishIdAndCycleMonth(wishId, ciclo).ifPresent(ja -> {
                 // A frase importa: "já guardei" é diferente de "deu erro", e o
                 // usuário precisa saber que o dinheiro NÃO entrou duas vezes
