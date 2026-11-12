@@ -32,6 +32,11 @@ public interface BankTransactionRepository extends JpaRepository<BankTransaction
 
     List<BankTransaction> findAllByUserIdAndUploadIdOrderByDateDesc(UUID userId, UUID uploadId);
 
+    List<BankTransaction> findAllByUserIdAndUploadIdInOrderByDateDesc(UUID userId, Collection<UUID> uploadIds);
+
+    long countByUserIdAndUploadIdInAndReviewStatusIn(UUID userId, Collection<UUID> uploadIds,
+                                                      Collection<BankTransaction.ReviewStatus> reviewStatuses);
+
     // EC-113: os lançamentos de UMA conta dentro de uma janela — a consulta que
     // monta a fatura do cartão. É o único leitor do índice
     // (account_id, date) criado na V16; o user_id continua na cláusula por

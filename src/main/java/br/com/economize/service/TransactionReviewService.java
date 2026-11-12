@@ -100,11 +100,12 @@ public class TransactionReviewService {
                 .toList();
     }
 
-    public List<BankTransaction> reviewQueue(String email, UUID uploadId) {
+    /** Filtra pelos uploads pedidos; lista vazia preserva a fila global. */
+    public List<BankTransaction> reviewQueue(String email, List<UUID> uploadIds) {
         User user = requireUser(email);
-        if (uploadId != null) {
+        if (uploadIds != null && !uploadIds.isEmpty()) {
             return bankTransactionRepository
-                    .findAllByUserIdAndUploadIdOrderByDateDesc(user.getId(), uploadId).stream()
+                    .findAllByUserIdAndUploadIdInOrderByDateDesc(user.getId(), uploadIds).stream()
                     .filter(t -> PENDING.contains(t.getReviewStatus()))
                     .toList();
         }
@@ -112,7 +113,16 @@ public class TransactionReviewService {
     }
 
     public long pendingCount(String email) {
+        return pendingCount(email, List.of());
+    }
+
+    /** Conta no mesmo recorte de uploads da fila de revisão. */
+    public long pendingCount(String email, List<UUID> uploadIds) {
         User user = requireUser(email);
+        if (uploadIds != null && !uploadIds.isEmpty()) {
+            return bankTransactionRepository.countByUserIdAndUploadIdInAndReviewStatusIn(
+                    user.getId(), uploadIds, PENDING);
+        }
         return bankTransactionRepository.countByUserIdAndReviewStatusIn(user.getId(), PENDING);
     }
 
@@ -273,9 +283,9 @@ public class TransactionReviewService {
      * A aprovação também cristaliza os padrões — é o caminho rápido do usuário
      * que confere a lista e concorda com tudo.
      */
-    public ReviewOutcome confirmAll(String email, UUID uploadId) {
+    public ReviewOutcome confirmAll(String email, List<UUID> uploadIds) {
         User user = requireUser(email);
-        List<BankTransaction> pending = reviewQueue(email, uploadId).stream()
+        List<BankTransaction> pending = reviewQueue(email, uploadIds).stream()
                 .filter(t -> t.getReviewStatus() == BankTransaction.ReviewStatus.SUGGESTED
                         && t.getCategoryId() != null)
                 .toList();
