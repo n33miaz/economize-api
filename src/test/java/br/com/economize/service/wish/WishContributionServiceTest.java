@@ -15,6 +15,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.DataIntegrityViolationException;
 
 import java.math.BigDecimal;
 import java.util.List;
@@ -77,7 +78,7 @@ class WishContributionServiceTest {
     }
 
     private void gravaOQueChega() {
-        when(contributionRepository.save(any(WishContribution.class)))
+        when(contributionRepository.saveAndFlush(any(WishContribution.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
     }
 
@@ -92,7 +93,7 @@ class WishContributionServiceTest {
 
         assertThat(r.savedAmount()).isEqualByComparingTo("1500.00");
         assertThat(wish.getSavedAmount()).isEqualByComparingTo("1500.00");
-        verify(contributionRepository).save(any(WishContribution.class));
+        verify(contributionRepository).saveAndFlush(any(WishContribution.class));
         verify(wishRepository, never()).save(wish);
     }
 
@@ -126,7 +127,7 @@ class WishContributionServiceTest {
 
         // E o saldo fica exatamente como estava
         assertThat(wish.getSavedAmount()).isEqualByComparingTo("1200.00");
-        verify(contributionRepository, never()).save(any());
+        verify(contributionRepository, never()).saveAndFlush(any());
     }
 
     @Test
@@ -140,7 +141,7 @@ class WishContributionServiceTest {
 
         assertThat(r.savedAmount()).isEqualByComparingTo("1000.00");
         ArgumentCaptor<WishContribution> captor = ArgumentCaptor.forClass(WishContribution.class);
-        verify(contributionRepository).save(captor.capture());
+        verify(contributionRepository).saveAndFlush(captor.capture());
         assertThat(captor.getValue().getAmount()).isEqualByComparingTo("-200.00");
         assertThat(captor.getValue().getNote()).isEqualTo("errei o dedo");
     }
@@ -175,7 +176,7 @@ class WishContributionServiceTest {
                 .hasMessageContaining("maior valor que uma meta comporta");
 
         assertThat(wish.getSavedAmount()).isEqualByComparingTo("1200.00");
-        verify(contributionRepository, never()).save(any());
+        verify(contributionRepository, never()).saveAndFlush(any());
     }
 
     @Test
@@ -221,7 +222,20 @@ class WishContributionServiceTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("YYYY-MM");
 
-        verify(contributionRepository, never()).save(any());
+        verify(contributionRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    @DisplayName("Corrida pela sobra do ciclo responde que ela já foi guardada")
+    void corridaDaSobraDoCicloViraMensagemDeNegocio() {
+        comUsuarioEMeta();
+        when(contributionRepository.saveAndFlush(any(WishContribution.class)))
+                .thenThrow(new DataIntegrityViolationException("uq_wish_contributions_cycle"));
+
+        assertThatThrownBy(() ->
+                service.contribute(EMAIL, wish.getId(), new BigDecimal("100"), "2026-09", null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("A sobra de 2026-09 já foi guardada nesta meta");
     }
 
     @Test

@@ -9,6 +9,7 @@ import br.com.economize.repository.WishContributionRepository;
 import br.com.economize.repository.WishRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -115,16 +116,28 @@ public class WishContributionService {
             recusarAjusteQueMudouEnquantoEraProcessado(user.getId(), wishId, amount);
         }
 
-        WishContribution aporte = contributionRepository.save(WishContribution.builder()
-                .wishId(wishId)
-                .userId(user.getId())
-                .amount(amount)
-                .origin(ciclo != null
-                        ? WishContribution.Origin.MEASURED
-                        : WishContribution.Origin.DECLARED)
-                .cycleMonth(ciclo)
-                .note(note != null && !note.isBlank() ? note.trim() : null)
-                .build());
+        WishContribution aporte;
+        try {
+            // O unique parcial também protege o intervalo entre o find acima e
+            // o insert. O flush traz a corrida para este ponto, onde ela vira a
+            // mesma explicação de negócio em vez de um 500.
+            aporte = contributionRepository.saveAndFlush(WishContribution.builder()
+                    .wishId(wishId)
+                    .userId(user.getId())
+                    .amount(amount)
+                    .origin(ciclo != null
+                            ? WishContribution.Origin.MEASURED
+                            : WishContribution.Origin.DECLARED)
+                    .cycleMonth(ciclo)
+                    .note(note != null && !note.isBlank() ? note.trim() : null)
+                    .build());
+        } catch (DataIntegrityViolationException race) {
+            if (ciclo != null) {
+                throw new IllegalArgumentException(
+                        "A sobra de " + ciclo + " já foi guardada nesta meta", race);
+            }
+            throw race;
+        }
 
         log.info("Aporte em meta: {} origem={} ciclo={}, user={}",
                 amount, aporte.getOrigin(), ciclo, user.getId());
