@@ -4,11 +4,13 @@ import io.netty.channel.ChannelOption;
 import io.netty.handler.timeout.ReadTimeoutHandler;
 import io.netty.resolver.DefaultAddressResolverGroup;
 import io.netty.handler.timeout.WriteTimeoutHandler;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.http.client.reactive.ReactorClientHttpConnector;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.reactive.function.client.ExchangeStrategies;
@@ -148,7 +150,15 @@ public class WebClientConfig {
     }
 
     @Bean
-    public RestClient.Builder restClientBuilder() {
-        return RestClient.builder();
+    public RestClient.Builder restClientBuilder(
+            @Value("${spring.http.client.connect-timeout:3s}") Duration connectTimeout,
+            @Value("${spring.http.client.read-timeout:25s}") Duration readTimeout) {
+        // Em aplicação WebFlux, o Boot não auto-configura o RestClient. O
+        // OpenAiApi é seu único consumidor aqui, então aplicamos as propriedades
+        // spring.http.client.* só a ele, sem alterar os WebClients da API.
+        SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
+        requestFactory.setConnectTimeout(connectTimeout);
+        requestFactory.setReadTimeout(readTimeout);
+        return RestClient.builder().requestFactory(requestFactory);
     }
 }

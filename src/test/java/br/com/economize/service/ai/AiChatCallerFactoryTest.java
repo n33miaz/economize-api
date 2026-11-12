@@ -9,6 +9,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 
@@ -17,6 +18,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowableOfType;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
@@ -129,6 +131,25 @@ class AiChatCallerFactoryTest {
         assertThat(caller.get().userOwned()).isFalse();
         assertThat(caller.get().describe()).contains("servidor").contains("gemini-2.0-flash");
         verifyNoInteractions(httpClient);
+    }
+
+    @Test
+    @DisplayName("Resposta nula do Gemini pelo servidor vira falha classificada, nunca Mono vazio")
+    void shouldRejectEmptyServerResponse() {
+        when(repository.findByUserId(user.getId())).thenReturn(Optional.empty());
+        ChatClient.ChatClientRequestSpec request = mock(ChatClient.ChatClientRequestSpec.class);
+        ChatClient.CallResponseSpec response = mock(ChatClient.CallResponseSpec.class);
+        when(serverChatClient.prompt(any(Prompt.class))).thenReturn(request);
+        when(request.call()).thenReturn(response);
+        when(response.content()).thenReturn(null);
+        AiChatCallerFactory factory = factory(new SecretCipher(KEY_1, "k1", ""));
+
+        AiProviderException error = catchThrowableOfType(
+                () -> factory.resolve(user, true).orElseThrow().complete("sistema", "pergunta"),
+                AiProviderException.class);
+
+        assertThat(error).hasMessage(AiProviderException.EMPTY_RESPONSE_MESSAGE);
+        assertThat(error.getReason()).isEqualTo(AiProviderException.Reason.PROVIDER);
     }
 
     @Test
