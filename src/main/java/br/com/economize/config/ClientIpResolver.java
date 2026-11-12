@@ -16,9 +16,10 @@ import java.util.regex.Pattern;
  * Cloudflare, e o {@code X-Forwarded-For} vem como {@code <o que o cliente
  * mandou, se mandou>, <IP real do cliente>, <borda da Cloudflare>, <N saltos
  * internos 10.x>}, com N variável. Ou seja: a ponta ESQUERDA é texto do
- * cliente, e a ponta direita é a plataforma. O endereço de verdade é o
- * primeiro, de quem lê da direita para a esquerda, que não é rede interna NEM
- * borda da Cloudflare — foi a borda que o escreveu, ao receber a conexão.
+ * cliente, e a ponta direita é a plataforma. Lendo da direita para a
+ * esquerda: pulam-se os saltos internos, pula-se NO MÁXIMO UMA borda da
+ * Cloudflare, e o salto seguinte é o cliente — foi a borda que o escreveu, ao
+ * receber a conexão.
  *
  * <p><b>Por que a borda é proxy, e não cliente.</b> A primeira versão parava no
  * primeiro endereço público, e a borda da Cloudflare é pública (104.22.x,
@@ -27,11 +28,15 @@ import java.util.regex.Pattern;
  * pessoas diferentes dividiam o mesmo. As faixas tratadas como proxy estão em
  * {@link #CLOUDFLARE_RANGES}.
  *
- * <p><b>O limite conhecido.</b> Quem SAI para a internet por um endereço das
- * faixas da Cloudflare (WARP, Workers, alguns relays) é indistinguível da
- * borda: o salto dele é pulado e vale o que estiver à esquerda — texto do
- * próprio cliente — ou o soquete. A alternativa seria confiar em um único
- * salto da Cloudflare; não foi a regra pedida.
+ * <p><b>Por que só uma borda.</b> Quem SAI para a internet por um endereço das
+ * faixas da Cloudflare (WARP, Workers, alguns relays) tem cara de borda. Se
+ * todo salto em faixa da Cloudflare fosse pulado, o salto desse cliente seria
+ * pulado junto e valeria o que estivesse à esquerda — texto dele mesmo, ou
+ * seja, um balde à escolha. Pulando só a borda que a plataforma escreveu, o
+ * salto seguinte é o cliente esteja na faixa que estiver. O número de bordas
+ * é configurável ({@code economize.client-ip.trusted-edge-hops}, padrão 1)
+ * para o caso de a medição em produção mostrar duas; maior que o real, ele
+ * devolve ao cliente em faixa da Cloudflare a escolha do balde.
  *
  * <p><b>Por que não "o primeiro da lista".</b> Era o que o login fazia, e servia
  * enquanto o valor só alimentava um aviso. Como chave de limite de tentativas
@@ -41,7 +46,8 @@ import java.util.regex.Pattern;
  * <p><b>Conexão direta pública ignora o cabeçalho.</b> Se quem abriu o soquete
  * tem endereço público que não é da Cloudflare, não há proxy nosso no caminho
  * e o cabeçalho inteiro é palavra do cliente. Vale o endereço do soquete. Um
- * soquete em faixa da Cloudflare é proxy, e a cadeia é lida.
+ * soquete em faixa da Cloudflare é proxy, e a cadeia é lida — mas ele É a
+ * borda, e conta como tal: o salto seguinte já é o cliente.
  *
  * <p>É um resolvedor só, para o limite de requisições e para o login, de
  * propósito: duas leituras diferentes do mesmo cabeçalho acabariam discordando
@@ -118,7 +124,26 @@ public final class ClientIpResolver {
     // Trocada uma vez, na subida, quando a propriedade vem preenchida
     private static volatile List<Cidr> trustedProxies = parseRanges(CLOUDFLARE_RANGES);
 
+    /** Quantas bordas da Cloudflare a plataforma escreve antes do cliente. */
+    static final int DEFAULT_EDGE_HOPS = 1;
+
+    private static volatile int trustedEdgeHops = DEFAULT_EDGE_HOPS;
+
     private ClientIpResolver() {
+    }
+
+    /**
+     * Quantos saltos em faixa de proxy confiável são pulados, no máximo,
+     * antes de o salto seguinte valer como cliente. Zero volta à leitura
+     * "primeiro público pela direita".
+     *
+     * @throws IllegalArgumentException se for negativo
+     */
+    static void configureTrustedEdgeHops(int hops) {
+        if (hops < 0) {
+            throw new IllegalArgumentException("Número de bordas confiáveis inválido: " + hops);
+        }
+        trustedEdgeHops = hops;
     }
 
     /**
@@ -160,7 +185,10 @@ public final class ClientIpResolver {
 
     static String resolve(InetAddress remote, List<String> forwardedHeaders) {
         String direct = remote == null ? null : remote.getHostAddress();
-        if (remote != null && classify(remote) == HopKind.PUBLIC) return direct;
+        HopKind socket = remote == null ? null : classify(remote);
+        if (socket == HopKind.PUBLIC) return direct;
+        // soquete em faixa da Cloudflare é a própria borda: gasta uma
+        int edgesLeft = trustedEdgeHops - (socket == HopKind.CLOUDFLARE ? 1 : 0);
 
         // o mesmo cabeçalho pode vir em várias linhas; a ordem das linhas é a
         // ordem dos saltos, então juntá-las reconstrói a cadeia
@@ -174,7 +202,15 @@ public final class ClientIpResolver {
             // salto ilegível no trecho que a plataforma escreve é cadeia
             // adulterada ou formato novo: não se adivinha, vale o soquete
             if (address == null) return direct;
-            if (classify(address) == HopKind.PUBLIC) return address.getHostAddress();
+            HopKind kind = classify(address);
+            if (kind == HopKind.INTERNAL) continue;
+            // só a borda que a plataforma escreveu é pulada; depois dela, o
+            // salto é o cliente mesmo estando em faixa da Cloudflare (WARP)
+            if (kind == HopKind.CLOUDFLARE && edgesLeft > 0) {
+                edgesLeft--;
+                continue;
+            }
+            return address.getHostAddress();
         }
         // só rede interna e borda (chamada de dentro da plataforma, ambiente local)
         return direct;

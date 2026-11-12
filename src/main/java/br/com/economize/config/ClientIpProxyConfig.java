@@ -6,8 +6,9 @@ import org.springframework.context.annotation.Configuration;
 import java.util.List;
 
 /**
- * Leva a propriedade {@code economize.client-ip.trusted-proxies} até o
- * {@link ClientIpResolver}, uma vez, na subida.
+ * Leva as propriedades {@code economize.client-ip.trusted-proxies} e
+ * {@code economize.client-ip.trusted-edge-hops} até o {@link ClientIpResolver},
+ * uma vez, na subida.
  *
  * <p>O resolvedor é estático de propósito (um só, para o limite de requisições
  * e para o login), e a lista embutida nele são as faixas da Cloudflare. A
@@ -20,7 +21,9 @@ import java.util.List;
 public class ClientIpProxyConfig {
 
     public ClientIpProxyConfig(
-            @Value("${economize.client-ip.trusted-proxies:}") List<String> trustedProxies) {
+            @Value("${economize.client-ip.trusted-proxies:}") List<String> trustedProxies,
+            @Value("${economize.client-ip.trusted-edge-hops:1}") int trustedEdgeHops) {
         ClientIpResolver.configureTrustedProxies(trustedProxies);
+        ClientIpResolver.configureTrustedEdgeHops(trustedEdgeHops);
     }
 }

@@ -56,15 +56,16 @@ class ClientIpResolverTest {
         assertThat(real).isEqualTo("203.0.113.7");
         assertThat(resolve(PROXY, "9.9.9.9, 203.0.113.7, 172.71.10.5, 10.0.0.9")).isEqualTo(real);
         // forjar uma "borda" ou uma rede interna à esquerda também não adianta
+        assertThat(resolve(PROXY, "172.71.1.1, 203.0.113.7, 172.71.10.5, 10.0.0.9")).isEqualTo(real);
         assertThat(resolve(PROXY, "172.71.1.1, 10.0.0.1, 203.0.113.7, 172.71.10.5, 10.0.0.9")).isEqualTo(real);
         assertThat(resolve(PROXY, "evil.example, 203.0.113.7, 172.71.10.5, 10.0.0.9")).isEqualTo(real);
     }
 
     @Test
-    @DisplayName("cadeia só com bordas e rede interna cai no soquete")
-    void onlyEdgesAndInternalFallsBackToTheSocket() {
+    @DisplayName("cadeia só com a borda e rede interna cai no soquete")
+    void onlyEdgeAndInternalFallsBackToTheSocket() {
         assertThat(resolve(PROXY, "172.71.10.5, 10.0.0.9")).isEqualTo(PROXY);
-        assertThat(resolve(PROXY, "104.22.1.9, 172.71.10.5, 10.0.0.5, 10.0.0.9")).isEqualTo(PROXY);
+        assertThat(resolve(PROXY, "10.0.0.1, 172.71.10.5, 10.0.0.5, 10.0.0.9")).isEqualTo(PROXY);
         assertThat(resolve(PROXY, "2606:4700::1, 10.0.0.9")).isEqualTo(PROXY);
     }
 
@@ -75,6 +76,8 @@ class ClientIpResolverTest {
         assertThat(resolve("2606:4700::1", "203.0.113.7, 10.0.0.5")).isEqualTo("203.0.113.7");
         // sem cadeia, vale o próprio soquete
         assertThat(resolve("172.71.10.5", null)).isEqualTo("172.71.10.5");
+        // o soquete É a borda: o salto seguinte já é o cliente, mesmo em faixa da Cloudflare
+        assertThat(resolve("172.71.10.5", "9.9.9.9, 104.16.5.5")).isEqualTo("104.16.5.5");
     }
 
     @Test
@@ -116,13 +119,44 @@ class ClientIpResolverTest {
     }
 
     @Test
-    @DisplayName("limite conhecido: cliente que sai por faixa da Cloudflare é lido como borda")
-    void clientInsideCloudflareRangeIsSkipped() {
-        // WARP/Workers saem por endereço das faixas publicadas: o salto do
-        // cliente é pulado e vale o que ele mesmo escreveu à esquerda, ou o
-        // soquete. Fixado aqui para que mudar essa regra seja decisão, não acaso
-        assertThat(resolve(PROXY, "9.9.9.9, 104.16.5.5, 172.71.10.5, 10.0.0.9")).isEqualTo("9.9.9.9");
-        assertThat(resolve(PROXY, "104.16.5.5, 172.71.10.5, 10.0.0.9")).isEqualTo(PROXY);
+    @DisplayName("só UMA borda é pulada: cliente em faixa da Cloudflare (WARP) é o cliente")
+    void onlyOneEdgeIsSkipped() {
+        // WARP/Workers saem por endereço das faixas publicadas. Pulando toda
+        // faixa da Cloudflare, o salto dele sumiria e valeria o 9.9.9.9 que
+        // ele mesmo escreveu: um balde de login à escolha
+        assertThat(resolve(PROXY, "9.9.9.9, 104.16.5.5, 172.71.10.5, 10.0.0.9")).isEqualTo("104.16.5.5");
+        assertThat(resolve(PROXY, "104.16.5.5, 172.71.10.5, 10.0.0.9")).isEqualTo("104.16.5.5");
+        // o forjado à esquerda não muda nada
+        assertThat(resolve(PROXY, "1.1.1.1, 172.64.0.9, 104.16.5.5, 172.71.10.5, 10.0.0.9")).isEqualTo("104.16.5.5");
+        // interno entre a borda e o cliente continua sendo pulado
+        assertThat(resolve(PROXY, "9.9.9.9, 104.16.5.5, 10.0.0.2, 172.71.10.5, 10.0.0.9")).isEqualTo("104.16.5.5");
+        assertThat(resolve(PROXY, "9.9.9.9, 2606:4700::5, 2400:cb00::1, 10.0.0.9")).isEqualTo(address("2606:4700::5"));
+    }
+
+    @Test
+    @DisplayName("o número de bordas é configurável: duas, zero, e negativo não sobe")
+    void configurableEdgeHops() {
+        try {
+            new ClientIpProxyConfig(List.of(), 2);
+            assertThat(resolve(PROXY, "9.9.9.9, 203.0.113.7, 104.16.5.5, 172.71.10.5, 10.0.0.9"))
+                    .isEqualTo("203.0.113.7");
+            // a terceira já é cliente
+            assertThat(resolve(PROXY, "9.9.9.9, 104.22.1.1, 104.16.5.5, 172.71.10.5, 10.0.0.9"))
+                    .isEqualTo("104.22.1.1");
+            // soquete em faixa da Cloudflare gasta uma das duas
+            assertThat(resolve("172.71.10.5", "9.9.9.9, 104.22.1.1, 104.16.5.5")).isEqualTo("104.22.1.1");
+
+            // zero: nenhuma borda é proxy, vale o primeiro não interno
+            ClientIpResolver.configureTrustedEdgeHops(0);
+            assertThat(resolve(PROXY, "203.0.113.7, 172.71.10.5, 10.0.0.9")).isEqualTo("172.71.10.5");
+
+            assertThatThrownBy(() -> ClientIpResolver.configureTrustedEdgeHops(-1))
+                    .isInstanceOf(IllegalArgumentException.class);
+            assertThat(resolve(PROXY, "203.0.113.7, 172.71.10.5, 10.0.0.9")).isEqualTo("172.71.10.5");
+        } finally {
+            ClientIpResolver.configureTrustedEdgeHops(ClientIpResolver.DEFAULT_EDGE_HOPS);
+        }
+        assertThat(resolve(PROXY, "9.9.9.9, 104.16.5.5, 172.71.10.5, 10.0.0.9")).isEqualTo("104.16.5.5");
     }
 
     @Test
@@ -130,7 +164,7 @@ class ClientIpResolverTest {
     void configurableRanges() {
         try {
             // pelo mesmo caminho da propriedade economize.client-ip.trusted-proxies
-            new ClientIpProxyConfig(List.of(" 198.51.100.0/24 ", "", "2001:db8:ff::/48", "192.0.2.7"));
+            new ClientIpProxyConfig(List.of(" 198.51.100.0/24 ", "", "2001:db8:ff::/48", "192.0.2.7"), 1);
 
             assertThat(resolve(PROXY, "203.0.113.7, 198.51.100.200, 10.0.0.9")).isEqualTo("203.0.113.7");
             assertThat(resolve(PROXY, "203.0.113.7, 2001:db8:ff:1::1, 10.0.0.9")).isEqualTo("203.0.113.7");
