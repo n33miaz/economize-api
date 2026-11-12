@@ -25,7 +25,14 @@ import java.util.regex.Pattern;
 @Component
 public class OfxParser implements StatementParserStrategy {
 
-    private static final Pattern STMTTRN = Pattern.compile("<STMTTRN>(.*?)</STMTTRN>", Pattern.DOTALL);
+    /*
+     * Os blocos e o saldo são achados com indexOf, não com regex: o antigo
+     * "<STMTTRN>(.*?)</STMTTRN>" com find() recomeçava a varredura em cada
+     * abertura sem fecho e ia até o fim do arquivo — 200 mil aberturas soltas
+     * em 2 MB eram dezenas de bilhões de passos, prendendo a thread de CPU.
+     */
+    private static final String STMTTRN_ABRE = "<STMTTRN>";
+    private static final String STMTTRN_FECHA = "</STMTTRN>";
     private static final Pattern TRNTYPE = Pattern.compile("<TRNTYPE>([^<\\r\\n]+)");
     private static final Pattern DTPOSTED = Pattern.compile("<DTPOSTED>([^<\\r\\n\\[]+)");
     private static final Pattern TRNAMT = Pattern.compile("<TRNAMT>([^<\\r\\n]+)");
@@ -46,8 +53,9 @@ public class OfxParser implements StatementParserStrategy {
      * as tags. Sem os limites alternativos, o bloco engoliria o arquivo
      * inteiro e o `BALAMT` capturado poderia ser o do `AVAILBAL`.
      */
-    private static final Pattern LEDGERBAL = Pattern.compile(
-            "<LEDGERBAL>(.*?)(?:</LEDGERBAL>|<AVAILBAL>|</STMTRS>|</CCSTMTRS>)", Pattern.DOTALL);
+    private static final String LEDGERBAL_ABRE = "<LEDGERBAL>";
+    private static final List<String> LEDGERBAL_FECHOS =
+            List.of("</LEDGERBAL>", "<AVAILBAL>", "</STMTRS>", "</CCSTMTRS>");
     private static final Pattern BALAMT = Pattern.compile("<BALAMT>([^<\\r\\n]+)");
     private static final Pattern DTASOF = Pattern.compile("<DTASOF>([^<\\r\\n\\[]+)");
 
@@ -61,9 +69,18 @@ public class OfxParser implements StatementParserStrategy {
         String content = readAll(input);
         List<ParsedTransaction> result = new ArrayList<>();
         int ignoradasSemData = 0;
-        Matcher matcher = STMTTRN.matcher(content);
-        while (matcher.find()) {
-            String block = matcher.group(1);
+        int pos = 0;
+        while (true) {
+            // Mesmo resultado da regex antiga, em uma passada só: se a abertura
+            // atual não tem fecho adiante, nenhuma abertura posterior terá, e
+            // a leitura para em vez de varrer o resto do arquivo outra vez.
+            int abre = content.indexOf(STMTTRN_ABRE, pos);
+            if (abre < 0) break;
+            int inicio = abre + STMTTRN_ABRE.length();
+            int fecha = content.indexOf(STMTTRN_FECHA, inicio);
+            if (fecha < 0) break;
+            pos = fecha + STMTTRN_FECHA.length();
+            String block = content.substring(inicio, fecha);
             String fitId = extract(FITID, block);
             String amountRaw = extract(TRNAMT, block);
             if (fitId == null || amountRaw == null) continue;
@@ -110,13 +127,13 @@ public class OfxParser implements StatementParserStrategy {
     @Override
     public StatementBalance parseBalance(InputStream input) {
         String content = readAll(input);
-        Matcher bloco = LEDGERBAL.matcher(content);
-        if (!bloco.find()) return null;
-        String valor = extract(BALAMT, bloco.group(1));
+        String bloco = blocoDeSaldo(content);
+        if (bloco == null) return null;
+        String valor = extract(BALAMT, bloco);
         if (valor == null) return null;
         try {
             BigDecimal amount = new BigDecimal(valor.trim());
-            String quando = extract(DTASOF, bloco.group(1));
+            String quando = extract(DTASOF, bloco);
             OffsetDateTime asOf = parseDate(quando);
             if (asOf == null) {
                 // Saldo sem data não pode disputar com saldos datados: tratá-lo
@@ -203,6 +220,26 @@ public class OfxParser implements StatementParserStrategy {
                 ? Charset.forName("windows-1252")
                 : StandardCharsets.UTF_8;
         return new String(bytes, charset);
+    }
+
+    /**
+     * O conteúdo do primeiro {@code <LEDGERBAL>} até o fecho mais próximo
+     * entre os aceitos (ver {@link #LEDGERBAL_FECHOS}), ou nulo.
+     *
+     * <p>Equivale à regex lazy que estava aqui, sem o custo quadrático dela:
+     * se a primeira abertura não tem fecho adiante, as seguintes também não
+     * têm, então não há por que tentar cada uma varrendo o arquivo até o fim.
+     */
+    private String blocoDeSaldo(String content) {
+        int abre = content.indexOf(LEDGERBAL_ABRE);
+        if (abre < 0) return null;
+        int inicio = abre + LEDGERBAL_ABRE.length();
+        int fim = -1;
+        for (String fecho : LEDGERBAL_FECHOS) {
+            int i = content.indexOf(fecho, inicio);
+            if (i >= 0 && (fim < 0 || i < fim)) fim = i;
+        }
+        return fim < 0 ? null : content.substring(inicio, fim);
     }
 
     private String extract(Pattern pattern, String text) {
