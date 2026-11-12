@@ -340,7 +340,7 @@ public class RefundReconciliationService {
 
     /** Linha que já saiu das somas por outro motivo não entra na varredura. */
     private static boolean foraDaVarredura(BankTransaction tx) {
-        return tx.isIgnored() || tx.isRefunded() || tx.isInternalTransfer();
+        return !tx.countsInTotals();
     }
 
     /**

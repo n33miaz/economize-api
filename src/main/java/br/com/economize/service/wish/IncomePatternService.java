@@ -475,7 +475,7 @@ public class IncomePatternService {
 
         List<PurchaseAdvisor.PurchaseRecord> result = new ArrayList<>();
         for (BankTransaction tx : transactions) {
-            if (tx.isIgnored() || tx.isInternalTransfer() || tx.isRefunded()) continue;
+            if (!tx.countsInTotals()) continue;
             if (tx.getAmount() == null || tx.getAmount().signum() >= 0) continue;
             boolean isGrocery = (tx.getCategoryId() != null && categoryIds.contains(tx.getCategoryId()))
                     || matchesGroceryKeyword(tx.getNormalizedDescription());

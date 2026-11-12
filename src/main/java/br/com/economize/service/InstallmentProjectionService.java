@@ -85,7 +85,7 @@ public class InstallmentProjectionService {
         Map<String, List<Seen>> grupos = new LinkedHashMap<>();
         for (BankTransaction tx : bankTransactionRepository
                 .findAllByUserIdOrderByDateDesc(user.getId())) {
-            if (tx.isIgnored() || tx.isRefunded() || tx.isInternalTransfer()) continue;
+            if (!tx.countsInTotals()) continue;
             if (tx.getAmount().signum() >= 0) continue;
             DebtClassifier.DebtSignal sinal = DebtClassifier.classify(tx.getDescription());
             if (sinal.installment() == null || sinal.total() == null) continue;
