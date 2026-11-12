@@ -174,7 +174,7 @@ class WatchmanServiceTest {
         verify(bankTransactionRepository).clearIgnored(user.getId(), ids);
 
         desfaz(SweepRun.Kind.REFUND, ids);
-        verify(bankTransactionRepository).clearRefund(user.getId(), ids);
+        verify(bankTransactionRepository).releaseRefunds(user.getId(), ids);
 
         desfaz(SweepRun.Kind.FAMILY_TRANSFER, ids);
         verify(bankTransactionRepository).clearFamilyTransfer(user.getId(), ids);

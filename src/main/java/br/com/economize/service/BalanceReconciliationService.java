@@ -1,7 +1,6 @@
 package br.com.economize.service;
 
 import br.com.economize.exception.ResourceNotFoundException;
-import br.com.economize.model.BankTransaction;
 import br.com.economize.model.ConnectorAccount;
 import br.com.economize.model.User;
 import br.com.economize.repository.BankTransactionRepository;
@@ -15,7 +14,9 @@ import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -77,15 +78,31 @@ public class BalanceReconciliationService {
                 .orElseThrow(() -> new ResourceNotFoundException("Usuário não encontrado"));
         List<ConnectorAccount> contas = accountRepository
                 .findAllByUserIdOrderByNameAsc(user.getId());
-        List<BankTransaction> todas = bankTransactionRepository
-                .findAllByUserIdOrderByDateDesc(user.getId());
+
+        // O extrato NÃO é carregado. Até 12/11/2026 esta conferência lia todos
+        // os lançamentos do usuário e filtrava em memória — a cada abertura do
+        // extrato, num servidor de 512 MB, e mais caro a cada mês de uso. As
+        // duas perguntas que ela faz ao extrato ("teve movimento?", "quanto
+        // entrou depois da leitura?") o banco responde pelo índice de conta e
+        // data, devolvendo um número
+        //
+        // "Teve movimento" só é perguntado de conta com saldo ZERO, e a janela
+        // é a mesma para todas: uma consulta resolve o conjunto
+        List<UUID> zeradas = contas.stream()
+                .filter(BalanceReconciliationService::examinavel)
+                .filter(c -> c.getReportedBalance() != null && c.getReportedBalance().signum() == 0)
+                .map(ConnectorAccount::getId)
+                .toList();
+        Set<UUID> comMovimento = zeradas.isEmpty() ? Set.of() : new HashSet<>(
+                bankTransactionRepository.findAccountsWithMovementSince(user.getId(), zeradas,
+                        agora.minusDays(DIAS_DE_MOVIMENTO), Materiality.PISO_DE_AVISO));
 
         List<Finding> achados = new ArrayList<>();
+        // Uma soma por conta, de propósito: são poucas contas por usuário e
+        // cada uma tem a própria data de leitura como corte
         for (ConnectorAccount conta : contas) {
-            // Origem desvinculada não sincroniza mais: cobrar saldo dela seria
-            // cobrar de quem já avisou que parou
-            if (conta.getPluggyItemId() == null) continue;
-            achados.addAll(examinar(conta, todas, agora));
+            if (!examinavel(conta)) continue;
+            achados.addAll(examinar(user.getId(), conta, comMovimento, agora));
         }
         log.info("Conferência de saldo: {} conta(s) ligada(s), {} aviso(s), user={}",
                 contas.stream().filter(c -> c.getPluggyItemId() != null).count(),
@@ -93,12 +110,17 @@ public class BalanceReconciliationService {
         return new Report(contas.size(), achados);
     }
 
-    private List<Finding> examinar(ConnectorAccount conta, List<BankTransaction> todas,
+    /**
+     * Origem desvinculada não sincroniza mais: cobrar saldo dela seria cobrar
+     * de quem já avisou que parou.
+     */
+    private static boolean examinavel(ConnectorAccount conta) {
+        return conta.getPluggyItemId() != null;
+    }
+
+    private List<Finding> examinar(UUID userId, ConnectorAccount conta, Set<UUID> comMovimento,
                                    OffsetDateTime agora) {
         List<Finding> achados = new ArrayList<>();
-        List<BankTransaction> daConta = todas.stream()
-                .filter(tx -> conta.getId().equals(tx.getAccountId()))
-                .toList();
         BigDecimal saldo = conta.getReportedBalance();
         OffsetDateTime lidoEm = conta.getReportedBalanceAt();
 
@@ -116,9 +138,7 @@ public class BalanceReconciliationService {
         // Movimento com PISO (EC-212): um centavo de rendimento nos últimos
         // trinta dias não autoriza dizer que a leitura do saldo falhou — e o
         // aviso que aparece por centavo ensina o usuário a ignorar avisos
-        boolean temMovimento = daConta.stream()
-                .filter(tx -> tx.getDate().isAfter(agora.minusDays(DIAS_DE_MOVIMENTO)))
-                .anyMatch(tx -> Materiality.vale(tx.getAmount()));
+        boolean temMovimento = comMovimento.contains(conta.getId());
         if (saldo.signum() == 0 && temMovimento) {
             // O caso do concorrente, ao pé da letra
             achados.add(new Finding(conta.getId(), conta.getName(), Kind.ZERO_COM_MOVIMENTO,
@@ -141,11 +161,10 @@ public class BalanceReconciliationService {
             // leitura ainda não está no saldo informado. Não é erro — é a
             // diferença entre o que o banco disse e o que já se sabe hoje, e
             // dizê-la é melhor do que mostrar um número e calar
-            BigDecimal depois = daConta.stream()
-                    .filter(tx -> tx.getDate().isAfter(lidoEm))
-                    .filter(tx -> !tx.isIgnored())
-                    .map(BankTransaction::getAmount)
-                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+            BigDecimal somado = bankTransactionRepository
+                    .sumByAccountAfter(userId, conta.getId(), lidoEm);
+            // Soma de nenhuma linha é nulo no banco, e zero para quem lê
+            BigDecimal depois = somado == null ? BigDecimal.ZERO : somado;
             // O caso dos treze centavos do concorrente, ao pé da letra: um
             // movimento de R$ 0,13 depois da leitura é verdade e não é notícia
             if (Materiality.vale(depois)) {
