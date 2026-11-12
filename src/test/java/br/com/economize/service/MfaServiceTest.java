@@ -5,6 +5,7 @@ import br.com.economize.dto.auth.MfaSetupResponse;
 import br.com.economize.dto.auth.MfaStatusResponse;
 import br.com.economize.model.User;
 import br.com.economize.model.MfaRecoveryCode;
+import br.com.economize.model.UserMfa;
 import br.com.economize.repository.MfaRecoveryCodeRepository;
 import br.com.economize.repository.TrustedDeviceRepository;
 import br.com.economize.repository.UserMfaRepository;
@@ -206,6 +207,24 @@ class MfaServiceTest {
         assertThat(segunda).isZero();
         entityManager.clear();
         assertThat(recoveryCodeRepository.findById(code.getId()).orElseThrow().getUsedAt()).isNotNull();
+    }
+
+    @Test
+    @DisplayName("O mesmo passo TOTP só é consumido uma vez; um passo posterior entra")
+    void consumesTotpStepOnlyOnceAndAcceptsNewerStep() {
+        UserMfa mfa = mfaRepository.save(UserMfa.builder()
+                .user(ana).secretCipher("envelope-de-teste").enabled(true).build());
+        entityManager.flush();
+
+        int primeira = mfaRepository.consumeStepIfNewer(mfa.getId(), 100L);
+        int repetida = mfaRepository.consumeStepIfNewer(mfa.getId(), 100L);
+        int posterior = mfaRepository.consumeStepIfNewer(mfa.getId(), 101L);
+
+        assertThat(primeira).isOne();
+        assertThat(repetida).isZero();
+        assertThat(posterior).isOne();
+        entityManager.clear();
+        assertThat(mfaRepository.findById(mfa.getId()).orElseThrow().getLastUsedStep()).isEqualTo(101L);
     }
 
     @Test

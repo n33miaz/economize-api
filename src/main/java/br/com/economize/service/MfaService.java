@@ -196,11 +196,9 @@ public class MfaService {
 
         Long step = TotpGenerator.matchingStep(secret, code, now());
         if (step == null) return consumeRecoveryCode(user, code);
-        // Replay: dentro dos 30 segundos de vida, o mesmo código só entra uma vez
-        if (mfa.getLastUsedStep() != null && step <= mfa.getLastUsedStep()) return false;
-        mfa.setLastUsedStep(step);
-        mfaRepository.save(mfa);
-        return true;
+        // Não basta comparar na entidade: duas requisições podem ler o mesmo
+        // passo antes de qualquer save. O UPDATE condicional decide a corrida.
+        return mfaRepository.consumeStepIfNewer(mfa.getId(), step) == 1;
     }
 
     /** Novo lote de códigos; o lote anterior deixa de valer. */
