@@ -114,9 +114,19 @@ public interface BankTransactionRepository extends JpaRepository<BankTransaction
     // fatura não é despesa (a despesa foi a compra) nem o crédito que entra no
     // cartão é receita. Sem esse filtro, conectar cartão + conta corrente
     // dobrava "Despesas do mês" e inventava uma receita do tamanho da fatura.
+    //
+    // O total é o LÍQUIDO de cada linha (valor + o que dela voltou, V40) com o
+    // mesmo piso de BankTransaction.getNetAmount(): o líquido nunca troca de
+    // sinal. Compra de 100 com 120 abatidos (dado de antes do teto na
+    // varredura) vale zero, e não +20 abatendo as outras compras da categoria.
+    // O piso é por LINHA, dentro do sum — em volta da soma ele não seguraria
+    // nada. As duas consultas de soma abaixo repetem o mesmo case.
     @Query("""
             select t.categoryId as categoryId, t.type as type,
-                   sum(t.amount + t.refundedAmount) as total, count(t) as txCount
+                   sum(case when t.amount < 0 and t.amount + t.refundedAmount > 0 then 0
+                            when t.amount > 0 and t.amount + t.refundedAmount < 0 then 0
+                            else t.amount + t.refundedAmount end) as total,
+                   count(t) as txCount
             from BankTransaction t
             where t.user.id = :userId and t.date >= :start and t.date < :end
               and t.internalTransfer = false
@@ -156,7 +166,10 @@ public interface BankTransactionRepository extends JpaRepository<BankTransaction
 
     @Query("""
             select t.categoryId as categoryId, t.type as type,
-                   sum(t.amount + t.refundedAmount) as total, count(t) as txCount
+                   sum(case when t.amount < 0 and t.amount + t.refundedAmount > 0 then 0
+                            when t.amount > 0 and t.amount + t.refundedAmount < 0 then 0
+                            else t.amount + t.refundedAmount end) as total,
+                   count(t) as txCount
             from BankTransaction t
             where t.user.id = :userId and t.date >= :start and t.date < :end
               and t.internalTransfer = false

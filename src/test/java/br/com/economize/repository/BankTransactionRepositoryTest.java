@@ -286,4 +286,73 @@ class BankTransactionRepositoryTest {
         assertThat(lida.getRefundedAmount()).isEqualByComparingTo("100.00");
         assertThat(lida.getNetAmount()).isEqualByComparingTo("0.00");
     }
+
+    // ------------------------------------- o líquido com piso em zero no banco
+    //
+    // Com o teto na varredura o caso deixa de nascer, mas linha gravada antes
+    // dele pode existir: compra de 100 com 120 abatidos. Em Java,
+    // getNetAmount() dá zero. A consulta fazia a conta inline SEM o piso e
+    // devolvia +20 dentro da despesa — abatendo 20 das OUTRAS compras da
+    // categoria. As duas contas têm de dizer o mesmo.
+
+    /** Grava o estado antigo direto: o UPDATE do serviço não deixa mais passar. */
+    private BankTransaction compraComAbate(String valor, String abatido) {
+        BankTransaction compra = transacao(dono, valor, JULHO_10);
+        compra.setRefundedAmount(new BigDecimal(abatido));
+        return repository.saveAndFlush(compra);
+    }
+
+    @Test
+    @DisplayName("Compra com mais estorno do que valor soma zero, e não despesa positiva")
+    void somaTemPisoEmZero() {
+        BankTransaction antiga = compraComAbate("-100.00", "120.00");
+
+        var totais = repository.sumByCategory(dono.getId(),
+                JULHO_10.minusDays(9), JULHO_10.plusDays(1));
+
+        assertThat(totais).hasSize(1);
+        assertThat(totais.get(0).getTotal()).isEqualByComparingTo(antiga.getNetAmount());
+        assertThat(totais.get(0).getTotal()).isEqualByComparingTo("0.00");
+    }
+
+    @Test
+    @DisplayName("O piso vale por LINHA: o excesso de uma compra não abate a vizinha")
+    void pisoPorLinhaNaoPorSoma() {
+        compraComAbate("-100.00", "120.00");
+        transacao(dono, "-50.00", JULHO_10);
+
+        var totais = repository.sumByCategory(dono.getId(),
+                JULHO_10.minusDays(9), JULHO_10.plusDays(1));
+
+        // Piso em volta da soma daria -30; o certo é 0 + (-50)
+        assertThat(totais).hasSize(1);
+        assertThat(totais.get(0).getTotal()).isEqualByComparingTo("-50.00");
+        assertThat(totais.get(0).getTxCount()).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("O estorno parcial comum continua valendo o líquido")
+    void parcialComumSegueLiquido() {
+        BankTransaction compra = compraComAbate("-604.91", "18.50");
+
+        var totais = repository.sumByCategory(dono.getId(),
+                JULHO_10.minusDays(9), JULHO_10.plusDays(1));
+
+        assertThat(totais.get(0).getTotal()).isEqualByComparingTo("-586.41");
+        assertThat(totais.get(0).getTotal()).isEqualByComparingTo(compra.getNetAmount());
+    }
+
+    @Test
+    @DisplayName("A visão da casa tem o mesmo piso")
+    void visaoDaCasaTemOMesmoPiso() {
+        compraComAbate("-100.00", "120.00");
+        transacao(dono, "-50.00", JULHO_10);
+
+        var totais = repository.sumByCategoryShared(dono.getId(),
+                JULHO_10.minusDays(9), JULHO_10.plusDays(1),
+                List.of(), List.of(), true);
+
+        assertThat(totais).hasSize(1);
+        assertThat(totais.get(0).getTotal()).isEqualByComparingTo("-50.00");
+    }
 }
