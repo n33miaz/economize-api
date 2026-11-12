@@ -27,6 +27,9 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 
+import java.time.OffsetDateTime;
+import java.time.ZoneId;
+import java.time.Clock;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.YearMonth;
@@ -80,7 +83,7 @@ class IncomePatternServiceTest {
     void setUp() {
         service = new IncomePatternService(incomeSourceRepository, recurringSeriesRepository, linkRepository,
                 bankTransactionRepository, connectorAccountRepository, purchasePreferenceRepository,
-                categoryRepository, userRepository, new PurchaseAdvisor());
+                categoryRepository, userRepository, new PurchaseAdvisor(), Clock.systemUTC());
 
         User user = User.builder().id(USER_ID).email(EMAIL).build();
         when(userRepository.findByEmail(EMAIL)).thenReturn(Optional.of(user));
@@ -585,5 +588,22 @@ class IncomePatternServiceTest {
     private BankTransaction credit(UUID id, LocalDate date, String amount, boolean ignored) {
         return BankTransaction.builder().id(id).type("CREDIT").amount(new BigDecimal(amount))
                 .date(date.atStartOfDay().atOffset(ZoneOffset.UTC)).ignored(ignored).build();
+    }
+
+    @Test
+    void oHojeDaAnaliseSegueAZonaFinanceira() {
+        new IncomePatternService(incomeSourceRepository, recurringSeriesRepository, linkRepository,
+                bankTransactionRepository, connectorAccountRepository, purchasePreferenceRepository,
+                categoryRepository, userRepository, new PurchaseAdvisor(),
+                Clock.fixed(OffsetDateTime.parse("2026-03-31T23:30:00-03:00").toInstant(),
+                        ZoneId.of("America/Sao_Paulo"))).analyze(EMAIL);
+
+        // a janela das compras de mercado fecha (exclusiva) no dia seguinte a HOJE
+        org.mockito.ArgumentCaptor<OffsetDateTime> fim = org.mockito.ArgumentCaptor.forClass(OffsetDateTime.class);
+        org.mockito.Mockito.verify(bankTransactionRepository, org.mockito.Mockito.atLeastOnce())
+                .findAllByUserIdAndDateGreaterThanEqualAndDateLessThanOrderByDateDesc(
+                        org.mockito.ArgumentMatchers.eq(USER_ID), org.mockito.ArgumentMatchers.any(), fim.capture());
+        org.assertj.core.api.Assertions.assertThat(fim.getAllValues())
+                .containsOnly(OffsetDateTime.parse("2026-04-01T00:00:00Z"));
     }
 }

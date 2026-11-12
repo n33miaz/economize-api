@@ -60,7 +60,7 @@ class AnalyticsDailyTotalsTest {
         user = User.builder().id(UUID.randomUUID()).email(EMAIL).name("Dono").password("x").build();
         lenient().when(userRepository.findByEmail(EMAIL)).thenReturn(Optional.of(user));
         service = new AnalyticsService(bankTransactionRepository, categoryRepository,
-                userRepository, cycleCaveatService);
+                userRepository, cycleCaveatService, java.time.Clock.systemUTC());
     }
 
     @Test

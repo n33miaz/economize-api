@@ -19,6 +19,8 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 
+import java.time.ZoneId;
+import java.time.Clock;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
@@ -75,7 +77,7 @@ class InvestmentMovementServiceTest {
                         .institution("Banco Inter").type(ConnectorAccount.AccountType.BANK).build()));
 
         service = new InvestmentMovementService(transactionRepository, categoryRepository, accountRepository,
-                userRepository, 12);
+                userRepository, 12, Clock.systemUTC());
     }
 
     private BankTransaction tx(String descricao, String valor, UUID categoryId, String legacy, UUID accountId,
@@ -194,5 +196,20 @@ class InvestmentMovementServiceTest {
         assertThat(InvestmentMovementService.classify(
                 tx("Estorno de resgate", "-100.00", INVESTIMENTOS, "INVESTMENT", null, false), "estorno de resgate"))
                 .isEqualTo("OTHER");
+    }
+
+    @Test
+    @DisplayName("FUSO: às 23h30 de 31/03 no Brasil a janela termina em 31/03 e ainda é a de março")
+    void janelaSegueAZonaFinanceira() {
+        when(transactionRepository.findAllByUserIdAndDateGreaterThanEqualAndDateLessThanOrderByDateDesc(
+                eq(user.getId()), any(), any())).thenReturn(List.of());
+
+        InvestmentResponses.Movements m = new InvestmentMovementService(transactionRepository,
+                categoryRepository, accountRepository, userRepository, 12,
+                Clock.fixed(OffsetDateTime.parse("2026-03-31T23:30:00-03:00").toInstant(),
+                        ZoneId.of("America/Sao_Paulo"))).movements(EMAIL, 1);
+
+        assertThat(m.to()).isEqualTo(LocalDate.of(2026, 3, 31));
+        assertThat(m.from()).isEqualTo(LocalDate.of(2026, 3, 1));
     }
 }

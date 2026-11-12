@@ -57,6 +57,8 @@ public class AnalyticsService {
     private final CategoryRepository categoryRepository;
     private final UserRepository userRepository;
     private final CycleCaveatService cycleCaveatService;
+    // "Hoje" na zona financeira (FinancialClockConfig), não na do servidor
+    private final java.time.Clock clock;
 
     public MonthlyAnalyticsResponse analyze(String email, AnalysisWindow window) {
         User user = requireUser(email);
@@ -88,7 +90,7 @@ public class AnalyticsService {
                 cycleCaveatService.caveatsFor(
                         user.getId(), window,
                         previous.income.signum() > 0 || previous.expense.signum() > 0,
-                        LocalDate.now(ZoneOffset.UTC)),
+                        LocalDate.now(clock)),
                 lastTransactionDate(user.getId()));
     }
 

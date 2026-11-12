@@ -26,6 +26,9 @@ import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.reactive.server.WebTestClient;
 
+import org.junit.jupiter.api.BeforeEach;
+import java.time.ZoneId;
+import java.time.Clock;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
@@ -325,6 +328,16 @@ class FamilyControllerTest {
         assertThat(captor.getValue().monthLabel()).isEqualTo("2026-07");
     }
 
+    @MockitoBean
+    private Clock clock;
+
+    // 23h30 de 31/03 em São Paulo: o servidor em UTC já está em abril
+    @BeforeEach
+    void fixarRelogioFinanceiro() {
+        when(clock.instant()).thenReturn(OffsetDateTime.parse("2026-03-31T23:30:00-03:00").toInstant());
+        when(clock.getZone()).thenReturn(ZoneId.of("America/Sao_Paulo"));
+    }
+
     @Test
     @DisplayName("GET /family/analytics/monthly - sem parâmetro usa o mês corrente; janela torta é 400")
     void monthlyWindowRules() {
@@ -336,7 +349,7 @@ class FamilyControllerTest {
                 .expectStatus().isOk();
         ArgumentCaptor<AnalysisWindow> captor = ArgumentCaptor.forClass(AnalysisWindow.class);
         verify(familyAnalyticsService).monthly(eq(EMAIL), captor.capture());
-        assertThat(captor.getValue().monthLabel()).isEqualTo(YearMonth.now(ZoneOffset.UTC).toString());
+        assertThat(captor.getValue().monthLabel()).isEqualTo("2026-03");
 
         webTestClient.get().uri("/api/v1/family/analytics/monthly?month=2026-07&start=2026-07-12&end=2026-08-12")
                 .header(HttpHeaders.AUTHORIZATION, bearerToken())

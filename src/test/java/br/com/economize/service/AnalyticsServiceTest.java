@@ -15,6 +15,9 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import org.mockito.Spy;
+import java.time.ZoneId;
+import java.time.Clock;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
@@ -49,8 +52,16 @@ class AnalyticsServiceTest {
     @Mock
     private CycleCaveatService cycleCaveatService;
 
+    // UTC como os dados destes testes; a virada do fuso tem teste próprio
+    @Spy
+    private Clock clock = Clock.systemUTC();
+
     @InjectMocks
     private AnalyticsService service;
+
+    // 23h30 do dia 31 em São Paulo já é 1º de abril no servidor (02h30 UTC)
+    private static final Clock NOITE_DE_31_DE_MARCO = Clock.fixed(
+            OffsetDateTime.parse("2026-03-31T23:30:00-03:00").toInstant(), ZoneId.of("America/Sao_Paulo"));
 
     private final User user = User.builder()
             .id(UUID.randomUUID()).name("Ana").email(EMAIL).password("x").build();
@@ -411,5 +422,18 @@ class AnalyticsServiceTest {
         child.setSystemKey(null);
         child.setParent(parent);
         return child;
+    }
+
+    @Test
+    void asRessalvasDoCicloUsamOHojeDaZonaFinanceira() {
+        when(userRepository.findByEmail(EMAIL)).thenReturn(Optional.of(user));
+
+        new AnalyticsService(bankTransactionRepository, categoryRepository, userRepository,
+                cycleCaveatService, NOITE_DE_31_DE_MARCO)
+                .analyze(EMAIL, AnalysisWindow.ofMonth(YearMonth.of(2026, 3)));
+
+        org.mockito.Mockito.verify(cycleCaveatService).caveatsFor(
+                org.mockito.ArgumentMatchers.eq(user.getId()), org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.anyBoolean(), org.mockito.ArgumentMatchers.eq(LocalDate.of(2026, 3, 31)));
     }
 }

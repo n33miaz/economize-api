@@ -17,6 +17,10 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 
+import org.mockito.Spy;
+import java.time.OffsetDateTime;
+import java.time.ZoneId;
+import java.time.Clock;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
@@ -48,8 +52,16 @@ class WishProjectionServiceTest {
     @Mock
     private AnalyticsService analyticsService;
 
+    // UTC como os dados destes testes; a virada do fuso tem teste próprio
+    @Spy
+    private Clock clock = Clock.systemUTC();
+
     @InjectMocks
     private WishProjectionService service;
+
+    // 23h30 do dia 31 em São Paulo já é 1º de abril no servidor (02h30 UTC)
+    private static final Clock NOITE_DE_31_DE_MARCO = Clock.fixed(
+            OffsetDateTime.parse("2026-03-31T23:30:00-03:00").toInstant(), ZoneId.of("America/Sao_Paulo"));
 
     @BeforeEach
     void setUp() {
@@ -460,5 +472,20 @@ class WishProjectionServiceTest {
                 .savedAmount(BigDecimal.ZERO)
                 .status(Wish.Status.WISH)
                 .build();
+    }
+
+    @Test
+    void osCiclosFechadosSaemDoHojeDaZonaFinanceira() {
+        new WishProjectionService(incomeSourceRepository, workProfileRepository, analyticsService,
+                NOITE_DE_31_DE_MARCO).baselineFor(USER);
+
+        // às 23h30 de 31/03 março ainda não fechou: o último ciclo completo é fevereiro
+        org.mockito.ArgumentCaptor<br.com.economize.dto.analytics.AnalysisWindow> janelas =
+                org.mockito.ArgumentCaptor.forClass(br.com.economize.dto.analytics.AnalysisWindow.class);
+        org.mockito.Mockito.verify(analyticsService, org.mockito.Mockito.atLeastOnce())
+                .netFor(eq(USER), janelas.capture());
+        org.assertj.core.api.Assertions.assertThat(janelas.getAllValues())
+                .extracting(br.com.economize.dto.analytics.AnalysisWindow::monthLabel)
+                .contains("2026-02").doesNotContain("2026-03");
     }
 }

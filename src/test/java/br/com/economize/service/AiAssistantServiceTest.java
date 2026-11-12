@@ -83,7 +83,8 @@ class AiAssistantServiceTest {
         when(categoryRepository.findVisibleTo(user.getId())).thenReturn(List.of());
 
         service = new AiAssistantService(factory, userRepository,
-                bankTransactionRepository, transactionRepository, categoryRepository);
+                bankTransactionRepository, transactionRepository, categoryRepository,
+                java.time.Clock.systemUTC());
     }
 
     @Test
@@ -224,5 +225,17 @@ class AiAssistantServiceTest {
 
         assertThat(contexto.expense()).isEqualByComparingTo("300.00");
         assertThat(contexto.excludedFromTotals()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("FUSO: às 23h30 de 31/03 no Brasil a janela do contexto termina em 31/03, não em 01/04")
+    void contextWindowEndsOnTheFinancialToday() {
+        var contexto = new AiAssistantService(factory, userRepository, bankTransactionRepository,
+                transactionRepository, categoryRepository,
+                java.time.Clock.fixed(OffsetDateTime.parse("2026-03-31T23:30:00-03:00").toInstant(),
+                        java.time.ZoneId.of("America/Sao_Paulo")))
+                .buildFinancialContext(user, List.of());
+
+        assertThat(contexto.windowEnd()).isEqualTo(java.time.LocalDate.of(2026, 3, 31));
     }
 }
