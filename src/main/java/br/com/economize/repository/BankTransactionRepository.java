@@ -378,18 +378,108 @@ public interface BankTransactionRepository extends JpaRepository<BankTransaction
             + "where t.user.id = :userId and t.id in :ids")
     int clearIgnored(@Param("userId") UUID userId, @Param("ids") Collection<UUID> ids);
 
+    // ------------------------------------------------------------------
+    // O DESFAZER de uma passada do vigia do estorno. Entrada pública:
+    // releaseRefunds. As consultas abaixo dela são as peças.
+    //
+    // Até 12/11/2026 era um UPDATE só, que soltava as linhas da passada e
+    // ZERAVA o abate da compra. Só que o abate é a soma de várias passadas:
+    // compra de 100 com 60 abatidos na passada A e 40 na B, desfeita só a B,
+    // voltava a valer 100 de despesa com o crédito de 60 da A ainda marcado e
+    // ligado a ela — fora da receita e fora do abate, sumido das duas contas.
+    //
+    // O abate de uma compra não é um número que se guarda e se apaga: é o que
+    // os créditos LIGADOS a ela dizem. Então o desfazer solta os créditos da
+    // passada e refaz a conta de cada compra tocada com os que ficaram.
+    // ------------------------------------------------------------------
+
     /**
-     * Solta as duas pernas do par e o vínculo entre elas — e zera o abate do
-     * estorno parcial (V40), que mora na compra: desfazer a passada tem de
-     * devolver a compra ao valor cheio, senão a categoria continuaria menor
-     * sem nenhum crédito explicando por quê.
+     * Desfaz o que uma passada marcou: solta os créditos dela e recalcula as
+     * compras a partir dos créditos que CONTINUAM ligados.
+     *
+     * <p>Para cada compra tocada, depois de soltar:
+     * <ul>
+     *   <li>o abate vira a soma dos créditos ainda ligados, com o teto do
+     *       valor da compra — nunca zero por decreto;</li>
+     *   <li>a marca de estorno INTEIRO só se mantém se o que ficou ligado
+     *       ainda cobre a compra toda. Sem isso a compra volta a contar, pelo
+     *       líquido. A marca nunca é criada aqui, só mantida ou solta.</li>
+     * </ul>
+     *
+     * <p>Roda na transação de quem chama (o desfazer do vigia): soltar o
+     * crédito sem refazer a compra é exatamente o defeito que isto conserta.
+     *
+     * @param ids as linhas que a passada tocou — créditos e compras
+     */
+    @Transactional
+    default void releaseRefunds(UUID userId, Collection<UUID> ids) {
+        if (ids == null || ids.isEmpty()) return;
+        // As compras apontadas pelos créditos têm de ser lidas ANTES de soltar
+        // o vínculo: depois, não há mais como chegar nelas. A passada grava as
+        // duas pontas, então elas já costumam estar em `ids`; isto cobre a
+        // passada antiga que só gravou o crédito
+        java.util.Set<UUID> compras = new java.util.LinkedHashSet<>(ids);
+        compras.addAll(findRefundTargets(userId, ids));
+
+        releaseRefundCredits(userId, ids);
+
+        for (RefundState compra : findRefundStates(userId, compras)) {
+            BigDecimal valor = compra.getAmount().abs();
+            BigDecimal ligado = sumLinkedRefunds(userId, compra.getId());
+            if (ligado == null) ligado = BigDecimal.ZERO;
+            boolean aindaInteiro = compra.getRefunded() && ligado.compareTo(valor) >= 0;
+            setRefundState(userId, compra.getId(), aindaInteiro, ligado.min(valor));
+        }
+    }
+
+    /** As compras para as quais estes créditos apontam. */
+    @Query("select distinct t.refundOfId from BankTransaction t "
+            + "where t.user.id = :userId and t.id in :ids and t.refundOfId is not null")
+    List<UUID> findRefundTargets(@Param("userId") UUID userId, @Param("ids") Collection<UUID> ids);
+
+    /**
+     * Solta os CRÉDITOS: a marca e o vínculo. Só valor positivo — a compra da
+     * mesma lista não é solta por aqui, é recalculada.
      */
     @Modifying
     @Transactional
-    @Query("update BankTransaction t set t.refunded = false, t.refundOfId = null, "
-            + "t.refundedAmount = 0 "
-            + "where t.user.id = :userId and t.id in :ids")
-    int clearRefund(@Param("userId") UUID userId, @Param("ids") Collection<UUID> ids);
+    @Query("update BankTransaction t set t.refunded = false, t.refundOfId = null "
+            + "where t.user.id = :userId and t.id in :ids and t.amount > 0")
+    int releaseRefundCredits(@Param("userId") UUID userId, @Param("ids") Collection<UUID> ids);
+
+    /**
+     * O estado de estorno das COMPRAS da lista. Projeção, e não entidade: o
+     * que se lê aqui vem depois de um UPDATE em massa, e a entidade que já
+     * estivesse no contexto devolveria o valor de antes dele.
+     */
+    @Query("select t.id as id, t.amount as amount, t.refunded as refunded "
+            + "from BankTransaction t "
+            + "where t.user.id = :userId and t.id in :ids and t.amount < 0")
+    List<RefundState> findRefundStates(@Param("userId") UUID userId,
+                                       @Param("ids") Collection<UUID> ids);
+
+    /** Soma dos créditos ainda marcados e ligados a esta compra; nulo se nenhum. */
+    @Query("select sum(t.amount) from BankTransaction t "
+            + "where t.user.id = :userId and t.refundOfId = :compraId and t.refunded = true")
+    BigDecimal sumLinkedRefunds(@Param("userId") UUID userId, @Param("compraId") UUID compraId);
+
+    /** Grava o estado recalculado de uma compra. */
+    @Modifying
+    @Transactional
+    @Query("update BankTransaction t set t.refunded = :refunded, t.refundedAmount = :refundedAmount "
+            + "where t.user.id = :userId and t.id = :compraId")
+    int setRefundState(@Param("userId") UUID userId,
+                       @Param("compraId") UUID compraId,
+                       @Param("refunded") boolean refunded,
+                       @Param("refundedAmount") BigDecimal refundedAmount);
+
+    interface RefundState {
+        UUID getId();
+
+        BigDecimal getAmount();
+
+        boolean getRefunded();
+    }
 
     /**
      * Abate um estorno PARCIAL na compra (V40). Soma em vez de atribuir: uma

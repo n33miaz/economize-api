@@ -326,6 +326,153 @@ class BankTransactionRepositoryTest {
         assertThat(repository.findById(alheio.getId()).orElseThrow().isRefunded()).isFalse();
     }
 
+    // ------------------------------------------- o desfazer do estorno
+    //
+    // O abate de uma compra é a soma de várias passadas. Desfazer UMA delas
+    // tira só o que ela abateu: o que as outras marcaram continua marcado, e a
+    // compra tem de continuar dizendo isso.
+
+    private BankTransaction creditoLigado(BankTransaction compra, String valor) {
+        BankTransaction credito = transacao(dono, valor, JULHO_10.plusDays(2));
+        credito.setRefunded(true);
+        credito.setRefundOfId(compra.getId());
+        return repository.saveAndFlush(credito);
+    }
+
+    private BankTransaction lida(BankTransaction tx) {
+        return repository.findById(tx.getId()).orElseThrow();
+    }
+
+    @Test
+    @DisplayName("Desfazer a passada B tira só o que ela abateu: ficam os 60 da A")
+    void desfazerTiraSoOAbateDaPassada() {
+        BankTransaction compra = compraComAbate("-100.00", "100.00");
+        BankTransaction daPassadaA = creditoLigado(compra, "60.00");
+        BankTransaction daPassadaB = creditoLigado(compra, "40.00");
+
+        repository.releaseRefunds(dono.getId(), List.of(compra.getId(), daPassadaB.getId()));
+        em.clear();
+
+        // Zerar o abate devolvia a despesa a 100 com o crédito da A ainda
+        // marcado: 60 fora da receita e fora do abate
+        assertThat(lida(compra).getRefundedAmount()).isEqualByComparingTo("60.00");
+        assertThat(lida(compra).getNetAmount()).isEqualByComparingTo("-40.00");
+        assertThat(lida(compra).isRefunded()).isFalse();
+        assertThat(lida(daPassadaB).isRefunded()).isFalse();
+        assertThat(lida(daPassadaB).getRefundOfId()).isNull();
+        assertThat(lida(daPassadaA).isRefunded()).isTrue();
+        assertThat(lida(daPassadaA).getRefundOfId()).isEqualTo(compra.getId());
+
+        // E desfeita também a A, a compra volta ao valor cheio
+        repository.releaseRefunds(dono.getId(), List.of(compra.getId(), daPassadaA.getId()));
+        em.clear();
+        assertThat(lida(compra).getRefundedAmount()).isEqualByComparingTo("0.00");
+        assertThat(lida(daPassadaA).isRefunded()).isFalse();
+    }
+
+    @Test
+    @DisplayName("Desfazer o par inteiro solta as duas pernas")
+    void desfazerParInteiro() {
+        BankTransaction compra = transacao(dono, "-100.00", JULHO_10);
+        compra.setRefunded(true);
+        repository.saveAndFlush(compra);
+        BankTransaction credito = creditoLigado(compra, "100.00");
+
+        repository.releaseRefunds(dono.getId(), List.of(compra.getId(), credito.getId()));
+        em.clear();
+
+        assertThat(lida(compra).isRefunded()).isFalse();
+        assertThat(lida(compra).getRefundedAmount()).isEqualByComparingTo("0.00");
+        assertThat(lida(credito).isRefunded()).isFalse();
+        assertThat(lida(credito).getRefundOfId()).isNull();
+    }
+
+    @Test
+    @DisplayName("Compra estornada por inteiro noutra passada continua fora das somas")
+    void desfazerParcialNaoSoltaOEstornoInteiro() {
+        // A passada B abateu 60; depois a passada A achou o estorno do valor
+        // todo e marcou a compra. Desfazer a B não desfaz a A
+        BankTransaction compra = compraComAbate("-100.00", "60.00");
+        compra.setRefunded(true);
+        repository.saveAndFlush(compra);
+        BankTransaction parcialDaB = creditoLigado(compra, "60.00");
+        BankTransaction inteiroDaA = creditoLigado(compra, "100.00");
+
+        repository.releaseRefunds(dono.getId(), List.of(compra.getId(), parcialDaB.getId()));
+        em.clear();
+
+        assertThat(lida(compra).isRefunded()).isTrue();
+        assertThat(lida(compra).getRefundedAmount()).isEqualByComparingTo("100.00");
+        assertThat(lida(inteiroDaA).isRefunded()).isTrue();
+        assertThat(lida(parcialDaB).isRefunded()).isFalse();
+    }
+
+    @Test
+    @DisplayName("Desfeito o estorno inteiro, a compra volta a contar pelo líquido do parcial que ficou")
+    void desfazerInteiroMantemOParcial() {
+        BankTransaction compra = compraComAbate("-100.00", "60.00");
+        compra.setRefunded(true);
+        repository.saveAndFlush(compra);
+        BankTransaction parcialDaB = creditoLigado(compra, "60.00");
+        BankTransaction inteiroDaA = creditoLigado(compra, "100.00");
+
+        repository.releaseRefunds(dono.getId(), List.of(compra.getId(), inteiroDaA.getId()));
+        em.clear();
+
+        assertThat(lida(compra).isRefunded()).isFalse();
+        assertThat(lida(compra).getRefundedAmount()).isEqualByComparingTo("60.00");
+        assertThat(lida(parcialDaB).getRefundOfId()).isEqualTo(compra.getId());
+        assertThat(lida(inteiroDaA).isRefunded()).isFalse();
+    }
+
+    @Test
+    @DisplayName("O abate recalculado respeita o teto do valor da compra")
+    void desfazerRecalculaComTeto() {
+        // Dado de antes do teto: três créditos ligados somando 130
+        BankTransaction compra = compraComAbate("-100.00", "130.00");
+        creditoLigado(compra, "60.00");
+        creditoLigado(compra, "60.00");
+        BankTransaction terceiro = creditoLigado(compra, "10.00");
+
+        repository.releaseRefunds(dono.getId(), List.of(compra.getId(), terceiro.getId()));
+        em.clear();
+
+        // Ficaram 120 ligados; a compra vale 100
+        assertThat(lida(compra).getRefundedAmount()).isEqualByComparingTo("100.00");
+    }
+
+    @Test
+    @DisplayName("Passada que só gravou o crédito ainda acha a compra dele")
+    void desfazerAchaACompraPeloCredito() {
+        BankTransaction compra = compraComAbate("-100.00", "100.00");
+        creditoLigado(compra, "60.00");
+        BankTransaction daPassada = creditoLigado(compra, "40.00");
+
+        repository.releaseRefunds(dono.getId(), List.of(daPassada.getId()));
+        em.clear();
+
+        assertThat(lida(compra).getRefundedAmount()).isEqualByComparingTo("60.00");
+    }
+
+    @Test
+    @DisplayName("O desfazer não atravessa para as linhas de outro usuário")
+    void desfazerRespeitaODono() {
+        BankTransaction alheia = transacao(estranho, "-100.00", JULHO_10);
+        alheia.setRefundedAmount(new BigDecimal("60.00"));
+        repository.saveAndFlush(alheia);
+        BankTransaction creditoAlheio = transacao(estranho, "60.00", JULHO_10.plusDays(2));
+        creditoAlheio.setRefunded(true);
+        creditoAlheio.setRefundOfId(alheia.getId());
+        repository.saveAndFlush(creditoAlheio);
+
+        repository.releaseRefunds(dono.getId(), List.of(alheia.getId(), creditoAlheio.getId()));
+        em.clear();
+
+        assertThat(lida(alheia).getRefundedAmount()).isEqualByComparingTo("60.00");
+        assertThat(lida(creditoAlheio).isRefunded()).isTrue();
+        assertThat(lida(creditoAlheio).getRefundOfId()).isEqualTo(alheia.getId());
+    }
+
     // ------------------------------------- o líquido com piso em zero no banco
     //
     // Com o teto na varredura o caso deixa de nascer, mas linha gravada antes
