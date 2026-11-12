@@ -64,6 +64,31 @@ public class GlobalExceptionHandler {
                 return problemDetail;
         }
 
+        /**
+         * Constraint do banco violada (unique, FK, CHECK) que escapou da
+         * validação de entrada — tipicamente duas requisições simultâneas
+         * criando a mesma coisa. Sem este handler virava 500 e o app mandava
+         * "tentar mais tarde" o que é, na verdade, um conflito de estado.
+         *
+         * <p>O detalhe é fixo de propósito: a mensagem da exceção carrega o
+         * nome da constraint e o SQL, que não devem sair para o cliente. No log
+         * vai só a classe da causa, sem o texto (que pode ecoar valores).
+         */
+        @ExceptionHandler(org.springframework.dao.DataIntegrityViolationException.class)
+        public ProblemDetail handleDataIntegrityViolationException(
+                        org.springframework.dao.DataIntegrityViolationException ex) {
+                log.warn("Violação de integridade no banco: causa={}",
+                                ex.getMostSpecificCause().getClass().getName());
+                ProblemDetail problemDetail = ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT,
+                                "Não foi possível salvar: os dados conflitam com o que já existe. "
+                                                + "Atualize a tela e tente de novo.");
+                problemDetail.setTitle("Conflito");
+                problemDetail.setType(Objects
+                                .requireNonNull(URI.create("https://economize.app/erros/conflito")));
+                problemDetail.setProperty("timestamp", Instant.now());
+                return problemDetail;
+        }
+
         // Arquivo acima do teto do upload. Sem este handler o excesso cairia no
         // genérico como 500 — e o app mandaria tentar de novo o mesmo arquivo
         @ExceptionHandler(PayloadTooLargeException.class)

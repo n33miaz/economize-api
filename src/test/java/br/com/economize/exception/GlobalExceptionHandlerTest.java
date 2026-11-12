@@ -101,4 +101,26 @@ class GlobalExceptionHandlerTest {
 
         assertThat(problem.getStatus()).isEqualTo(HttpStatus.INTERNAL_SERVER_ERROR.value());
     }
+    @Test
+    @DisplayName("constraint violada vira 409 genérico, sem vazar constraint nem SQL")
+    void integridadeViolaVira409SemVazar() {
+        // A mensagem real do Hibernate/Postgres traz o nome da constraint e o
+        // SQL; nada disso pode sair na resposta
+        org.springframework.dao.DataIntegrityViolationException ex =
+                new org.springframework.dao.DataIntegrityViolationException(
+                        "could not execute statement [ERROR: duplicate key value violates unique "
+                                + "constraint \"uk_invoice_reserves_card_ref\"] [insert into invoice_reserves ...]",
+                        new java.sql.SQLException("duplicate key uk_invoice_reserves_card_ref"));
+
+        ProblemDetail problem = handler.handleDataIntegrityViolationException(ex);
+
+        assertThat(problem.getStatus()).isEqualTo(HttpStatus.CONFLICT.value());
+        assertThat(problem.getTitle()).isEqualTo("Conflito");
+        assertThat(problem.getType()).hasToString("https://economize.app/erros/conflito");
+        assertThat(problem.getDetail())
+                .startsWith("Não foi possível salvar")
+                .doesNotContain("uk_invoice_reserves_card_ref")
+                .doesNotContain("insert into");
+        assertThat(problem.getProperties()).containsKey("timestamp");
+    }
 }
