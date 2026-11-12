@@ -12,6 +12,8 @@ import lombok.Getter;
 @Getter
 public class AiProviderException extends RuntimeException {
 
+    public static final String EMPTY_RESPONSE_MESSAGE = "O provedor de IA respondeu sem conteúdo.";
+
     /**
      * Motivo em vocabulário do produto — é o que o app usa para decidir o que
      * dizer ao usuário, sem depender do texto da mensagem.
@@ -27,5 +29,10 @@ public class AiProviderException extends RuntimeException {
     public AiProviderException(Reason reason, String message) {
         super(message);
         this.reason = reason;
+    }
+
+    /** Resposta sem texto é falha do provedor, não uma resposta válida vazia. */
+    public static AiProviderException emptyResponse() {
+        return new AiProviderException(Reason.PROVIDER, EMPTY_RESPONSE_MESSAGE);
     }
 }
