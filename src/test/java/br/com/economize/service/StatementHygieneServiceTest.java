@@ -147,6 +147,73 @@ class StatementHygieneServiceTest {
     }
 
     @Test
+    @DisplayName("depois da importação: quatro varreduras na janela, estorno e recorrência no histórico inteiro")
+    void depoisDaImportacaoVarreSoAJanela() {
+        HygieneWindow janela = new HygieneWindow(
+                java.time.OffsetDateTime.parse("2026-06-10T09:00:00Z"),
+                java.time.OffsetDateTime.parse("2026-06-12T18:00:00Z"));
+        when(userRepository.findById(user.getId())).thenReturn(Optional.of(user));
+        when(internalTransferService.reconcileByOwnName(EMAIL, janela))
+                .thenReturn(new InternalTransferService.Outcome(3, 2, true));
+        when(investmentFlowService.sweep(EMAIL, false, janela))
+                .thenReturn(new InvestmentFlowService.Outcome(3, 1,
+                        new BigDecimal("500.00"), BigDecimal.ZERO, false, List.of()));
+        when(familyTransferService.reconcile(EMAIL, janela))
+                .thenReturn(new FamilyTransferService.Outcome(3, 1, 1));
+        when(duplicateService.sweep(EMAIL, false, janela))
+                .thenReturn(new DuplicateTransactionService.Outcome(
+                        5, 2, new BigDecimal("366.47"), false, List.of()));
+
+        StatementHygieneService.Outcome resultado = service.runFor(user.getId(), janela);
+
+        // A mesma ordem da faxina inteira — o motivo de cada posição não muda
+        // com o tamanho do recorte
+        InOrder ordem = inOrder(internalTransferService, investmentFlowService,
+                familyTransferService, duplicateService, refundService, recurrenceDetectionService);
+        ordem.verify(internalTransferService).reconcileByOwnName(EMAIL, janela);
+        ordem.verify(investmentFlowService).sweep(EMAIL, false, janela);
+        ordem.verify(familyTransferService).reconcile(EMAIL, janela);
+        ordem.verify(duplicateService).sweep(EMAIL, false, janela);
+        // Estorno e recorrência não têm variante em janela: o par do estorno
+        // depende do que os outros pares consumiram, e a cadência se mede em
+        // meses de histórico
+        ordem.verify(refundService).sweep(EMAIL, false);
+        ordem.verify(recurrenceDetectionService).detect(EMAIL);
+
+        // Nenhuma das quatro leu o histórico inteiro
+        verify(internalTransferService, never()).reconcileByOwnName(EMAIL);
+        verify(investmentFlowService, never()).sweep(EMAIL, false);
+        verify(familyTransferService, never()).reconcile(EMAIL);
+        verify(duplicateService, never()).sweep(EMAIL, false);
+
+        assertThat(resultado.internalMarked()).isEqualTo(2);
+        assertThat(resultado.investmentMarked()).isEqualTo(1);
+        assertThat(resultado.familyMarked()).isEqualTo(1);
+        assertThat(resultado.duplicatesMarked()).isEqualTo(2);
+        assertThat(resultado.refundsMarked()).isEqualTo(8);
+
+        // E os seis vigias deixam recado, como na faxina inteira
+        for (br.com.economize.model.SweepRun.Kind kind
+                : br.com.economize.model.SweepRun.Kind.values()) {
+            verify(watchmanService).record(any(), org.mockito.ArgumentMatchers.eq(kind),
+                    org.mockito.ArgumentMatchers.anyInt(), any(), any());
+        }
+        verify(watchmanService).record(user, br.com.economize.model.SweepRun.Kind.DUPLICATE,
+                2, new BigDecimal("366.47"), List.of());
+    }
+
+    @Test
+    @DisplayName("sem janela, a variante da importação é a faxina inteira")
+    void semJanelaVarreTudo() {
+        when(userRepository.findById(user.getId())).thenReturn(Optional.of(user));
+
+        service.runFor(user.getId(), null);
+
+        verify(internalTransferService).reconcileByOwnName(EMAIL);
+        verify(duplicateService).sweep(EMAIL, false);
+    }
+
+    @Test
     @DisplayName("EC-202: cada vigia deixa recado, inclusive o que nao achou nada")
     void cadaVigiaDeixaRecado() {
         service.runFor(EMAIL);

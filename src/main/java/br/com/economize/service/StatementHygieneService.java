@@ -53,6 +53,46 @@ import java.util.UUID;
  *
  * <p>Tudo aqui é idempotente: rodar de novo não desmarca nada e não pareia o
  * que já foi pareado. E tudo é reversível pelo app — a marca some com um toque.
+ *
+ * <p><b>Duas entradas, e a diferença é quanto do extrato cada uma lê.</b>
+ * {@link #runFor(String)} é a faxina pedida pelo usuário e varre o histórico
+ * inteiro, como sempre. {@link #runFor(UUID, HygieneWindow)} é a de depois da
+ * importação: entrou uma linha, e ler ~2.000 lançamentos seis vezes por causa
+ * dela era o que este serviço fazia num plano de 512 MB. Na janela:
+ *
+ * <table><caption>O que cada etapa lê depois de uma importação</caption>
+ *   <tr><td>movimentação própria</td><td>só os dias importados</td>
+ *       <td>regra linha a linha</td></tr>
+ *   <tr><td>aplicação e resgate</td><td>só os dias importados</td>
+ *       <td>regra linha a linha</td></tr>
+ *   <tr><td>transferência da casa</td><td>só os dias importados</td>
+ *       <td>regra linha a linha</td></tr>
+ *   <tr><td>duplicatas</td><td>dias importados ± 1</td>
+ *       <td>a regra só pareia a um dia de distância</td></tr>
+ *   <tr><td>estornos</td><td><b>tudo</b></td>
+ *       <td>ver abaixo</td></tr>
+ *   <tr><td>recorrência</td><td><b>tudo</b></td>
+ *       <td>cadência se mede em meses de histórico, e os agregados da série
+ *       são recalculados do zero</td></tr>
+ * </table>
+ *
+ * <p><b>Por que o estorno ficou de fora</b>, apesar de a regra dele ter
+ * distância máxima (45 dias quando o crédito nomeia a compra, 3 por valor) e
+ * de o teto do abate estar gravado na própria compra. O recorte só é igual à
+ * varredura total quando o histórico antigo está assentado, e o do estorno
+ * nunca está:
+ * <ul>
+ *   <li>o crédito neutro de cartão espera a compra por tempo indeterminado e
+ *       é reexaminado a cada passada;</li>
+ *   <li>o crédito pulado porque a compra citada mais próxima é menor do que
+ *       ele pode casar numa passada SEGUINTE, depois que outra consumiu
+ *       aquela compra;</li>
+ *   <li>o que uma compra já recebeu de abate vale para todos os créditos da
+ *       mesma passada, então tirar um crédito antigo do recorte muda o que
+ *       sobra para um importado.</li>
+ * </ul>
+ * Dá para enquadrar com margem de 45 dias, mas não para provar que o
+ * resultado é o mesmo — e errar ali é abater dinheiro da compra errada.
  */
 @Slf4j
 @Service
@@ -72,6 +112,19 @@ public class StatementHygieneService {
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new ResourceNotFoundException("Usuário não encontrado"));
         return runFor(user.getEmail());
+    }
+
+    /**
+     * A faxina de depois da importação: só o que entrou e o que está em volta.
+     *
+     * @param janela as datas que a importação trouxe ou alterou. Nulo cai na
+     *               varredura total — sem saber o que entrou, recorte nenhum
+     *               é seguro
+     */
+    public Outcome runFor(UUID userId, HygieneWindow janela) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new ResourceNotFoundException("Usuário não encontrado"));
+        return run(user, janela);
     }
 
     /**
@@ -102,23 +155,43 @@ public class StatementHygieneService {
     public Outcome runFor(String email) {
         User user = userRepository.findByEmail(email)
                 .orElseThrow(() -> new ResourceNotFoundException("Usuário não encontrado"));
+        return run(user, null);
+    }
 
-        InternalTransferService.Outcome proprias = internalTransferService.reconcileByOwnName(email);
+    /**
+     * As etapas, na ordem do cabeçalho. Com {@code janela} nula cada varredura
+     * é chamada exatamente como sempre foi — a faxina pedida à mão não muda.
+     * Os recados dos vigias são os mesmos nos dois caminhos: o que se anota é
+     * o que a passada marcou, não o quanto ela leu.
+     */
+    private Outcome run(User user, HygieneWindow janela) {
+        String email = user.getEmail();
+
+        InternalTransferService.Outcome proprias = janela == null
+                ? internalTransferService.reconcileByOwnName(email)
+                : internalTransferService.reconcileByOwnName(email, janela);
         anota(user, SweepRun.Kind.INTERNAL_TRANSFER, proprias.marked(), null, proprias.markedIds());
 
-        InvestmentFlowService.Outcome investimentos = investmentFlowService.sweep(email, false);
+        InvestmentFlowService.Outcome investimentos = janela == null
+                ? investmentFlowService.sweep(email, false)
+                : investmentFlowService.sweep(email, false, janela);
         anota(user, SweepRun.Kind.INVESTMENT_FLOW, investimentos.marked(),
                 investimentos.applied().add(investimentos.redeemed()),
                 investimentos.details().stream()
                         .map(InvestmentFlowService.Move::transactionId).toList());
 
-        FamilyTransferService.Outcome casa = familyTransferService.reconcile(email);
+        FamilyTransferService.Outcome casa = janela == null
+                ? familyTransferService.reconcile(email)
+                : familyTransferService.reconcile(email, janela);
         anota(user, SweepRun.Kind.FAMILY_TRANSFER, casa.marked(), null, casa.markedIds());
 
-        DuplicateTransactionService.Outcome duplicatas = duplicateService.sweep(email, false);
+        DuplicateTransactionService.Outcome duplicatas = janela == null
+                ? duplicateService.sweep(email, false)
+                : duplicateService.sweep(email, false, janela);
         anota(user, SweepRun.Kind.DUPLICATE, duplicatas.pairs(), duplicatas.volume(),
                 duplicatas.discardedIds());
 
+        // Sempre o histórico inteiro, com ou sem janela — ver o cabeçalho
         RefundReconciliationService.Outcome estornos = refundService.sweep(email, false);
         anota(user, SweepRun.Kind.REFUND, estornos.pairs(), estornos.volume(),
                 // Os parciais entram com as duas pontas: o desfazer precisa
@@ -131,6 +204,7 @@ public class StatementHygieneService {
                         .distinct()
                         .toList());
 
+        // Idem: a cadência precisa de meses de histórico
         RecurrenceDetectionService.DetectionSummary recorrencia =
                 recurrenceDetectionService.detect(email);
         // A recorrência não marca linha: cria séries, que têm o próprio
@@ -141,8 +215,10 @@ public class StatementHygieneService {
         Outcome resultado = new Outcome(
                 proprias.marked(), investimentos.marked(), casa.marked(), duplicatas.pairs(),
                 estornos.pairs(), recorrencia.seriesCreated(), recorrencia.seriesUpdated());
-        log.info("Faxina pós-importação: {} própria(s), {} de investimento, {} da casa, "
+        log.info("Faxina {}: {} própria(s), {} de investimento, {} da casa, "
                         + "{} duplicata(s), {} estorno(s), {} série(s) nova(s), {} atualizada(s), user={}",
+                janela == null ? "do histórico inteiro"
+                        : "da janela " + janela.earliest() + " a " + janela.latest(),
                 resultado.internalMarked(), resultado.investmentMarked(), resultado.familyMarked(),
                 resultado.duplicatesMarked(), resultado.refundsMarked(), resultado.seriesCreated(),
                 resultado.seriesUpdated(), user.getId());
