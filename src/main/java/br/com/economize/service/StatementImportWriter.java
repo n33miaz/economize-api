@@ -1,7 +1,6 @@
 package br.com.economize.service;
 
 import br.com.economize.model.BankTransaction;
-import br.com.economize.model.CategoryRule;
 import br.com.economize.model.StatementUpload;
 import br.com.economize.repository.BankTransactionRepository;
 import br.com.economize.repository.CategoryRuleRepository;
@@ -10,8 +9,10 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.OffsetDateTime;
 import java.util.Collection;
 import java.util.List;
+import java.util.UUID;
 
 /**
  * Escrita da importação num único commit (EC-075).
@@ -37,13 +38,28 @@ public class StatementImportWriter {
     private final CategoryRuleRepository categoryRuleRepository;
 
     /**
+     * Quantas das transações DESTA gravação uma regra decidiu.
+     *
+     * <p>É um incremento, não o total: a regra que o motor leu no começo da
+     * importação é uma cópia solta, e gravar o número dela por cima apagaria o
+     * que outra importação somou nesse meio-tempo.
+     */
+    public record RuleHits(UUID ruleId, int count) {
+    }
+
+    /**
      * Grava o upload, carimba o id dele nas transações e salva tudo junto com os
-     * hits das regras que pontuaram. Devolve o upload já com id.
+     * acertos das regras que decidiram ESSAS transações. Devolve o upload já
+     * com id.
+     *
+     * <p>Os acertos entram no mesmo commit das linhas que os geraram, e só
+     * delas: se esta gravação falha, o rollback leva os acertos junto e a nova
+     * tentativa conta uma vez só.
      */
     @Transactional
     public StatementUpload write(StatementUpload upload,
                                  List<BankTransaction> transactions,
-                                 Collection<CategoryRule> dirtyRules) {
+                                 Collection<RuleHits> ruleHits) {
         // o upload vai primeiro para carimbar o uploadId nas transações — é essa
         // amarração que permite "revisar esta importação" no app
         StatementUpload saved = statementUploadRepository.save(upload);
@@ -53,8 +69,10 @@ public class StatementImportWriter {
         if (!transactions.isEmpty()) {
             bankTransactionRepository.saveAll(transactions);
         }
-        if (!dirtyRules.isEmpty()) {
-            categoryRuleRepository.saveAll(dirtyRules);
+        // soma no banco (hits = hits + n), nunca merge da entidade: ver RuleHits
+        OffsetDateTime agora = OffsetDateTime.now();
+        for (RuleHits hits : ruleHits) {
+            categoryRuleRepository.addHits(hits.ruleId(), hits.count(), agora);
         }
         return saved;
     }
