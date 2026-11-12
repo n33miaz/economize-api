@@ -1004,6 +1004,52 @@
         },
         "type": "object"
       },
+      "ConnectionInfoResponse": {
+        "properties": {
+          "cfConnectingIp": {
+            "type": "string"
+          },
+          "forwarded": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "forwardedFor": {
+            "items": {
+              "$ref": "#/components/schemas/Hop"
+            },
+            "type": "array"
+          },
+          "realIp": {
+            "type": "string"
+          },
+          "remoteAddress": {
+            "description": "Endereço remoto visto pela aplicação. Pode NÃO ser o soquete: com cabeçalhos encaminhados em modo nativo ele vem reescrito para o primeiro valor do X-Forwarded-For.",
+            "type": "string"
+          },
+          "remoteAddressKind": {
+            "enum": [
+              "INTERNAL",
+              "CLOUDFLARE",
+              "PUBLIC",
+              "UNREADABLE"
+            ],
+            "type": "string"
+          },
+          "remoteAddressRewritten": {
+            "description": "Verdadeiro quando o remoteAddress é igual ao primeiro salto do X-Forwarded-For, sinal de que foi reescrito a partir do cabeçalho.",
+            "type": "boolean"
+          },
+          "resolvedClientIp": {
+            "type": "string"
+          },
+          "trueClientIp": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "ConnectionResponse": {
         "properties": {
           "connectorId": {
@@ -1923,6 +1969,23 @@
             "type": "number"
           },
           "timestamp": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "Hop": {
+        "properties": {
+          "address": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "INTERNAL",
+              "CLOUDFLARE",
+              "PUBLIC",
+              "UNREADABLE"
+            ],
             "type": "string"
           }
         },
@@ -10133,6 +10196,28 @@
           }
         },
         "summary": "Alterar senha do usuário autenticado",
+        "tags": [
+          "Usuário"
+        ]
+      }
+    },
+    "/api/v1/users/me/connection": {
+      "get": {
+        "description": "Diagnóstico, só leitura: saltos do X-Forwarded-For na ordem e classificados (interno, Cloudflare, público), CF-Connecting-IP, True-Client-IP, X-Real-IP, Forwarded, o endereço remoto (que pode vir reescrito a partir do X-Forwarded-For, e não ser o soquete) e o IP que o resolvedor escolheu. Serve para conferir o IP enxergado depois de mudança de hospedagem.",
+        "operationId": "connection",
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectionInfoResponse"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "summary": "Como a API enxergou a conexão desta requisição",
         "tags": [
           "Usuário"
         ]
