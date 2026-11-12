@@ -147,10 +147,8 @@ public class BankStatementService {
         return (int) Math.min(Integer.MAX_VALUE, limits.getMaxUploadSize().toBytes());
     }
 
-    /** A mensagem do 413, com o teto em MB — o que o usuário precisa saber para agir. */
     private PayloadTooLargeException tooLarge() {
-        return new PayloadTooLargeException("O arquivo passa do limite de "
-                + limits.getMaxUploadSize().toMegabytes() + " MB. Exporte um período menor do extrato.");
+        return PayloadTooLargeException.forLimit(limits.getMaxUploadSize());
     }
 
     /**

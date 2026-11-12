@@ -1,6 +1,7 @@
 package br.com.economize.controller;
 
 import br.com.economize.config.CorsConfig;
+import br.com.economize.config.StatementImportProperties;
 import br.com.economize.security.JwtAuthenticationFilter;
 import br.com.economize.security.JwtUtil;
 import br.com.economize.security.SecurityConfig;
@@ -44,10 +45,12 @@ import static org.mockito.Mockito.when;
  */
 @WebFluxTest(BankStatementController.class)
 @ImportAutoConfiguration(ReactiveMultipartAutoConfiguration.class)
-@Import({ CorsConfig.class, SecurityConfig.class, JwtUtil.class, JwtAuthenticationFilter.class })
+@Import({ CorsConfig.class, SecurityConfig.class, JwtUtil.class, JwtAuthenticationFilter.class,
+        StatementImportProperties.class })
 @TestPropertySource(properties = {
         "spring.webflux.multipart.max-in-memory-size=1KB",
-        "spring.webflux.multipart.max-disk-usage-per-part=4KB" })
+        "spring.webflux.multipart.max-disk-usage-per-part=4KB",
+        "economize.statement.max-upload-size=4KB" })
 class BankStatementUploadLimitTest {
 
     private static final String EMAIL = "teste@economize.app";
@@ -69,7 +72,7 @@ class BankStatementUploadLimitTest {
                 .expectBody()
                 .jsonPath("$.title").isEqualTo("Arquivo Muito Grande")
                 .jsonPath("$.detail").value(detail -> org.assertj.core.api.Assertions
-                        .assertThat((String) detail).contains("limite de tamanho"));
+                        .assertThat((String) detail).contains("limite de 4 KB"));
 
         verify(bankStatementService, never()).processFile(any(), any(), any());
     }

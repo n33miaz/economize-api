@@ -1,5 +1,6 @@
 package br.com.economize.controller;
 
+import br.com.economize.config.StatementImportProperties;
 import br.com.economize.dto.statement.BankTransactionResponse;
 import br.com.economize.dto.statement.ImportSourceResponse;
 import br.com.economize.exception.PayloadTooLargeException;
@@ -28,6 +29,8 @@ import java.util.UUID;
 public class BankStatementController {
 
     private final BankStatementService bankStatementService;
+    // o teto do upload, para o 413 do multipart dizer o limite em MB
+    private final StatementImportProperties limits;
 
     @Operation(summary = "Upload de extrato bancário",
             description = "Aceita OFX, CSV, XLSX, PDF e TXT. Idempotente por hash SHA-256. "
@@ -46,8 +49,8 @@ public class BankStatementController {
                 // spring.webflux.multipart.max-disk-usage-per-part, antes de
                 // qualquer byte ir para o heap ou para o parser. Sem esta
                 // conversão o corte sairia como 500 (ou 400 de "corpo malformado").
-                .onErrorMap(BankStatementController::isSizeLimit, ex -> new PayloadTooLargeException(
-                        "O arquivo passa do limite de tamanho aceito. Exporte um período menor do extrato."))
+                .onErrorMap(BankStatementController::isSizeLimit,
+                        ex -> PayloadTooLargeException.forLimit(limits.getMaxUploadSize()))
                 .flatMap(filePart -> {
                     try {
                         StatementFormat.fromFilename(filePart.filename());
