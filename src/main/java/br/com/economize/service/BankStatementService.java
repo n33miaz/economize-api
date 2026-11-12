@@ -382,6 +382,12 @@ public class BankStatementService {
         for (ParsedTransaction tx : parsed) {
             bySource.computeIfAbsent(sourceOf.apply(tx), k -> new ArrayList<>());
         }
+        // Acertos de regra POR FONTE: cada fonte leva para a gravação só os
+        // acertos das linhas dela. Até 12/11/2026 os acertos do lote inteiro
+        // iam com a primeira fonte que gravasse — se a outra falhasse, os
+        // acertos das linhas que não entraram já estavam salvos, e a nova
+        // tentativa os somava de novo (métrica inflada a cada tentativa)
+        Map<UploadSource, Map<UUID, Integer>> hitsBySource = new java.util.HashMap<>();
         for (Candidate candidate : fresh) {
             ParsedTransaction tx = candidate.tx();
             CategorizationEngine.Result result = categorizationEngine.categorize(
@@ -416,7 +422,12 @@ public class BankStatementService {
                     .build();
             toSave.add(entity);
             datasTocadas.add(entity.getDate());
-            bySource.get(sourceOf.apply(tx)).add(entity);
+            UploadSource fonte = sourceOf.apply(tx);
+            bySource.get(fonte).add(entity);
+            if (result.matchedRule() != null) {
+                hitsBySource.computeIfAbsent(fonte, k -> new java.util.LinkedHashMap<>())
+                        .merge(result.matchedRule().getId(), 1, Integer::sum);
+            }
         }
 
         applyAiSuggestions(user, toSave);
@@ -437,7 +448,8 @@ public class BankStatementService {
         }
 
         // upload + transações + hits das regras num único commit (EC-075), UM
-        // COMMIT POR FONTE: qualquer falha desfaz o conjunto daquela fonte e ela
+        // COMMIT POR FONTE: qualquer falha desfaz o conjunto daquela fonte —
+        // inclusive os acertos das regras que decidiram as linhas dela — e ela
         // continua reimportável.
         //
         // Falha parcial (uma conexão grava, a outra não): o que gravou FICA
@@ -447,11 +459,6 @@ public class BankStatementService {
         // o buraco. A próxima sincronização reconhece pelo id externo o que já
         // entrou e importa só o que faltou.
         List<StatementUpload> uploads = new ArrayList<>();
-        // os hits das regras são do lote inteiro: vão junto com a primeira
-        // gravação que der certo, e uma vez só. Limitação conhecida: numa falha
-        // parcial, os hits das linhas que não gravaram são contados de novo na
-        // sincronização seguinte — o efeito fica só na métrica de acertos
-        java.util.Collection<br.com.economize.model.CategoryRule> pendingRules = ctx.getDirtyRules();
         RuntimeException failure = null;
         List<String> failedSources = new ArrayList<>();
         for (Map.Entry<UploadSource, List<BankTransaction>> group : bySource.entrySet()) {
@@ -466,8 +473,9 @@ public class BankStatementService {
                                 .transactionsImported(group.getValue().size())
                                 .build(),
                         group.getValue(),
-                        pendingRules);
-                pendingRules = List.of();
+                        hitsBySource.getOrDefault(source, Map.of()).entrySet().stream()
+                                .map(e -> new StatementImportWriter.RuleHits(e.getKey(), e.getValue()))
+                                .toList());
                 uploads.add(upload);
             } catch (RuntimeException e) {
                 failedSources.add(source.name());

@@ -32,7 +32,6 @@ import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -134,7 +133,6 @@ class PluggySyncDedupeTest {
                 pluggyItemService, bankStatementService, accountService, cardBillService);
 
         lenient().when(categorizationEngine.contextFor(user.getId())).thenReturn(context);
-        lenient().when(context.getDirtyRules()).thenReturn(new HashSet<>());
         // sem categoria resolvida: o que interessa aqui é a dedupe, não o motor
         lenient().when(categorizationEngine.categorize(eq(context), anyString(), anyString(), anyBoolean()))
                 .thenAnswer(inv -> new CategorizationEngine.Result(
