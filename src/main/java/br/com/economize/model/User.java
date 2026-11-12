@@ -77,6 +77,21 @@ public class User implements UserDetails {
     @Column(name = "plan_cancelled_at")
     private OffsetDateTime planCancelledAt;
 
+    /**
+     * Versão da sessão (V45). Todo token leva o valor do momento em que foi
+     * emitido; somar 1 aqui derruba todos os tokens anteriores da conta.
+     *
+     * <p>{@code updatable = false} de propósito: o Hibernate grava TODAS as
+     * colunas em cada {@code save(user)}, e o login salva o usuário a cada
+     * acesso. Um login que carregou a versão 3 e salvou depois de uma revogação
+     * ter levado a linha a 4 escreveria 3 de volta, desfazendo a revogação. A
+     * única escrita permitida é o UPDATE atômico de
+     * {@code UserRepository#incrementSessionVersion}.
+     */
+    @Column(name = "session_version", nullable = false, updatable = false)
+    @Builder.Default
+    private int sessionVersion = 0;
+
     @PrePersist
     protected void onCreate() {
         this.createdAt = OffsetDateTime.now();
