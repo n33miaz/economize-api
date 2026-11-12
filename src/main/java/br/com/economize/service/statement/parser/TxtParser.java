@@ -124,7 +124,7 @@ public class TxtParser implements StatementParserStrategy {
     private static int proximaQuebra(String line, int de) {
         for (int i = de; i < line.length(); i++) {
             char c = line.charAt(i);
-            if (c == '\u0085' || c == ' ' || c == ' ') return i;
+            if (c == '\u0085' || c == '\u2028' || c == '\u2029') return i;
         }
         return -1;
     }
