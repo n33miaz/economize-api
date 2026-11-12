@@ -68,7 +68,7 @@ class UserAiSettingsServiceTest {
 
     private UserAiSettingsService service(SecretCipher cipher) {
         return new UserAiSettingsService(userRepository, repository, cipher, properties,
-                callerFactory, httpClient, "gemini-flash-latest");
+                callerFactory, httpClient, "gemini-3.5-flash");
     }
 
     private UserAiSettings storedFor(User user, SecretCipher cipher, AiProvider provider, String model) {
@@ -112,7 +112,7 @@ class UserAiSettingsServiceTest {
 
         assertThat(response.source()).isEqualTo(AiSettingsResponse.SOURCE_SERVER);
         assertThat(response.provider()).isEqualTo("GEMINI");
-        assertThat(response.model()).isEqualTo("gemini-flash-latest");
+        assertThat(response.model()).isEqualTo("gemini-3.5-flash");
         assertThat(response.keyStatus()).isEqualTo(AiSettingsResponse.KEY_SERVER);
         assertThat(response.keyLast4()).isNull();
         assertThat(response.byokAvailable()).isTrue();
@@ -127,7 +127,7 @@ class UserAiSettingsServiceTest {
 
         AiSettingsResponse response = service(cipher).current(ana.getEmail());
 
-        assertThat(response.model()).isEqualTo("gemini-flash-latest");
+        assertThat(response.model()).isEqualTo("gemini-3.5-flash");
         // só a leitura muda: a linha continua com o que o usuário escolheu
         assertThat(stored.getModel()).isEqualTo("gemini-2.0-flash");
         verify(repository, never()).save(any());
@@ -187,7 +187,7 @@ class UserAiSettingsServiceTest {
     @DisplayName("Salvar substitui a configuração anterior: chave velha não é arquivada em lugar nenhum")
     void saveShouldReplaceInPlace() {
         SecretCipher cipher = new SecretCipher(KEY_1, "k1", "");
-        UserAiSettings existente = storedFor(ana, cipher, AiProvider.GEMINI, "gemini-2.5-flash");
+        UserAiSettings existente = storedFor(ana, cipher, AiProvider.GEMINI, "gemini-3.1-flash-lite");
         String cifraAntiga = existente.getApiKeyCipher();
         when(repository.findByUserId(ana.getId())).thenReturn(Optional.of(existente));
         when(repository.save(any(UserAiSettings.class))).thenAnswer(i -> i.getArgument(0));

@@ -91,7 +91,7 @@ class AiAssistantServiceTest {
     @DisplayName("Sem chave própria o assistente responde pela chave do SERVIDOR — comportamento do APK publicado")
     void shouldAnswerThroughTheServerKeyByDefault() {
         when(caller.userOwned()).thenReturn(false);
-        when(caller.describe()).thenReturn("chave do servidor / gemini-flash-latest");
+        when(caller.describe()).thenReturn("chave do servidor / gemini-3.5-flash");
         when(caller.complete(anyString(), anyList(), anyString())).thenReturn("Você gastou R$ 120,50 na academia.");
         // true: o assistente ACEITA o fallback, e é isso que garante que quem
         // nunca abriu a tela de IA continue sendo atendido

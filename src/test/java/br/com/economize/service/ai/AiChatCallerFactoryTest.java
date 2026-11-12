@@ -77,7 +77,7 @@ class AiChatCallerFactoryTest {
         ChatClient.Builder builder = mock(ChatClient.Builder.class);
         when(builder.build()).thenReturn(serverChatClient);
         return new AiChatCallerFactory(repository, cipher, properties, httpClient, builder,
-                "gemini-flash-latest", serverApiKey);
+                "gemini-3.5-flash", serverApiKey);
     }
 
     @Test
@@ -138,7 +138,7 @@ class AiChatCallerFactoryTest {
 
         assertThat(caller).isPresent();
         assertThat(caller.get().userOwned()).isFalse();
-        assertThat(caller.get().describe()).contains("servidor").contains("gemini-flash-latest");
+        assertThat(caller.get().describe()).contains("servidor").contains("gemini-3.5-flash");
         verifyNoInteractions(httpClient);
     }
 
@@ -231,7 +231,7 @@ class AiChatCallerFactoryTest {
 
         AiCallTarget alvo = factory.targetFor(user, stored);
 
-        assertThat(alvo.model()).isEqualTo("gemini-flash-latest");
+        assertThat(alvo.model()).isEqualTo("gemini-3.5-flash");
         assertThat(stored.getModel()).isEqualTo("gemini-2.0-flash");
     }
 

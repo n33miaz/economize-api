@@ -107,7 +107,8 @@ class AiProviderPropertiesTest {
                 .get(AiProvider.GEMINI);
 
         assertThat(gemini.endpoint()).isEqualTo("https://proxy.interno/chat/completions");
-        assertThat(gemini.models()).containsExactly("gemini-flash-latest", "gemini-2.5-flash", "gemini-2.5-pro");
+        assertThat(gemini.models()).containsExactly("gemini-3.5-flash", "gemini-3.1-flash-lite",
+                "gemini-flash-latest", "gemini-pro-latest");
         assertThat(gemini.label()).isEqualTo("Google Gemini");
     }
 
@@ -202,7 +203,7 @@ class AiProviderPropertiesTest {
         AiProviderProperties.ProviderConfig anthropic = properties.get(AiProvider.ANTHROPIC);
 
         assertThat(gemini.retiredModels()).containsExactly("gemini-2.0-flash");
-        assertThat(gemini.modelOrDefault("gemini-2.0-flash")).isEqualTo("gemini-flash-latest");
+        assertThat(gemini.modelOrDefault("gemini-2.0-flash")).isEqualTo("gemini-3.5-flash");
         assertThat(gemini.modelOrDefault("gemini-2.5-pro")).isEqualTo("gemini-2.5-pro");
         // tirado da lista só para novas escolhas, não aposentado: quem o salvou
         // continua nele, sem rebaixamento silencioso para o haiku
@@ -226,7 +227,7 @@ class AiProviderPropertiesTest {
     @Test
     @DisplayName("Aposentar o próprio modelo padrão é erro de boot")
     void retiringTheDefaultModelFails() {
-        assertThatThrownBy(() -> bound("economize.ai.providers.gemini.retired-models", "gemini-flash-latest"))
+        assertThatThrownBy(() -> bound("economize.ai.providers.gemini.retired-models", "gemini-3.5-flash"))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("economize.ai.providers.gemini.retired-models");
     }
