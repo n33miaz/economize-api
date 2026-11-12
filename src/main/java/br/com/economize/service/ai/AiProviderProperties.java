@@ -383,13 +383,13 @@ public class AiProviderProperties {
         map.put(AiProvider.GEMINI, new ProviderConfig("Google Gemini",
                 "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
                 "https://aistudio.google.com/apikey",
-                // gemini-2.0-flash saiu em 12/11/2026: o Google o aposentou e
-                // passou a responder 404. O apelido vem PRIMEIRO, como padrão,
-                // porque acompanha o flash vigente e não envelhece com a lista
-                List.of("gemini-flash-latest", "gemini-2.5-flash", "gemini-2.5-pro"),
+                // Medido em 12/11/2026: o modelo fixo 3.5 respondeu o prompt
+                // real em 6,6 s; o alias -latest apontava ao 3.8 sobrecarregado.
+                // O primeiro é o padrão; 2.5 não aceita mais novos usuários.
+                List.of("gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-flash-latest", "gemini-pro-latest"),
                 null,
-                // aposentado pelo Google (404 medido em 12/11/2026): quem o tinha
-                // salvo como modelo próprio passa a usar o padrão
+                // Só o 2.0 é aposentado: modelos 2.5 já salvos continuam sendo
+                // usados e, se falharem, o usuário recebe o erro MODEL claro.
                 List.of("gemini-2.0-flash")));
         map.put(AiProvider.OPENAI, new ProviderConfig("OpenAI",
                 "https://api.openai.com/v1/chat/completions",

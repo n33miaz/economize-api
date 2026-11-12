@@ -38,13 +38,13 @@ class AiServerModelPropertyTest {
     }
 
     @Test
-    @DisplayName("Sem AI_SERVER_MODEL, o servidor usa o apelido gemini-flash-latest")
-    void defaultsToTheFlashAlias() throws Exception {
+    @DisplayName("Sem AI_SERVER_MODEL, o servidor usa o modelo fixo gemini-3.5-flash")
+    void defaultsToTheFixedFlashModel() throws Exception {
         StandardEnvironment env = new StandardEnvironment();
         env.getPropertySources().remove(StandardEnvironment.SYSTEM_ENVIRONMENT_PROPERTY_SOURCE_NAME);
         env.getPropertySources().remove(StandardEnvironment.SYSTEM_PROPERTIES_PROPERTY_SOURCE_NAME);
 
-        assertThat(env.resolvePlaceholders(rawValue())).isEqualTo("gemini-flash-latest");
+        assertThat(env.resolvePlaceholders(rawValue())).isEqualTo("gemini-3.5-flash");
     }
 
     @Test
@@ -52,8 +52,8 @@ class AiServerModelPropertyTest {
     void environmentVariableOverridesTheModel() throws Exception {
         StandardEnvironment env = new StandardEnvironment();
         env.getPropertySources().addFirst(new MapPropertySource("painel",
-                Map.of("AI_SERVER_MODEL", "gemini-2.5-flash")));
+                Map.of("AI_SERVER_MODEL", "gemini-3.1-flash-lite")));
 
-        assertThat(env.resolvePlaceholders(rawValue())).isEqualTo("gemini-2.5-flash");
+        assertThat(env.resolvePlaceholders(rawValue())).isEqualTo("gemini-3.1-flash-lite");
     }
 }
