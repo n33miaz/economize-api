@@ -44,14 +44,34 @@ import java.util.regex.Pattern;
  * é um furo: basta inventar um cabeçalho por requisição para ganhar um balde
  * novo a cada uma. Aqui nada à esquerda do primeiro público é sequer lido.
  *
- * <p><b>O cabeçalho só vale se quem abriu o soquete for rede interna.</b>
- * Atrás do Render o soquete é sempre 10.x. Qualquer outro — público comum ou
- * em faixa da Cloudflare — quer dizer que não há proxy nosso no caminho, e o
- * cabeçalho inteiro é palavra de quem conectou: vale o endereço do soquete.
- * Faixa da Cloudflare não é exceção de propósito: um Worker ou um cliente
- * WARP que alcance a origem direto conecta de endereço dessas faixas, e, se
- * fosse tratado como borda, o último valor do cabeçalho que ele mesmo
- * escreveu viraria "o cliente".
+ * <p><b>O {@code getRemoteAddress()} NÃO é o soquete, e não decide nada.</b>
+ * Medido em produção em 12/11/2026: ele chega reescrito para a ponta ESQUERDA
+ * do {@code X-Forwarded-For} — justamente o texto do cliente. Com o cabeçalho
+ * forjado {@code 1.2.3.4}, a cadeia era {@code 1.2.3.4, 138.204.213.120,
+ * 104.23.254.238, 10.x} e o "soquete" era {@code 1.2.3.4}. Quem reescreve é o
+ * Reactor Netty ({@code HttpServer.forwarded(true)}, que usa o primeiro valor
+ * do cabeçalho como endereço remoto), ligado pelo Spring Boot quando
+ * {@code server.forward-headers-strategy} é {@code native}. O repositório não
+ * define essa propriedade; o padrão do Boot é {@code native} quando ele
+ * detecta plataforma de nuvem (para Kubernetes bastam as variáveis
+ * {@code KUBERNETES_SERVICE_HOST}/{@code _PORT} no contêiner) e {@code none}
+ * fora dela — por isso o comportamento não aparece na máquina de quem
+ * desenvolve. O gatilho exato no Render (detecção ou variável no painel) não
+ * foi conferido; o efeito, sim, e está reproduzido em
+ * {@code ClientIpForwardedHeadersTest}. A versão anterior exigia "soquete
+ * interno" para ler o cabeçalho, e por isso devolvia o valor forjado.
+ *
+ * <p><b>Por isso a cadeia vale sempre que existe.</b> A origem no Render só é
+ * alcançável pelo proxy da plataforma, então a ponta direita do cabeçalho é
+ * sempre escrita por ela, venha o que vier à esquerda. O endereço remoto só
+ * entra quando não há cabeçalho, ou como último recurso quando a cadeia não
+ * tem cliente (só rede interna e borda) ou é ilegível. A exigência de soquete
+ * interno continua existindo como opção
+ * ({@code economize.client-ip.require-internal-peer}), DESLIGADA por padrão:
+ * só faz sentido numa hospedagem em que a origem aceite conexão direta da
+ * internet E o endereço remoto seja o soquete de verdade
+ * ({@code server.forward-headers-strategy=none}). Ligada no Render de hoje,
+ * ela devolve o balde de login à escolha de quem forja o cabeçalho.
  *
  * <p>É um resolvedor só, para o limite de requisições e para o login, de
  * propósito: duas leituras diferentes do mesmo cabeçalho acabariam discordando
@@ -136,7 +156,20 @@ public final class ClientIpResolver {
 
     private static volatile int trustedEdgeHops = DEFAULT_EDGE_HOPS;
 
+    // Ver o Javadoc da classe: desligada, porque o endereço remoto chega reescrito
+    private static volatile boolean requireInternalPeer = false;
+
     private ClientIpResolver() {
+    }
+
+    /**
+     * Liga a exigência de que o endereço remoto seja rede interna para o
+     * cabeçalho ser lido. Só para hospedagem em que o endereço remoto é o
+     * soquete de verdade; com ele reescrito a partir do cabeçalho (o caso do
+     * Render), ligar isto devolve o IP forjado.
+     */
+    static void configureRequireInternalPeer(boolean required) {
+        requireInternalPeer = required;
     }
 
     /**
@@ -173,7 +206,13 @@ public final class ClientIpResolver {
         return address == null ? HopKind.UNREADABLE : classify(address);
     }
 
-    /** A classificação de um endereço já resolvido, como o do soquete. */
+    /** O salto na forma que o Java dá ao endereço (sem porta), ou nulo se não for literal de IP. */
+    public static String normalize(String hop) {
+        InetAddress address = hop == null ? null : parseHop(hop.trim());
+        return address == null ? null : address.getHostAddress();
+    }
+
+    /** A classificação de um endereço já resolvido, como o endereço remoto. */
     public static HopKind classify(InetAddress address) {
         if (isInternal(address)) return HopKind.INTERNAL;
         byte[] raw = address.getAddress();
@@ -183,7 +222,7 @@ public final class ClientIpResolver {
         return HopKind.PUBLIC;
     }
 
-    /** O IP do cliente, ou nulo quando não há nem soquete nem cadeia legível. */
+    /** O IP do cliente, ou nulo quando não há nem endereço remoto nem cadeia legível. */
     public static String resolve(ServerHttpRequest request) {
         InetSocketAddress remote = request.getRemoteAddress();
         return resolve(remote == null ? null : remote.getAddress(),
@@ -192,9 +231,10 @@ public final class ClientIpResolver {
 
     static String resolve(InetAddress remote, List<String> forwardedHeaders) {
         String direct = remote == null ? null : remote.getHostAddress();
-        // o cabeçalho só vale vindo de proxy nosso; soquete público OU em
-        // faixa da Cloudflare é conexão direta, e o cabeçalho é texto dele
-        if (remote != null && !isInternal(remote)) return direct;
+        // `remote` é o getRemoteAddress(), que em produção vem reescrito para
+        // a ponta esquerda do cabeçalho: não decide nada, a menos que a opção
+        // diga que nesta hospedagem ele é o soquete de verdade
+        if (requireInternalPeer && remote != null && !isInternal(remote)) return direct;
         int edgesLeft = trustedEdgeHops;
 
         // o mesmo cabeçalho pode vir em várias linhas; a ordem das linhas é a
@@ -207,7 +247,7 @@ public final class ClientIpResolver {
             examined++;
             InetAddress address = parseHop(hop);
             // salto ilegível no trecho que a plataforma escreve é cadeia
-            // adulterada ou formato novo: não se adivinha, vale o soquete
+            // adulterada ou formato novo: não se adivinha, vale o endereço remoto
             if (address == null) return direct;
             HopKind kind = classify(address);
             if (kind == HopKind.INTERNAL) continue;
@@ -219,7 +259,8 @@ public final class ClientIpResolver {
             }
             return address.getHostAddress();
         }
-        // só rede interna e borda (chamada de dentro da plataforma, ambiente local)
+        // sem cabeçalho, ou só rede interna e borda (chamada de dentro da
+        // plataforma, ambiente local): último recurso, o endereço remoto
         return direct;
     }
 

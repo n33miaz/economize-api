@@ -1025,6 +1025,7 @@
             "type": "string"
           },
           "remoteAddress": {
+            "description": "Endereço remoto visto pela aplicação. Pode NÃO ser o soquete: com cabeçalhos encaminhados em modo nativo ele vem reescrito para o primeiro valor do X-Forwarded-For.",
             "type": "string"
           },
           "remoteAddressKind": {
@@ -1035,6 +1036,10 @@
               "UNREADABLE"
             ],
             "type": "string"
+          },
+          "remoteAddressRewritten": {
+            "description": "Verdadeiro quando o remoteAddress é igual ao primeiro salto do X-Forwarded-For, sinal de que foi reescrito a partir do cabeçalho.",
+            "type": "boolean"
           },
           "resolvedClientIp": {
             "type": "string"
@@ -10198,7 +10203,7 @@
     },
     "/api/v1/users/me/connection": {
       "get": {
-        "description": "Diagnóstico, só leitura: saltos do X-Forwarded-For na ordem e classificados (interno, Cloudflare, público), CF-Connecting-IP, True-Client-IP, X-Real-IP, Forwarded, o endereço do soquete e o IP que o resolvedor escolheu. Serve para conferir o IP enxergado depois de mudança de hospedagem.",
+        "description": "Diagnóstico, só leitura: saltos do X-Forwarded-For na ordem e classificados (interno, Cloudflare, público), CF-Connecting-IP, True-Client-IP, X-Real-IP, Forwarded, o endereço remoto (que pode vir reescrito a partir do X-Forwarded-For, e não ser o soquete) e o IP que o resolvedor escolheu. Serve para conferir o IP enxergado depois de mudança de hospedagem.",
         "operationId": "connection",
         "responses": {
           "200": {

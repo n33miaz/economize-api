@@ -70,17 +70,11 @@ class ClientIpResolverTest {
     }
 
     @Test
-    @DisplayName("o cabeçalho só vale com soquete interno: soquete em faixa da Cloudflare o ignora")
-    void cloudflareSocketIgnoresTheHeader() {
-        // Worker ou WARP alcançando a origem direto: conecta de faixa da
-        // Cloudflare e escreve o cabeçalho que quiser. Vale o soquete
-        assertThat(resolve("172.71.10.5", "1.2.3.4, 203.0.113.7")).isEqualTo("172.71.10.5");
-        assertThat(resolve("172.71.10.5", "9.9.9.9")).isEqualTo("172.71.10.5");
-        assertThat(resolve("172.71.10.5", "203.0.113.7, 104.16.5.5, 10.0.0.9")).isEqualTo("172.71.10.5");
-        assertThat(resolve("2606:4700::1", "203.0.113.7, 10.0.0.5")).isEqualTo(address("2606:4700::1"));
-        assertThat(resolve("172.71.10.5", null)).isEqualTo("172.71.10.5");
-        // o mesmo cabeçalho, vindo do proxy interno, é lido
-        assertThat(resolve(PROXY, "1.2.3.4, 203.0.113.7")).isEqualTo("203.0.113.7");
+    @DisplayName("endereço remoto em faixa da Cloudflare não gasta a borda da cadeia")
+    void cloudflareRemoteAddressDoesNotSpendTheEdge() {
+        // o endereço remoto não é salto: a única borda pulada é a da cadeia
+        assertThat(resolve("172.71.10.5", "9.9.9.9, 104.16.5.5, 172.71.10.5, 10.0.0.9")).isEqualTo("104.16.5.5");
+        assertThat(resolve("172.71.10.5", "203.0.113.7, 104.16.5.5, 10.0.0.9")).isEqualTo("203.0.113.7");
     }
 
     @Test
@@ -164,14 +158,14 @@ class ClientIpResolverTest {
     @DisplayName("o número de bordas é configurável: duas, zero, e negativo não sobe")
     void configurableEdgeHops() {
         try {
-            new ClientIpProxyConfig(List.of(), 2);
+            new ClientIpProxyConfig(List.of(), 2, false);
             assertThat(resolve(PROXY, "9.9.9.9, 203.0.113.7, 104.16.5.5, 172.71.10.5, 10.0.0.9"))
                     .isEqualTo("203.0.113.7");
             // a terceira já é cliente
             assertThat(resolve(PROXY, "9.9.9.9, 104.22.1.1, 104.16.5.5, 172.71.10.5, 10.0.0.9"))
                     .isEqualTo("104.22.1.1");
-            // soquete em faixa da Cloudflare continua ignorando o cabeçalho
-            assertThat(resolve("172.71.10.5", "9.9.9.9, 104.22.1.1, 104.16.5.5")).isEqualTo("172.71.10.5");
+            // o endereço remoto não gasta nenhuma das duas
+            assertThat(resolve("172.71.10.5", "9.9.9.9, 104.22.1.1, 104.16.5.5")).isEqualTo("9.9.9.9");
 
             // zero: nenhuma borda é proxy, vale o primeiro não interno
             ClientIpResolver.configureTrustedEdgeHops(0);
@@ -191,7 +185,7 @@ class ClientIpResolverTest {
     void configurableRanges() {
         try {
             // pelo mesmo caminho da propriedade economize.client-ip.trusted-proxies
-            new ClientIpProxyConfig(List.of(" 198.51.100.0/24 ", "", "2001:db8:ff::/48", "192.0.2.7"), 1);
+            new ClientIpProxyConfig(List.of(" 198.51.100.0/24 ", "", "2001:db8:ff::/48", "192.0.2.7"), 1, false);
 
             assertThat(resolve(PROXY, "203.0.113.7, 198.51.100.200, 10.0.0.9")).isEqualTo("203.0.113.7");
             assertThat(resolve(PROXY, "203.0.113.7, 2001:db8:ff:1::1, 10.0.0.9")).isEqualTo("203.0.113.7");
@@ -231,11 +225,57 @@ class ClientIpResolverTest {
     }
 
     @Test
-    @DisplayName("conexão direta de endereço público ignora o cabeçalho inteiro")
-    void publicDirectConnectionIgnoresTheHeader() {
-        // sem proxy nosso no caminho, o cabeçalho é só palavra do cliente
-        assertThat(resolve("198.51.100.20", "203.0.113.7, 10.0.0.5")).isEqualTo("198.51.100.20");
+    @DisplayName("as quatro cadeias medidas em produção, com o endereço remoto reescrito, dão o mesmo cliente")
+    void realChainsWithRewrittenRemoteAddress() {
+        String client = "138.204.213.120";
+        String platform = client + ", 104.23.254.238, 10.24.210.177";
+
+        // sem cabeçalho do cliente: o endereço remoto é o próprio cliente
+        assertThat(resolve(client, platform)).isEqualTo(client);
+        // forjado: o endereço remoto chega igual à ponta ESQUERDA, o texto do cliente
+        assertThat(resolve("1.2.3.4", "1.2.3.4, " + platform)).isEqualTo(client);
+        assertThat(resolve("5.6.7.8", "5.6.7.8, 9.9.9.9, " + platform)).isEqualTo(client);
+        assertThat(resolve("10.1.1.1", "10.1.1.1, " + platform)).isEqualTo(client);
+        // forjar uma borda ou um endereço da Cloudflare também não muda nada
+        assertThat(resolve("172.71.1.1", "172.71.1.1, " + platform)).isEqualTo(client);
+    }
+
+    @Test
+    @DisplayName("o endereço remoto não decide: com cabeçalho, vale a cadeia; sem cabeçalho, vale ele")
+    void remoteAddressDoesNotDecide() {
+        assertThat(resolve("198.51.100.20", "203.0.113.7, 10.0.0.5")).isEqualTo("203.0.113.7");
+        assertThat(resolve("172.71.10.5", "1.2.3.4, 203.0.113.7, 172.71.10.5, 10.0.0.9")).isEqualTo("203.0.113.7");
+        assertThat(resolve("2001:db8::99", "203.0.113.7")).isEqualTo("203.0.113.7");
+        // sem cabeçalho
         assertThat(resolve("198.51.100.20", null)).isEqualTo("198.51.100.20");
+        assertThat(resolve("172.71.10.5", null)).isEqualTo("172.71.10.5");
+        // cadeia sem cliente (só borda e rede interna): último recurso
+        assertThat(resolve("198.51.100.20", "104.23.254.238, 10.24.210.177")).isEqualTo("198.51.100.20");
+    }
+
+    @Test
+    @DisplayName("opção de exigir soquete interno: desligada por padrão; ligada, endereço remoto público ignora o cabeçalho")
+    void requireInternalPeerOption() {
+        try {
+            new ClientIpProxyConfig(List.of(), 1, true);
+            // sem proxy nosso no caminho, o cabeçalho é só palavra do cliente
+            assertThat(resolve("198.51.100.20", "203.0.113.7, 10.0.0.5")).isEqualTo("198.51.100.20");
+            assertThat(resolve("198.51.100.20", null)).isEqualTo("198.51.100.20");
+            // faixa da Cloudflare não é exceção: Worker ou WARP alcançando a origem direto
+            assertThat(resolve("172.71.10.5", "1.2.3.4, 203.0.113.7")).isEqualTo("172.71.10.5");
+            assertThat(resolve("2606:4700::1", "203.0.113.7, 10.0.0.5")).isEqualTo(address("2606:4700::1"));
+            assertThat(resolve("2001:db8::99", "203.0.113.7")).isEqualTo(address("2001:db8::99"));
+            // endereço remoto interno lê a cadeia
+            assertThat(resolve(PROXY, "1.2.3.4, 203.0.113.7")).isEqualTo("203.0.113.7");
+            // e é por isso que fica desligada no Render: com o endereço remoto
+            // reescrito, ela devolve o valor forjado
+            assertThat(resolve("1.2.3.4", "1.2.3.4, 138.204.213.120, 104.23.254.238, 10.24.210.177"))
+                    .isEqualTo("1.2.3.4");
+        } finally {
+            new ClientIpProxyConfig(List.of(), 1, false);
+        }
+        assertThat(resolve("1.2.3.4", "1.2.3.4, 138.204.213.120, 104.23.254.238, 10.24.210.177"))
+                .isEqualTo("138.204.213.120");
     }
 
     @Test
@@ -255,9 +295,9 @@ class ClientIpResolverTest {
         assertThat(resolve(PROXY, "[2001:db8::7], 10.0.0.5")).isEqualTo(address("2001:db8::7"));
         // IPv4 mapeado em IPv6 é o IPv4: interno continua interno
         assertThat(resolve(PROXY, "203.0.113.7, ::ffff:10.0.0.5")).isEqualTo("203.0.113.7");
-        // soquete IPv6 interno lê a cadeia; soquete IPv6 público a ignora
+        // endereço remoto IPv6, interno ou não, não muda a leitura da cadeia
         assertThat(resolve("fd00::9", "203.0.113.7, 10.0.0.5")).isEqualTo("203.0.113.7");
-        assertThat(resolve("2001:db8::99", "203.0.113.7")).isEqualTo(address("2001:db8::99"));
+        assertThat(resolve("2001:db8::99", "203.0.113.7, 10.0.0.5")).isEqualTo("203.0.113.7");
     }
 
     @Test
