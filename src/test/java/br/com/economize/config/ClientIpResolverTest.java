@@ -70,14 +70,41 @@ class ClientIpResolverTest {
     }
 
     @Test
-    @DisplayName("soquete em faixa da Cloudflare é proxy: a cadeia é lida")
-    void cloudflareSocketReadsTheChain() {
-        assertThat(resolve("172.71.10.5", "1.2.3.4, 203.0.113.7")).isEqualTo("203.0.113.7");
-        assertThat(resolve("2606:4700::1", "203.0.113.7, 10.0.0.5")).isEqualTo("203.0.113.7");
-        // sem cadeia, vale o próprio soquete
+    @DisplayName("o cabeçalho só vale com soquete interno: soquete em faixa da Cloudflare o ignora")
+    void cloudflareSocketIgnoresTheHeader() {
+        // Worker ou WARP alcançando a origem direto: conecta de faixa da
+        // Cloudflare e escreve o cabeçalho que quiser. Vale o soquete
+        assertThat(resolve("172.71.10.5", "1.2.3.4, 203.0.113.7")).isEqualTo("172.71.10.5");
+        assertThat(resolve("172.71.10.5", "9.9.9.9")).isEqualTo("172.71.10.5");
+        assertThat(resolve("172.71.10.5", "203.0.113.7, 104.16.5.5, 10.0.0.9")).isEqualTo("172.71.10.5");
+        assertThat(resolve("2606:4700::1", "203.0.113.7, 10.0.0.5")).isEqualTo(address("2606:4700::1"));
         assertThat(resolve("172.71.10.5", null)).isEqualTo("172.71.10.5");
-        // o soquete É a borda: o salto seguinte já é o cliente, mesmo em faixa da Cloudflare
-        assertThat(resolve("172.71.10.5", "9.9.9.9, 104.16.5.5")).isEqualTo("104.16.5.5");
+        // o mesmo cabeçalho, vindo do proxy interno, é lido
+        assertThat(resolve(PROXY, "1.2.3.4, 203.0.113.7")).isEqualTo("203.0.113.7");
+    }
+
+    @Test
+    @DisplayName("salto com porta é lido como o endereço, sem resolver nome")
+    void hopWithPort() {
+        assertThat(resolve(PROXY, "1.2.3.4, 203.0.113.7:443, 172.71.10.5:8080, 10.0.0.9:10000"))
+                .isEqualTo("203.0.113.7");
+        assertThat(resolve(PROXY, "[2001:db8::7]:443, [2606:4700::1]:443, 10.0.0.9"))
+                .isEqualTo(address("2001:db8::7"));
+        assertThat(ClientIpResolver.classify("203.0.113.7:443")).isEqualTo(ClientIpResolver.HopKind.PUBLIC);
+        assertThat(ClientIpResolver.classify("172.71.10.5:443")).isEqualTo(ClientIpResolver.HopKind.CLOUDFLARE);
+        assertThat(ClientIpResolver.classify("10.0.0.9:65535")).isEqualTo(ClientIpResolver.HopKind.INTERNAL);
+        assertThat(ClientIpResolver.classify("[2606:4700::1]:443")).isEqualTo(ClientIpResolver.HopKind.CLOUDFLARE);
+        assertThat(ClientIpResolver.classify("[::1]:8080")).isEqualTo(ClientIpResolver.HopKind.INTERNAL);
+        // IPv6 solto: os dois-pontos são do endereço, não de porta
+        assertThat(ClientIpResolver.classify("2001:db8::7:443")).isEqualTo(ClientIpResolver.HopKind.PUBLIC);
+        assertThat(resolve(PROXY, "2001:db8::7:443, 10.0.0.9")).isEqualTo(address("2001:db8::7:443"));
+        // nome com porta continua ilegível (nada de DNS), e porta malformada também
+        for (String unreadable : List.of("evil.example:443", "[evil.example]:443", "203.0.113.7:", "203.0.113.7:abc",
+                "203.0.113.7:123456", "999.1.1.1:443", "[2001:db8::7]:", "[2001:db8::7]443", "203.0.113.7:443:80")) {
+            assertThat(ClientIpResolver.classify(unreadable)).as(unreadable)
+                    .isEqualTo(ClientIpResolver.HopKind.UNREADABLE);
+            assertThat(resolve(PROXY, "203.0.113.7, " + unreadable)).as(unreadable).isEqualTo(PROXY);
+        }
     }
 
     @Test
@@ -143,8 +170,8 @@ class ClientIpResolverTest {
             // a terceira já é cliente
             assertThat(resolve(PROXY, "9.9.9.9, 104.22.1.1, 104.16.5.5, 172.71.10.5, 10.0.0.9"))
                     .isEqualTo("104.22.1.1");
-            // soquete em faixa da Cloudflare gasta uma das duas
-            assertThat(resolve("172.71.10.5", "9.9.9.9, 104.22.1.1, 104.16.5.5")).isEqualTo("104.22.1.1");
+            // soquete em faixa da Cloudflare continua ignorando o cabeçalho
+            assertThat(resolve("172.71.10.5", "9.9.9.9, 104.22.1.1, 104.16.5.5")).isEqualTo("172.71.10.5");
 
             // zero: nenhuma borda é proxy, vale o primeiro não interno
             ClientIpResolver.configureTrustedEdgeHops(0);

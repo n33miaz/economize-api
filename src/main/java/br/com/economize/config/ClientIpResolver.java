@@ -7,6 +7,7 @@ import java.net.InetSocketAddress;
 import java.net.UnknownHostException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
@@ -43,11 +44,14 @@ import java.util.regex.Pattern;
  * é um furo: basta inventar um cabeçalho por requisição para ganhar um balde
  * novo a cada uma. Aqui nada à esquerda do primeiro público é sequer lido.
  *
- * <p><b>Conexão direta pública ignora o cabeçalho.</b> Se quem abriu o soquete
- * tem endereço público que não é da Cloudflare, não há proxy nosso no caminho
- * e o cabeçalho inteiro é palavra do cliente. Vale o endereço do soquete. Um
- * soquete em faixa da Cloudflare é proxy, e a cadeia é lida — mas ele É a
- * borda, e conta como tal: o salto seguinte já é o cliente.
+ * <p><b>O cabeçalho só vale se quem abriu o soquete for rede interna.</b>
+ * Atrás do Render o soquete é sempre 10.x. Qualquer outro — público comum ou
+ * em faixa da Cloudflare — quer dizer que não há proxy nosso no caminho, e o
+ * cabeçalho inteiro é palavra de quem conectou: vale o endereço do soquete.
+ * Faixa da Cloudflare não é exceção de propósito: um Worker ou um cliente
+ * WARP que alcance a origem direto conecta de endereço dessas faixas, e, se
+ * fosse tratado como borda, o último valor do cabeçalho que ele mesmo
+ * escreveu viraria "o cliente".
  *
  * <p>É um resolvedor só, para o limite de requisições e para o login, de
  * propósito: duas leituras diferentes do mesmo cabeçalho acabariam discordando
@@ -120,6 +124,9 @@ public final class ClientIpResolver {
     private static final String OCTET = "(25[0-5]|2[0-4]\\d|1?\\d?\\d)";
     private static final Pattern IPV4 = Pattern.compile("^" + OCTET + "(\\." + OCTET + "){3}$");
     private static final Pattern IPV6 = Pattern.compile("^[0-9a-fA-F:]*:[0-9a-fA-F:.]*$");
+    // IPv6 só leva porta entre colchetes; solto, os dois-pontos são do endereço
+    private static final Pattern BRACKETED_WITH_PORT = Pattern.compile("^(\\[[^\\]]*\\]):\\d{1,5}$");
+    private static final Pattern IPV4_WITH_PORT = Pattern.compile("^([0-9.]+):\\d{1,5}$");
 
     // Trocada uma vez, na subida, quando a propriedade vem preenchida
     private static volatile List<Cidr> trustedProxies = parseRanges(CLOUDFLARE_RANGES);
@@ -162,7 +169,7 @@ public final class ClientIpResolver {
 
     /** A classificação de um salto escrito no cabeçalho (ou de qualquer literal). */
     public static HopKind classify(String hop) {
-        InetAddress address = hop == null ? null : parseLiteral(hop.trim());
+        InetAddress address = hop == null ? null : parseHop(hop.trim());
         return address == null ? HopKind.UNREADABLE : classify(address);
     }
 
@@ -185,10 +192,10 @@ public final class ClientIpResolver {
 
     static String resolve(InetAddress remote, List<String> forwardedHeaders) {
         String direct = remote == null ? null : remote.getHostAddress();
-        HopKind socket = remote == null ? null : classify(remote);
-        if (socket == HopKind.PUBLIC) return direct;
-        // soquete em faixa da Cloudflare é a própria borda: gasta uma
-        int edgesLeft = trustedEdgeHops - (socket == HopKind.CLOUDFLARE ? 1 : 0);
+        // o cabeçalho só vale vindo de proxy nosso; soquete público OU em
+        // faixa da Cloudflare é conexão direta, e o cabeçalho é texto dele
+        if (remote != null && !isInternal(remote)) return direct;
+        int edgesLeft = trustedEdgeHops;
 
         // o mesmo cabeçalho pode vir em várias linhas; a ordem das linhas é a
         // ordem dos saltos, então juntá-las reconstrói a cadeia
@@ -198,7 +205,7 @@ public final class ClientIpResolver {
             String hop = hops[i].trim();
             if (hop.isEmpty()) continue;
             examined++;
-            InetAddress address = parseLiteral(hop);
+            InetAddress address = parseHop(hop);
             // salto ilegível no trecho que a plataforma escreve é cadeia
             // adulterada ou formato novo: não se adivinha, vale o soquete
             if (address == null) return direct;
@@ -274,6 +281,20 @@ public final class ClientIpResolver {
             int mask = (0xff << (8 - rest)) & 0xff;
             return (candidate[whole] & mask) == (network[whole] & mask);
         }
+    }
+
+    /**
+     * Um salto do cabeçalho, com ou sem porta: {@code 203.0.113.7:443} e
+     * {@code [2001:db8::7]:443} são o endereço sem a porta. Só a FORMA é
+     * examinada; o que sobra continua tendo de ser literal de IP, então nome
+     * com porta ({@code host:443}) segue ilegível e nunca vira consulta DNS.
+     */
+    private static InetAddress parseHop(String hop) {
+        Matcher bracketed = BRACKETED_WITH_PORT.matcher(hop);
+        if (bracketed.matches()) return parseLiteral(bracketed.group(1));
+        Matcher v4 = IPV4_WITH_PORT.matcher(hop);
+        if (v4.matches()) return parseLiteral(v4.group(1));
+        return parseLiteral(hop);
     }
 
     private static InetAddress parseLiteral(String hop) {
