@@ -1,11 +1,14 @@
 package br.com.economize.service.family;
 
 import br.com.economize.model.BankTransaction;
+import br.com.economize.dto.family.FamilyRequests;
 import br.com.economize.model.FamilyGroup;
+import br.com.economize.model.FamilyInvite;
 import br.com.economize.model.FamilyMember;
 import br.com.economize.model.User;
 import br.com.economize.repository.BankTransactionRepository;
 import br.com.economize.repository.FamilyGroupRepository;
+import br.com.economize.repository.FamilyInviteRepository;
 import br.com.economize.repository.FamilyMemberRepository;
 import br.com.economize.repository.UserRepository;
 import org.junit.jupiter.api.AfterEach;
@@ -36,7 +39,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * nisso. Aqui as entidades vêm do banco, e o carregamento preguiçoso acontece.
  */
 @DataJpaTest
-@Import(FamilyTransferService.class)
+@Import({FamilyTransferService.class, FamilyService.class})
 // SEM transação de teste: é esta linha que faz o teste valer. Com a transação
 // que o @DataJpaTest abre por padrão, a sessão fica aberta durante o método
 // inteiro e QUALQUER proxy carrega — o serviço passaria mesmo sem abrir a sua
@@ -63,8 +66,15 @@ class FamilyTransferPersistenceTest {
     @Autowired
     private BankTransactionRepository bankTransactionRepository;
 
+    @Autowired
+    private FamilyService familyService;
+
+    @Autowired
+    private FamilyInviteRepository inviteRepository;
+
     private User marido;
     private User esposa;
+    private FamilyGroup casa;
 
     @BeforeEach
     void setUp() {
@@ -72,7 +82,7 @@ class FamilyTransferPersistenceTest {
                 .name("Neemias Cormino Manso").email("dono@economize.test").password("x").build());
         esposa = userRepository.save(User.builder()
                 .name("Alice dos Santos Araujo").email("esposa@economize.test").password("x").build());
-        FamilyGroup casa = groupRepository.save(FamilyGroup.builder()
+        casa = groupRepository.save(FamilyGroup.builder()
                 .name("Casa Salada").owner(marido).build());
         memberRepository.save(FamilyMember.builder()
                 .group(casa).user(marido).role(FamilyMember.Role.OWNER)
@@ -88,6 +98,7 @@ class FamilyTransferPersistenceTest {
     @AfterEach
     void tearDown() {
         bankTransactionRepository.deleteAll();
+        inviteRepository.deleteAll();
         memberRepository.deleteAll();
         groupRepository.deleteAll();
         userRepository.deleteAll();
@@ -136,6 +147,34 @@ class FamilyTransferPersistenceTest {
         assertThat(resultado.marked()).isEqualTo(1);
         assertThat(bankTransactionRepository.findById(paraEla.getId()).orElseThrow()
                 .isFamilyTransfer()).isTrue();
+    }
+
+    @Test
+    @DisplayName("entrar na casa marca o Pix de quem entrou, depois do commit do join")
+    void joinShouldReconcileTheNewcomerAfterCommit() {
+        // O caminho de produção: join é @Transactional, então a varredura roda
+        // no afterCommit, numa transação nova. O teste de unidade só cobre o
+        // ramo sem transação; este cobre o que roda de verdade
+        User cunhada = userRepository.save(User.builder()
+                .name("Carla Cormino Manso").email("cunhada@economize.test").password("x").build());
+        BankTransaction paraOIrmao = save(cunhada, "-120.00", "Pix enviado: Neemias Cormino Manso");
+        String code = "ABCD2345";
+        inviteRepository.save(FamilyInvite.builder()
+                .group(casa).createdBy(marido)
+                .codeHash(InviteCode.hash(code))
+                .expiresAt(OffsetDateTime.now(ZoneOffset.UTC).plusDays(7))
+                .build());
+
+        familyService.join(cunhada.getEmail(), new FamilyRequests.JoinFamily(code));
+
+        assertThat(bankTransactionRepository.findById(paraOIrmao.getId()).orElseThrow()
+                .isFamilyTransfer()).isTrue();
+
+        // e sair solta a marca de novo
+        familyService.removeMember(cunhada.getEmail(), "me");
+
+        assertThat(bankTransactionRepository.findById(paraOIrmao.getId()).orElseThrow()
+                .isFamilyTransfer()).isFalse();
     }
 
     private BankTransaction save(String valor, String descricao) {

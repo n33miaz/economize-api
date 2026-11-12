@@ -263,7 +263,10 @@ public class PluggySyncService {
                 // um credito de cartao ja ofertado ao pool precisa da propria
                 // linha importada para o par fechar. A conexao so nao ganha o
                 // carimbo de sincronizada; o dedup por id torna a proxima
-                // sincronizacao idempotente.
+                // sincronizacao idempotente. Excecao: se esta era a UNICA
+                // conexao legivel, nada e importado (503 abaixo), porque
+                // gravar meia conexao como resultado da sync esconderia a
+                // falha.
                 registrarFalha(account.item(), e, comFalha);
                 continue;
             }
