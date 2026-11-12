@@ -105,6 +105,6 @@ public class PluggyOpenFinanceProvider implements OpenFinanceProvider {
 
     private static ConnectionResponse neutral(PluggyItemResponse item) {
         return ConnectionResponse.of(item.id(), item.itemId(), item.connectorId(), item.connectorName(),
-                item.createdAt(), item.lastSyncedAt());
+                item.createdAt(), item.lastSyncedAt(), item.status(), item.needsAttention());
     }
 }

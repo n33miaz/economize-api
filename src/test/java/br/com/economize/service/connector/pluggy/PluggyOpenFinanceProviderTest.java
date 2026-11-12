@@ -103,19 +103,20 @@ class PluggyOpenFinanceProviderTest {
         UUID id = UUID.randomUUID();
         OffsetDateTime criado = OffsetDateTime.parse("2026-08-15T12:00:00Z");
         OffsetDateTime sync = OffsetDateTime.parse("2026-08-16T12:00:00Z");
-        // A resposta ganhou a saude da conexao em 17/09/2026 (ver V37). Aqui a
-        // conexao e sadia de proposito: o que este teste cobra e a TRADUCAO para
-        // a resposta neutra, e uma conexao com problema mereceria teste proprio.
-        PluggyItemResponse item = new PluggyItemResponse(id, "item-1", 612L, "Nubank", criado, sync,
+        PluggyItemResponse saudavel = new PluggyItemResponse(id, "item-1", 612L, "Nubank", criado, sync,
                 "UPDATED", "SUCCESS", null, sync, 0L, false);
-        when(itemService.register(EMAIL, "item-1")).thenReturn(item);
-        when(itemService.list(EMAIL)).thenReturn(List.of(item));
+        PluggyItemResponse precisaReconectar = new PluggyItemResponse(UUID.randomUUID(), "item-2", 341L,
+                "Itaú", criado, sync, "NEEDS_USER_ACTION", "ERROR", null, sync, 0L, true);
+        when(itemService.register(EMAIL, "item-1")).thenReturn(saudavel);
+        when(itemService.list(EMAIL)).thenReturn(List.of(saudavel, precisaReconectar));
 
         ConnectionResponse registrado = provider.registerItem(EMAIL, "item-1");
         List<ConnectionResponse> lista = provider.listItems(EMAIL);
 
-        assertThat(registrado).isEqualTo(new ConnectionResponse(id, "item-1", 612L, "Nubank", "Nubank", criado, sync));
-        assertThat(lista).containsExactly(registrado);
+        assertThat(registrado).isEqualTo(new ConnectionResponse(id, "item-1", 612L, "Nubank", "Nubank", criado,
+                sync, "UPDATED", false));
+        assertThat(lista).extracting(ConnectionResponse::status).containsExactly("UPDATED", "NEEDS_USER_ACTION");
+        assertThat(lista).extracting(ConnectionResponse::needsAttention).containsExactly(false, true);
     }
 
     @Test
