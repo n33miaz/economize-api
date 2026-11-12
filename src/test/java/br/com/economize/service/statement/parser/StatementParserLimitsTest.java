@@ -80,6 +80,17 @@ class StatementParserLimitsTest {
      * megabytes expandida — a forma clássica de zip bomb.
      */
     private byte[] comBomba(byte[] xlsx, int bytesExpandidos) throws IOException {
+        byte[] zeros = new byte[64 * 1024];
+        return comEntradasExtras(xlsx, 1, zip -> {
+            for (int i = 0; i < bytesExpandidos; i += zeros.length) zip.write(zeros);
+        });
+    }
+
+    private interface Conteudo {
+        void escrever(ZipOutputStream zip) throws IOException;
+    }
+
+    private byte[] comEntradasExtras(byte[] xlsx, int quantas, Conteudo conteudo) throws IOException {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         try (ZipInputStream in = new ZipInputStream(new ByteArrayInputStream(xlsx));
              ZipOutputStream zip = new ZipOutputStream(out)) {
@@ -88,21 +99,36 @@ class StatementParserLimitsTest {
                 in.transferTo(zip);
                 zip.closeEntry();
             }
-            zip.putNextEntry(new ZipEntry("xl/bomba.bin"));
-            byte[] zeros = new byte[64 * 1024];
-            for (int i = 0; i < bytesExpandidos; i += zeros.length) {
-                zip.write(zeros);
+            for (int i = 0; i < quantas; i++) {
+                zip.putNextEntry(new ZipEntry("xl/extra" + i + ".bin"));
+                conteudo.escrever(zip);
+                zip.closeEntry();
             }
-            zip.closeEntry();
         }
         return out.toByteArray();
     }
 
     @Test
+    @DisplayName("XLSX com várias entradas, cada uma abaixo dos tetos do POI, é recusado pela SOMA")
+    void xlsxSomaDasEntradasRecusada() throws IOException {
+        limits.setMaxXlsxExpandedSize(DataSize.ofKilobytes(80));
+        // bytes aleatórios: razão ~1:1, cada entrada de 20 KB passa no POI
+        byte[] aleatorio = new byte[20 * 1024];
+        new java.util.Random(42).nextBytes(aleatorio);
+        byte[] arquivo = comEntradasExtras(planilha(1, false), 6, zip -> zip.write(aleatorio));
+        XlsxParser parser = new XlsxParser(limits);
+
+        assertThatThrownBy(() -> parser.parse(new ByteArrayInputStream(arquivo)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("expande além do limite");
+    }
+
+    @Test
     @DisplayName("XLSX com razão de compressão absurda (zip bomb) é recusado como erro do cliente")
     void xlsxZipBombRecusado() throws IOException {
-        byte[] bomba = comBomba(planilha(1, false), 8 * 1024 * 1024);
-        // pequeno no disco, 8 MB expandido: razão bem abaixo do 1:100 do POI
+        // 4 MB de zeros: abaixo do teto de soma (5 MB), então quem recusa é a
+        // trava de razão do POI (1:100) — a que já existia, e que antes saía 500
+        byte[] bomba = comBomba(planilha(1, false), 4 * 1024 * 1024);
         assertThat(bomba.length).isLessThan(64 * 1024);
         XlsxParser parser = new XlsxParser(limits);
 
@@ -116,7 +142,7 @@ class StatementParserLimitsTest {
     void xlsxAcimaDoTetoExpandidoRecusado() throws IOException {
         // descrições aleatórias: compressão "honesta", que passa na trava de razão
         byte[] grande = planilha(3000, true);
-        limits.setMaxXlsxEntrySize(DataSize.ofKilobytes(50));
+        limits.setMaxXlsxExpandedSize(DataSize.ofKilobytes(50));
         XlsxParser parser = new XlsxParser(limits);
 
         assertThatThrownBy(() -> parser.parse(new ByteArrayInputStream(grande)))
@@ -185,8 +211,10 @@ class StatementParserLimitsTest {
     @Test
     @DisplayName("PDF com texto acima do teto é recusado, mesmo com poucas páginas")
     void pdfAcimaDoTetoDeTextoRecusado() throws IOException {
+        // uma página só, com mais glifos que o teto: o corte vem do stripper,
+        // glifo a glifo, antes de a página inteira ir para a memória
         limits.setMaxPdfTextChars(40);
-        byte[] arquivo = pdf(2, "10/05/2026 MERCADO TESTE -45,90");
+        byte[] arquivo = pdf(1, "10/05/2026 MERCADO TESTE -45,90 " + "X".repeat(200));
 
         assertThatThrownBy(() -> pdfParser().parse(new ByteArrayInputStream(arquivo)))
                 .isInstanceOf(IllegalArgumentException.class)

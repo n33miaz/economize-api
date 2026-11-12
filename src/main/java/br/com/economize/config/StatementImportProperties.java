@@ -41,17 +41,20 @@ public class StatementImportProperties {
     private int maxPdfPages = 50;
 
     /**
-     * Caracteres de texto extraído do PDF. Um PDF pequeno pode desenhar texto
-     * sem fim (fluxos comprimidos, repetição); o teto vale mesmo dentro de uma
-     * página só. 50 páginas densas dão uns 250 mil caracteres.
+     * Caracteres (glifos) de texto extraído do PDF. Um PDF pequeno pode
+     * desenhar texto sem fim (fluxos comprimidos, repetição); o teto é contado
+     * glifo a glifo, então vale mesmo dentro de uma página só. 50 páginas
+     * densas dão uns 250 mil caracteres.
      */
     private int maxPdfTextChars = 1_000_000;
 
     /**
-     * Tamanho EXPANDIDO máximo de cada entrada do XLSX. O POI monta a planilha
-     * inteira no heap (XSSF), então o que custa memória é o XML descomprimido,
-     * não o arquivo enviado. A planilha de um extrato real fica na casa das
-     * centenas de KB descomprimida.
+     * Tamanho EXPANDIDO máximo do XLSX, somando todas as entradas do ZIP. O POI
+     * monta a planilha inteira no heap (XSSF), então o que custa memória é o
+     * XML descomprimido, não o arquivo enviado. Medido em 12/11/2026: 0,9 MB
+     * expandido (5 mil lançamentos, dois anos de conta) ocupa ~12 MB de heap;
+     * 7,4 MB expandidos ocupam ~112 MB — mais da metade dos 192 MB. 5 MB fica
+     * em ~75 MB, e ainda cobre uns 25 mil lançamentos de três colunas.
      */
-    private DataSize maxXlsxEntrySize = DataSize.ofMegabytes(20);
+    private DataSize maxXlsxExpandedSize = DataSize.ofMegabytes(5);
 }

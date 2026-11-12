@@ -6,6 +6,7 @@ import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.io.MemoryUsageSetting;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.text.PDFTextStripper;
+import org.apache.pdfbox.text.TextPosition;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
@@ -49,13 +50,15 @@ public class PdfParser implements StatementParserStrategy {
                 throw new IllegalArgumentException("O PDF tem " + pages + " páginas; o limite é "
                         + limits.getMaxPdfPages() + ". Exporte um período menor do extrato.");
             }
-            PDFTextStripper stripper = new PDFTextStripper();
+            PDFTextStripper stripper = new BoundedStripper(limits.getMaxPdfTextChars());
             // Ordenar por posição é o que mantém a linha do lançamento inteira:
             // sem isto, num layout de colunas o texto sai na ordem em que foi
             // desenhado, e data, valor e descrição chegam embaralhados
             stripper.setSortByPosition(true);
-            // writeText num escritor com teto, e não getText: o teto de páginas
-            // não basta, porque uma página só pode desenhar texto sem fim
+            // Dois tetos de texto: o stripper conta cada glifo ENQUANTO a página
+            // é processada (ele junta a página inteira antes de escrever, e uma
+            // página só pode desenhar milhões de glifos), e o escritor confere o
+            // texto final. O teto de páginas sozinho não bastaria
             BoundedWriter out = new BoundedWriter(limits.getMaxPdfTextChars());
             stripper.writeText(document, out);
             String text = out.toString();
@@ -103,7 +106,33 @@ public class PdfParser implements StatementParserStrategy {
             throw new IllegalArgumentException("O PDF tem texto demais para um extrato (mais de "
                     + limits.getMaxPdfTextChars() + " caracteres). Exporte um período menor do extrato.");
         } catch (IOException e) {
+            // Teto do cache de fluxos (STREAM_CACHE_TOTAL) estourado: é o arquivo
+            // que se expande demais, erro do cliente e não 500
+            if (e.getMessage() != null && e.getMessage().contains("Maximum allowed scratch file memory")) {
+                throw new IllegalArgumentException("O PDF se expande além do limite aceito para um extrato. "
+                        + "Exporte um período menor ou use OFX/CSV.");
+            }
             throw new IllegalStateException("Falha ao ler PDF", e);
+        }
+    }
+
+    /**
+     * Conta os glifos à medida que o PDFBox os encontra, antes de guardá-los
+     * na lista da página. A exceção é unchecked: o motor de conteúdo só trata
+     * IOException de operador, então esta atravessa e interrompe a leitura.
+     */
+    private static final class BoundedStripper extends PDFTextStripper {
+        private final int max;
+        private int glyphs;
+
+        BoundedStripper(int max) {
+            this.max = max;
+        }
+
+        @Override
+        protected void processTextPosition(TextPosition text) {
+            if (++glyphs > max) throw new TextLimitExceeded();
+            super.processTextPosition(text);
         }
     }
 
