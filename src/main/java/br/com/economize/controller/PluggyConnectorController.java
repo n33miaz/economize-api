@@ -131,6 +131,8 @@ public class PluggyConnectorController {
             body.put("reconciled", result.reconciled());
             body.put("format", result.format());
             body.put("itemsSynced", sync.itemsSynced());
+            // aditivo: bancos que ficaram de fora por pedirem reconexão
+            body.put("skippedConnections", sync.skippedConnections());
             return body;
         }).subscribeOn(Schedulers.boundedElastic());
     }
