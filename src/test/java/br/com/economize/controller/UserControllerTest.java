@@ -227,6 +227,85 @@ class UserControllerTest {
                 .build();
     }
 
+    @Test
+    @DisplayName("GET /me/connection - Sem token responde 401")
+    void connectionShouldRequireAuthentication() {
+        webTestClient.get()
+                .uri("/api/v1/users/me/connection")
+                .header("X-Forwarded-For", "203.0.113.7, 10.0.0.1")
+                .exchange()
+                .expectStatus().isUnauthorized();
+    }
+
+    @Test
+    @DisplayName("GET /me/connection - Devolve a cadeia na ordem, os cabeçalhos de borda e o IP escolhido")
+    void connectionShouldReturnForwardingChain() {
+        webTestClient.get()
+                .uri("/api/v1/users/me/connection")
+                .header(HttpHeaders.AUTHORIZATION, bearerToken())
+                // duas linhas do mesmo cabeçalho: a cadeia é a junção, na ordem
+                .header("X-Forwarded-For", "1.2.3.4, 203.0.113.7", "172.71.10.5, 10.0.0.1", "lixo")
+                .header("CF-Connecting-IP", "198.51.100.9")
+                .header("True-Client-IP", "198.51.100.10")
+                .header("X-Real-IP", "198.51.100.11")
+                .header("Forwarded", "for=198.51.100.9;proto=https")
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.forwardedFor.length()").isEqualTo(5)
+                .jsonPath("$.forwardedFor[0].address").isEqualTo("1.2.3.4")
+                .jsonPath("$.forwardedFor[0].kind").isEqualTo("PUBLIC")
+                .jsonPath("$.forwardedFor[1].address").isEqualTo("203.0.113.7")
+                .jsonPath("$.forwardedFor[1].kind").isEqualTo("PUBLIC")
+                .jsonPath("$.forwardedFor[2].address").isEqualTo("172.71.10.5")
+                .jsonPath("$.forwardedFor[2].kind").isEqualTo("CLOUDFLARE")
+                .jsonPath("$.forwardedFor[3].address").isEqualTo("10.0.0.1")
+                .jsonPath("$.forwardedFor[3].kind").isEqualTo("INTERNAL")
+                .jsonPath("$.forwardedFor[4].kind").isEqualTo("UNREADABLE")
+                .jsonPath("$.cfConnectingIp").isEqualTo("198.51.100.9")
+                .jsonPath("$.trueClientIp").isEqualTo("198.51.100.10")
+                .jsonPath("$.realIp").isEqualTo("198.51.100.11")
+                .jsonPath("$.forwarded[0]").isEqualTo("for=198.51.100.9;proto=https")
+                // salto ilegível no trecho da plataforma: o resolvedor não adivinha,
+                // e sem soquete (teste) não há IP — o diagnóstico mostra isso mesmo
+                .jsonPath("$.resolvedClientIp").isEmpty();
+
+        webTestClient.get()
+                .uri("/api/v1/users/me/connection")
+                .header(HttpHeaders.AUTHORIZATION, bearerToken())
+                .header("X-Forwarded-For", "1.2.3.4, 203.0.113.7, 172.71.10.5, 10.0.0.1")
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                // o primeiro, pela direita, que não é interno nem Cloudflare
+                .jsonPath("$.resolvedClientIp").isEqualTo("203.0.113.7");
+
+        verifyNoInteractions(userRepository);
+    }
+
+    @Test
+    @DisplayName("GET /me/connection - Não devolve Authorization nem Cookie, e aguenta cabeçalho ausente")
+    void connectionShouldNotLeakCredentials() {
+        String token = bearerToken();
+
+        String body = webTestClient.get()
+                .uri("/api/v1/users/me/connection")
+                .header(HttpHeaders.AUTHORIZATION, token)
+                .header(HttpHeaders.COOKIE, "sessao=segredo-do-cookie")
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody(String.class)
+                .returnResult()
+                .getResponseBody();
+
+        org.assertj.core.api.Assertions.assertThat(body)
+                .doesNotContain(token.substring("Bearer ".length()))
+                .doesNotContainIgnoringCase("authorization")
+                .doesNotContain("segredo-do-cookie")
+                .contains("\"forwardedFor\":[]")
+                .contains("\"cfConnectingIp\":null");
+    }
+
     private String bearerToken() {
         return "Bearer " + jwtUtil.generateToken(EMAIL);
     }
