@@ -337,9 +337,9 @@ public interface BankTransactionRepository extends JpaRepository<BankTransaction
                                  @Param("after") OffsetDateTime after);
 
     /**
-     * Marca as DUAS pernas de um estorno (V29). O crédito guarda de quem é o
-     * estorno; a compra só recebe a marca — quem quiser o caminho de volta
-     * chega por {@code refundOfId}.
+     * Marca a COMPRA de um estorno inteiro (V29): ela só recebe a marca — quem
+     * quiser o caminho de volta chega pelo {@code refundOfId} do crédito. O
+     * crédito é marcado e ligado por {@link #claimRefund}, um a um.
      */
     @Modifying
     @Transactional
@@ -410,14 +410,30 @@ public interface BankTransactionRepository extends JpaRepository<BankTransaction
                            @Param("compraId") UUID compraId,
                            @Param("amount") BigDecimal amount);
 
-    /** Liga o crédito à compra que ele estornou. Uma linha por par. */
+    /**
+     * REIVINDICA o crédito para uma compra: marca e liga numa escrita só, e só
+     * se ele ainda não tiver dono.
+     *
+     * <p>É a trava da varredura de estornos. Duas varreduras ao mesmo tempo (a
+     * higiene e o botão) leem o mesmo crédito solto e decidem, as duas,
+     * abatê-lo da compra: o estorno de 60 virava 100 abatidos. A condição
+     * {@code refundOfId is null} mora no UPDATE, e não numa leitura anterior:
+     * a segunda varredura espera a primeira confirmar, reavalia a condição e
+     * altera ZERO linhas. Só quem alterou uma linha segue para o abate.
+     *
+     * <p>A condição é o vínculo, e não a marca: o crédito de cartão já chega
+     * marcado e sem vínculo (o conector o grava neutro), e é justamente ele
+     * que ainda procura a compra.
+     *
+     * @return 1 se o crédito ficou com esta varredura; 0 se já era de outra
+     */
     @Modifying
     @Transactional
-    @Query("update BankTransaction t set t.refundOfId = :compraId "
-            + "where t.user.id = :userId and t.id = :creditoId")
-    int linkRefund(@Param("userId") UUID userId,
-                   @Param("creditoId") UUID creditoId,
-                   @Param("compraId") UUID compraId);
+    @Query("update BankTransaction t set t.refunded = true, t.refundOfId = :compraId "
+            + "where t.user.id = :userId and t.id = :creditoId and t.refundOfId is null")
+    int claimRefund(@Param("userId") UUID userId,
+                    @Param("creditoId") UUID creditoId,
+                    @Param("compraId") UUID compraId);
 
     /**
      * Marca em bloco o lado descartado de pares duplicados (V26). O motivo viaja

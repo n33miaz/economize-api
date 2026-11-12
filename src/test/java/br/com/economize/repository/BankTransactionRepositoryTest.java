@@ -287,6 +287,45 @@ class BankTransactionRepositoryTest {
         assertThat(lida.getNetAmount()).isEqualByComparingTo("0.00");
     }
 
+    @Test
+    @DisplayName("O crédito só é reivindicado uma vez: a segunda varredura altera zero linhas")
+    void creditoSoEReivindicadoUmaVez() {
+        BankTransaction compra = transacao(dono, "-100.00", JULHO_10);
+        BankTransaction outraCompra = transacao(dono, "-100.00", JULHO_10);
+        BankTransaction credito = transacao(dono, "60.00", JULHO_10.plusDays(2));
+
+        int primeira = repository.claimRefund(dono.getId(), credito.getId(), compra.getId());
+        // A segunda varredura leu o crédito ANTES de a primeira gravar, e
+        // tenta o mesmo — ou outra compra, tanto faz: ele já tem dono
+        int segunda = repository.claimRefund(dono.getId(), credito.getId(), outraCompra.getId());
+        em.clear();
+
+        assertThat(primeira).isEqualTo(1);
+        assertThat(segunda).isZero();
+        BankTransaction lido = repository.findById(credito.getId()).orElseThrow();
+        assertThat(lido.isRefunded()).isTrue();
+        assertThat(lido.getRefundOfId()).isEqualTo(compra.getId());
+    }
+
+    @Test
+    @DisplayName("Crédito já neutro e sem vínculo ainda pode ser reivindicado; o de outro dono, não")
+    void reivindicaONeutroSemVinculo() {
+        BankTransaction compra = transacao(dono, "-100.00", JULHO_10);
+        // O estorno de cartão: o conector o grava marcado, e ele procura a compra
+        BankTransaction neutro = transacao(dono, "60.00", JULHO_10.plusDays(2));
+        neutro.setRefunded(true);
+        repository.saveAndFlush(neutro);
+        BankTransaction alheio = transacao(estranho, "60.00", JULHO_10.plusDays(2));
+
+        assertThat(repository.claimRefund(dono.getId(), neutro.getId(), compra.getId())).isEqualTo(1);
+        assertThat(repository.claimRefund(dono.getId(), alheio.getId(), compra.getId())).isZero();
+        em.clear();
+
+        assertThat(repository.findById(neutro.getId()).orElseThrow().getRefundOfId())
+                .isEqualTo(compra.getId());
+        assertThat(repository.findById(alheio.getId()).orElseThrow().isRefunded()).isFalse();
+    }
+
     // ------------------------------------- o líquido com piso em zero no banco
     //
     // Com o teto na varredura o caso deixa de nascer, mas linha gravada antes

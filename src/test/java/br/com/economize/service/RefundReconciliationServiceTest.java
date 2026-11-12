@@ -60,6 +60,9 @@ class RefundReconciliationServiceTest {
         user = User.builder().id(UUID.randomUUID()).email(EMAIL).name("Dono").password("x").build();
         // lenient: o teste de leitura de descricao nem chega no repositorio
         lenient().when(userRepository.findByEmail(EMAIL)).thenReturn(Optional.of(user));
+        // Por padrão a varredura ganha a reivindicação de todo crédito: é o
+        // caso de uma passada sozinha. Quem testa a corrida troca a resposta
+        lenient().when(bankTransactionRepository.claimRefund(any(), any(), any())).thenReturn(1);
     }
 
     @Test
@@ -97,12 +100,13 @@ class RefundReconciliationServiceTest {
                 .as("1,20 + 4,00 + 318,23 + 238,19 + 1,20 + 4,00 + 4,00 + 3,50")
                 .isEqualByComparingTo(new BigDecimal("574.32"));
 
-        // as duas pernas de cada par entram na marca: 8 pares = 16 linhas
+        // Os 8 créditos são reivindicados um a um (marca + vínculo numa escrita
+        // só); a marca em bloco fica para as 8 compras
         ArgumentCaptor<Collection<UUID>> marcadas = ArgumentCaptor.forClass(Collection.class);
         verify(bankTransactionRepository).markAsRefundPair(eq(user.getId()), marcadas.capture());
-        assertThat(marcadas.getValue()).hasSize(16);
+        assertThat(marcadas.getValue()).hasSize(8);
         verify(bankTransactionRepository, org.mockito.Mockito.times(8))
-                .linkRefund(eq(user.getId()), any(), any());
+                .claimRefund(eq(user.getId()), any(), any());
     }
 
     @Test
@@ -169,7 +173,7 @@ class RefundReconciliationServiceTest {
         assertThat(resultado.pairs()).isEqualTo(1);
         assertThat(resultado.dryRun()).isTrue();
         verify(bankTransactionRepository, never()).markAsRefundPair(any(), any());
-        verify(bankTransactionRepository, never()).linkRefund(any(), any(), any());
+        verify(bankTransactionRepository, never()).claimRefund(any(), any(), any());
     }
 
     @Test
@@ -239,8 +243,8 @@ class RefundReconciliationServiceTest {
         assertThat(resultado.pairs()).isEqualTo(1);
         assertThat(resultado.partials()).hasSize(1);
         verify(bankTransactionRepository).applyPartialRefund(user.getId(), compra.getId(), new BigDecimal("18.50"));
-        verify(bankTransactionRepository).linkRefund(user.getId(), parcial.getId(), compra.getId());
-        verify(bankTransactionRepository).linkRefund(user.getId(), devolvida.getId(), inteira.getId());
+        verify(bankTransactionRepository).claimRefund(user.getId(), parcial.getId(), compra.getId());
+        verify(bankTransactionRepository).claimRefund(user.getId(), devolvida.getId(), inteira.getId());
     }
 
     @Test
@@ -349,8 +353,9 @@ class RefundReconciliationServiceTest {
             assertThat(parcial.purchaseDescription()).isEqualTo("Mercadolivre*Homenow");
             assertThat(parcial.excessAmount()).isEqualByComparingTo("0.00");
         });
-        verify(bankTransactionRepository).markAsRefundPair(user.getId(), List.of(credito.getId()));
-        verify(bankTransactionRepository).linkRefund(user.getId(), credito.getId(), compra.getId());
+        // A compra NÃO é marcada: ela continua contando, pelo líquido
+        verify(bankTransactionRepository, never()).markAsRefundPair(any(), any());
+        verify(bankTransactionRepository).claimRefund(user.getId(), credito.getId(), compra.getId());
         verify(bankTransactionRepository).applyPartialRefund(user.getId(), compra.getId(),
                 new BigDecimal("18.50"));
     }
@@ -434,10 +439,9 @@ class RefundReconciliationServiceTest {
         assertThat(resultado.volume()).isEqualByComparingTo(new BigDecimal("100.00"));
         // Os dois créditos saem das somas e ficam ligados à compra: o
         // excedente não vira receita, e a varredura não o procura de novo
-        verify(bankTransactionRepository).markAsRefundPair(user.getId(),
-                List.of(segundo.getId(), primeiro.getId()));
-        verify(bankTransactionRepository).linkRefund(user.getId(), segundo.getId(), compra.getId());
-        verify(bankTransactionRepository).linkRefund(user.getId(), primeiro.getId(), compra.getId());
+        verify(bankTransactionRepository, never()).markAsRefundPair(any(), any());
+        verify(bankTransactionRepository).claimRefund(user.getId(), segundo.getId(), compra.getId());
+        verify(bankTransactionRepository).claimRefund(user.getId(), primeiro.getId(), compra.getId());
         // O excedente não some: o crédito visto primeiro coube inteiro, o
         // outro trouxe 20 além do que restava — e isso sai dito no relatório
         assertThat(resultado.partials()).hasSize(2);
@@ -470,8 +474,8 @@ class RefundReconciliationServiceTest {
                 .applyPartialRefund(eq(user.getId()), eq(compra.getId()), abate.capture());
         assertThat(abate.getValue()).isEqualByComparingTo(new BigDecimal("40.00"));
         assertThat(resultado.volume()).isEqualByComparingTo(new BigDecimal("40.00"));
-        verify(bankTransactionRepository).markAsRefundPair(user.getId(), List.of(segundo.getId()));
-        verify(bankTransactionRepository).linkRefund(user.getId(), segundo.getId(), compra.getId());
+        verify(bankTransactionRepository, never()).markAsRefundPair(any(), any());
+        verify(bankTransactionRepository).claimRefund(user.getId(), segundo.getId(), compra.getId());
         assertThat(resultado.partials()).singleElement().satisfies(parcial -> {
             assertThat(parcial.refundedAmount()).isEqualByComparingTo("40.00");
             assertThat(parcial.excessAmount()).isEqualByComparingTo("20.00");
@@ -557,6 +561,73 @@ class RefundReconciliationServiceTest {
 
         assertThat(resultado.pairs()).isZero();
         verify(bankTransactionRepository, never()).markAsRefundPair(any(), any());
+    }
+
+    // ------------------------------------- duas varreduras ao mesmo tempo
+    //
+    // A higiene e o botão podem rodar juntos. As duas leem o mesmo crédito
+    // solto e chegam à mesma conclusão; o teto do UPDATE segura o total, mas
+    // não a dupla contagem — um estorno de 60 abatido duas vezes dá 100, que
+    // cabe na compra e é mentira. Quem decide é a reivindicação do crédito:
+    // só a varredura que o marcou (1 linha alterada) abate a compra.
+
+    @Test
+    @DisplayName("Quem perde a reivindicação do crédito não abate a compra de novo")
+    void perdeuAReivindicacaoNaoAbate() {
+        BankTransaction credito = tx("2026-08-08", "60.00", "Estorno de \"Loja Tal Comercio\"");
+        BankTransaction compra = tx("2026-08-05", "-100.00", "Loja Tal Comercio");
+        when(bankTransactionRepository.findAllByUserIdOrderByDateDesc(user.getId()))
+                .thenReturn(List.of(credito, compra));
+        // A outra varredura chegou antes: o UPDATE condicionado altera zero linhas
+        when(bankTransactionRepository.claimRefund(user.getId(), credito.getId(), compra.getId()))
+                .thenReturn(0);
+
+        RefundReconciliationService.Outcome resultado = service.sweep(EMAIL, false);
+
+        verify(bankTransactionRepository).claimRefund(user.getId(), credito.getId(), compra.getId());
+        verify(bankTransactionRepository, never()).applyPartialRefund(any(), any(), any());
+        // E não entra no relatório desta passada: é dele que saem os ids que o
+        // desfazer solta, e esta passada não marcou nada
+        assertThat(resultado.partials()).isEmpty();
+        assertThat(resultado.volume()).isEqualByComparingTo(BigDecimal.ZERO);
+    }
+
+    @Test
+    @DisplayName("Quem perde a reivindicação do par inteiro não marca a compra")
+    void perdeuAReivindicacaoNaoMarcaACompra() {
+        BankTransaction credito = tx("2026-08-06", "100.00", "Estorno");
+        BankTransaction compra = tx("2026-08-05", "-100.00", "Loja Tal Comercio");
+        when(bankTransactionRepository.findAllByUserIdOrderByDateDesc(user.getId()))
+                .thenReturn(List.of(credito, compra));
+        when(bankTransactionRepository.claimRefund(user.getId(), credito.getId(), compra.getId()))
+                .thenReturn(0);
+
+        RefundReconciliationService.Outcome resultado = service.sweep(EMAIL, false);
+
+        verify(bankTransactionRepository, never()).markAsRefundPair(any(), any());
+        assertThat(resultado.pairs()).isZero();
+        assertThat(resultado.details()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("De dois créditos, só o reivindicado abate; o outro fica para quem o pegou")
+    void soOReivindicadoAbate() {
+        BankTransaction segundo = tx("2026-08-10", "30.00", "Estorno de \"Loja Tal Comercio\"");
+        BankTransaction primeiro = tx("2026-08-08", "20.00", "Estorno de \"Loja Tal Comercio\"");
+        BankTransaction compra = tx("2026-08-05", "-100.00", "Loja Tal Comercio");
+        when(bankTransactionRepository.findAllByUserIdOrderByDateDesc(user.getId()))
+                .thenReturn(List.of(segundo, primeiro, compra));
+        when(bankTransactionRepository.claimRefund(user.getId(), primeiro.getId(), compra.getId()))
+                .thenReturn(0);
+
+        RefundReconciliationService.Outcome resultado = service.sweep(EMAIL, false);
+
+        verify(bankTransactionRepository, times(1)).applyPartialRefund(any(), any(), any());
+        verify(bankTransactionRepository).applyPartialRefund(eq(user.getId()), eq(compra.getId()),
+                eq(new BigDecimal("30.00")));
+        assertThat(resultado.partials()).singleElement()
+                .satisfies(p -> assertThat(p.refundId()).isEqualTo(segundo.getId()));
+        assertThat(resultado.volume()).isEqualByComparingTo("30.00");
     }
 
     @Test
