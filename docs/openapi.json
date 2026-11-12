@@ -1141,6 +1141,12 @@
           "lastSyncedAt": {
             "format": "date-time",
             "type": "string"
+          },
+          "needsAttention": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": "string"
           }
         },
         "type": "object"
