@@ -52,6 +52,18 @@ class OfxParserTest {
         assertThat(result).isEmpty();
     }
 
+    @Test
+    void descartaLancamentosComDtpostedInvalidoOuAusente() {
+        String ofx = """
+                <OFX>
+                <STMTTRN><TRNAMT>-10.00<FITID>DATA-INVALIDA<DTPOSTED>20261340<MEMO>COMPRA</STMTTRN>
+                <STMTTRN><TRNAMT>-20.00<FITID>SEM-DATA<MEMO>OUTRA COMPRA</STMTTRN>
+                </OFX>
+                """;
+
+        assertThat(parser.parse(new ByteArrayInputStream(ofx.getBytes(StandardCharsets.UTF_8)))).isEmpty();
+    }
+
     // Cabeçalho sintético no formato do banco que mente: declara 1252 e grava
     // UTF-8. O conteúdo é fictício; só a ESTRUTURA do defeito é reproduzida.
     private static final String HEADER_1252 = """
@@ -214,6 +226,19 @@ class OfxParserTest {
                 """;
 
         assertThat(parser.parseBalance(new ByteArrayInputStream(ofx.getBytes(StandardCharsets.UTF_8)))).isNull();
+    }
+
+    @Test
+    void saldoSemDtasofValidoNaoGanhaDataInventada() {
+        String ofx = """
+                <OFX><LEDGERBAL><BALAMT>120.00<DTASOF>20261340</LEDGERBAL></OFX>
+                """;
+        String semData = """
+                <OFX><LEDGERBAL><BALAMT>120.00</LEDGERBAL></OFX>
+                """;
+
+        assertThat(parser.parseBalance(new ByteArrayInputStream(ofx.getBytes(StandardCharsets.UTF_8)))).isNull();
+        assertThat(parser.parseBalance(new ByteArrayInputStream(semData.getBytes(StandardCharsets.UTF_8)))).isNull();
     }
 
     /** Fatura de cartão declara o DEVIDO no mesmo bloco, e ele vem negativo. */

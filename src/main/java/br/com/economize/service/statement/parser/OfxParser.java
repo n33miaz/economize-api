@@ -60,6 +60,7 @@ public class OfxParser implements StatementParserStrategy {
     public List<ParsedTransaction> parse(InputStream input) {
         String content = readAll(input);
         List<ParsedTransaction> result = new ArrayList<>();
+        int ignoradasSemData = 0;
         Matcher matcher = STMTTRN.matcher(content);
         while (matcher.find()) {
             String block = matcher.group(1);
@@ -67,13 +68,23 @@ public class OfxParser implements StatementParserStrategy {
             String amountRaw = extract(TRNAMT, block);
             if (fitId == null || amountRaw == null) continue;
             BigDecimal amount = new BigDecimal(amountRaw.trim());
+            OffsetDateTime date = parseDate(extract(DTPOSTED, block));
+            if (date == null) {
+                ignoradasSemData++;
+                continue;
+            }
             result.add(ParsedTransaction.builder()
                     .externalId(fitId.trim())
                     .type(resolveType(extract(TRNTYPE, block), amount))
                     .amount(amount)
                     .description(buildDescription(extract(MEMO, block), extract(NAME, block)))
-                    .date(parseDate(extract(DTPOSTED, block)))
+                    .date(date)
                     .build());
+        }
+        if (ignoradasSemData > 0) {
+            // A data participa da deduplicação e dos ciclos; sem ela, datar a
+            // compra como hoje mudaria o histórico em vez de apenas rejeitá-la.
+            log.warn("OFX descartou {} lançamento(s) sem DTPOSTED válido", ignoradasSemData);
         }
         return result;
     }
@@ -100,12 +111,14 @@ public class OfxParser implements StatementParserStrategy {
         try {
             BigDecimal amount = new BigDecimal(valor.trim());
             String quando = extract(DTASOF, bloco.group(1));
-            // Sem DTASOF o saldo existe mas não se sabe de quando. Datar como
-            // "agora" mentiria uma leitura fresca; datar como a transação mais
-            // recente seria chute. O arquivo acabou de ser entregue pelo
-            // usuário, então o instante da importação é a informação honesta
-            // disponível — e é o que o comparador de "mais novo" precisa.
-            return new StatementBalance(amount, quando == null ? OffsetDateTime.now() : parseDate(quando));
+            OffsetDateTime asOf = parseDate(quando);
+            if (asOf == null) {
+                // Saldo sem data não pode disputar com saldos datados: tratá-lo
+                // como recém-lido inventaria a informação que o OFX não trouxe.
+                log.warn("OFX descartou saldo sem DTASOF válido");
+                return null;
+            }
+            return new StatementBalance(amount, asOf);
         } catch (NumberFormatException e) {
             log.warn("Saldo OFX ilegível '{}', seguindo sem saldo", valor);
             return null;
@@ -192,15 +205,16 @@ public class OfxParser implements StatementParserStrategy {
     }
 
     private OffsetDateTime parseDate(String dateStr) {
-        if (dateStr == null || dateStr.length() < 8) return OffsetDateTime.now();
+        if (dateStr == null || dateStr.trim().length() < 8) return null;
         try {
             String clean = dateStr.trim();
             String fixed = clean.length() >= 14 ? clean.substring(0, 14) : clean.substring(0, 8) + "000000";
             return LocalDateTime.parse(fixed, DateTimeFormatter.ofPattern("yyyyMMddHHmmss"))
                     .atOffset(ZoneOffset.UTC);
         } catch (Exception e) {
-            log.warn("Data OFX inválida '{}', usando agora", dateStr);
-            return OffsetDateTime.now();
+            // Não registra o valor do OFX: data pode carregar conteúdo fora do
+            // padrão e o contador acima já permite diagnosticar o arquivo.
+            return null;
         }
     }
 }
