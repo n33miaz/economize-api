@@ -74,7 +74,8 @@ public class UserController {
     @Operation(summary = "Como a API enxergou a conexão desta requisição",
             description = "Diagnóstico, só leitura: saltos do X-Forwarded-For na ordem e classificados "
                     + "(interno, Cloudflare, público), CF-Connecting-IP, "
-                    + "True-Client-IP, X-Real-IP, Forwarded, o endereço do soquete e o IP que o resolvedor "
+                    + "True-Client-IP, X-Real-IP, Forwarded, o endereço remoto (que pode vir reescrito a "
+                    + "partir do X-Forwarded-For, e não ser o soquete) e o IP que o resolvedor "
                     + "escolheu. Serve para conferir o IP enxergado depois de mudança de hospedagem.")
     @GetMapping("/me/connection")
     public Mono<ConnectionInfoResponse> connection(ServerHttpRequest request) {
@@ -87,16 +88,22 @@ public class UserController {
                 .filter(hop -> !hop.isEmpty())
                 .map(hop -> new ConnectionInfoResponse.Hop(hop, ClientIpResolver.classify(hop)))
                 .toList();
+        // não é necessariamente o soquete: no Render chega reescrito para a
+        // ponta esquerda do X-Forwarded-For (ver ClientIpResolver)
         InetSocketAddress remote = request.getRemoteAddress();
         InetAddress socket = remote == null ? null : remote.getAddress();
+        String remoteAddress = socket == null ? null : socket.getHostAddress();
+        boolean rewritten = remoteAddress != null && !hops.isEmpty()
+                && remoteAddress.equals(ClientIpResolver.normalize(hops.get(0).address()));
         return Mono.just(new ConnectionInfoResponse(
                 hops,
                 headers.getFirst("CF-Connecting-IP"),
                 headers.getFirst("True-Client-IP"),
                 headers.getFirst("X-Real-IP"),
                 headers.getOrEmpty("Forwarded"),
-                socket == null ? null : socket.getHostAddress(),
+                remoteAddress,
                 socket == null ? null : ClientIpResolver.classify(socket),
+                rewritten,
                 ClientIpResolver.resolve(request)));
     }
 

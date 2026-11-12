@@ -22,8 +22,10 @@ public class ClientIpProxyConfig {
 
     public ClientIpProxyConfig(
             @Value("${economize.client-ip.trusted-proxies:}") List<String> trustedProxies,
-            @Value("${economize.client-ip.trusted-edge-hops:1}") int trustedEdgeHops) {
+            @Value("${economize.client-ip.trusted-edge-hops:1}") int trustedEdgeHops,
+            @Value("${economize.client-ip.require-internal-peer:false}") boolean requireInternalPeer) {
         ClientIpResolver.configureTrustedProxies(trustedProxies);
         ClientIpResolver.configureTrustedEdgeHops(trustedEdgeHops);
+        ClientIpResolver.configureRequireInternalPeer(requireInternalPeer);
     }
 }
