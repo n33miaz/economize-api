@@ -26,6 +26,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -346,6 +347,7 @@ class RefundReconciliationServiceTest {
             assertThat(parcial.refundedAmount()).isEqualByComparingTo(new BigDecimal("18.50"));
             assertThat(parcial.purchaseAmount()).isEqualByComparingTo(new BigDecimal("604.91"));
             assertThat(parcial.purchaseDescription()).isEqualTo("Mercadolivre*Homenow");
+            assertThat(parcial.excessAmount()).isEqualByComparingTo("0.00");
         });
         verify(bankTransactionRepository).markAsRefundPair(user.getId(), List.of(credito.getId()));
         verify(bankTransactionRepository).linkRefund(user.getId(), credito.getId(), compra.getId());
@@ -391,6 +393,170 @@ class RefundReconciliationServiceTest {
 
         assertThat(resultado.pairs()).isZero();
         assertThat(resultado.partials()).isEmpty();
+    }
+
+    // ------------------------------------------------ o teto do estorno
+    //
+    // A regra: o total estornado de uma compra nunca passa do valor dela.
+    // O crédito que traz mais do que resta abate SÓ o que resta. O excedente
+    // tem o tratamento mais conservador que o código já conhece — o do estorno
+    // anunciado que não acha a compra, que nunca conta como receita: o crédito
+    // sai das somas (marcado) e fica ligado à compra, sem abater nada além do
+    // teto. E não some: vai dito no relatório (excessAmount) e no log.
+    // Ligado, e não solto, porque crédito marcado SEM vínculo é o que a
+    // varredura entende como "ainda procurando a compra" — ele seria pareado
+    // e relatado de novo a cada passada.
+
+    @Test
+    @DisplayName("Dois estornos parciais na mesma passada: juntos abatem só o valor da compra")
+    void doisParciaisNaoPassamDaCompra() {
+        // A varredura anda do mais novo para o mais velho (a lista vem por
+        // data decrescente): o crédito de 10/08 é visto antes e cabe inteiro;
+        // é o de 08/08 que encontra só 40 sobrando. Qual dos dois carrega o
+        // excedente não muda soma nenhuma — os dois saem das somas e a compra
+        // zera — mas fica fixado aqui para não mudar sem alguém ver
+        BankTransaction segundo = tx("2026-08-10", "60.00", "Estorno de \"Loja Tal Comercio\"");
+        BankTransaction primeiro = tx("2026-08-08", "60.00", "Estorno de \"Loja Tal Comercio\"");
+        BankTransaction compra = tx("2026-08-05", "-100.00", "Loja Tal Comercio");
+        when(bankTransactionRepository.findAllByUserIdOrderByDateDesc(user.getId()))
+                .thenReturn(List.of(segundo, primeiro, compra));
+
+        RefundReconciliationService.Outcome resultado = service.sweep(EMAIL, false);
+
+        // 60 + 40, e não 60 + 60: a compra de 100 nunca fica com 120 estornados
+        ArgumentCaptor<BigDecimal> abates = ArgumentCaptor.forClass(BigDecimal.class);
+        verify(bankTransactionRepository, times(2))
+                .applyPartialRefund(eq(user.getId()), eq(compra.getId()), abates.capture());
+        assertThat(abates.getAllValues().stream().reduce(BigDecimal.ZERO, BigDecimal::add))
+                .isEqualByComparingTo(new BigDecimal("100.00"));
+        assertThat(abates.getAllValues().get(1)).isEqualByComparingTo(new BigDecimal("40.00"));
+        // O volume é o que deixou de contar como gasto: a compra, não os créditos
+        assertThat(resultado.volume()).isEqualByComparingTo(new BigDecimal("100.00"));
+        // Os dois créditos saem das somas e ficam ligados à compra: o
+        // excedente não vira receita, e a varredura não o procura de novo
+        verify(bankTransactionRepository).markAsRefundPair(user.getId(),
+                List.of(segundo.getId(), primeiro.getId()));
+        verify(bankTransactionRepository).linkRefund(user.getId(), segundo.getId(), compra.getId());
+        verify(bankTransactionRepository).linkRefund(user.getId(), primeiro.getId(), compra.getId());
+        // O excedente não some: o crédito visto primeiro coube inteiro, o
+        // outro trouxe 20 além do que restava — e isso sai dito no relatório
+        assertThat(resultado.partials()).hasSize(2);
+        assertThat(resultado.partials().get(0).refundId()).isEqualTo(segundo.getId());
+        assertThat(resultado.partials().get(1).refundId()).isEqualTo(primeiro.getId());
+        assertThat(resultado.partials().get(0).refundedAmount()).isEqualByComparingTo("60.00");
+        assertThat(resultado.partials().get(0).excessAmount()).isEqualByComparingTo("0.00");
+        assertThat(resultado.partials().get(1).refundedAmount()).isEqualByComparingTo("40.00");
+        assertThat(resultado.partials().get(1).excessAmount()).isEqualByComparingTo("20.00");
+    }
+
+    @Test
+    @DisplayName("O segundo parcial chega numa passada posterior: conta o que o banco já abateu")
+    void parcialPosteriorRespeitaOQueJaFoiAbatido() {
+        // O estado que a primeira passada deixou: compra com 60 abatidos e o
+        // primeiro crédito marcado e ligado
+        BankTransaction compra = tx("2026-08-05", "-100.00", "Loja Tal Comercio");
+        compra.setRefundedAmount(new BigDecimal("60.00"));
+        BankTransaction primeiro = tx("2026-08-08", "60.00", "Estorno de \"Loja Tal Comercio\"");
+        primeiro.setRefunded(true);
+        primeiro.setRefundOfId(compra.getId());
+        BankTransaction segundo = tx("2026-09-02", "60.00", "Estorno de \"Loja Tal Comercio\"");
+        when(bankTransactionRepository.findAllByUserIdOrderByDateDesc(user.getId()))
+                .thenReturn(List.of(segundo, primeiro, compra));
+
+        RefundReconciliationService.Outcome resultado = service.sweep(EMAIL, false);
+
+        ArgumentCaptor<BigDecimal> abate = ArgumentCaptor.forClass(BigDecimal.class);
+        verify(bankTransactionRepository)
+                .applyPartialRefund(eq(user.getId()), eq(compra.getId()), abate.capture());
+        assertThat(abate.getValue()).isEqualByComparingTo(new BigDecimal("40.00"));
+        assertThat(resultado.volume()).isEqualByComparingTo(new BigDecimal("40.00"));
+        verify(bankTransactionRepository).markAsRefundPair(user.getId(), List.of(segundo.getId()));
+        verify(bankTransactionRepository).linkRefund(user.getId(), segundo.getId(), compra.getId());
+        assertThat(resultado.partials()).singleElement().satisfies(parcial -> {
+            assertThat(parcial.refundedAmount()).isEqualByComparingTo("40.00");
+            assertThat(parcial.excessAmount()).isEqualByComparingTo("20.00");
+        });
+    }
+
+    @Test
+    @DisplayName("Compra que já voltou inteira não recebe o terceiro crédito")
+    void compraEsgotadaNaoRecebeMais() {
+        BankTransaction compra = tx("2026-08-05", "-100.00", "Loja Tal Comercio");
+        compra.setRefundedAmount(new BigDecimal("100.00"));
+        BankTransaction terceiro = tx("2026-09-02", "20.00", "Estorno de \"Loja Tal Comercio\"");
+        when(bankTransactionRepository.findAllByUserIdOrderByDateDesc(user.getId()))
+                .thenReturn(List.of(terceiro, compra));
+
+        RefundReconciliationService.Outcome resultado = service.sweep(EMAIL, false);
+
+        // Cai no caminho de sempre do estorno que não acha a compra: nada é
+        // marcado nem abatido por conta dela
+        assertThat(resultado.partials()).isEmpty();
+        assertThat(resultado.pairs()).isZero();
+        verify(bankTransactionRepository, never()).applyPartialRefund(any(), any(), any());
+        verify(bankTransactionRepository, never()).markAsRefundPair(any(), any());
+    }
+
+    @Test
+    @DisplayName("Compra esgotada sai da fila: o crédito vai para a compra anterior da mesma loja")
+    void compraEsgotadaCedeAVez() {
+        // Quem compra duas vezes na mesma loja e recebe três créditos: os que
+        // não cabem mais na compra recente são da anterior, não receita
+        BankTransaction recente = tx("2026-08-05", "-100.00", "Loja Tal Comercio");
+        recente.setRefundedAmount(new BigDecimal("100.00"));
+        BankTransaction anterior = tx("2026-07-20", "-80.00", "Loja Tal Comercio");
+        BankTransaction credito = tx("2026-08-20", "20.00", "Estorno de \"Loja Tal Comercio\"");
+        when(bankTransactionRepository.findAllByUserIdOrderByDateDesc(user.getId()))
+                .thenReturn(List.of(credito, recente, anterior));
+
+        RefundReconciliationService.Outcome resultado = service.sweep(EMAIL, false);
+
+        assertThat(resultado.partials()).singleElement().satisfies(parcial -> {
+            assertThat(parcial.purchaseId()).isEqualTo(anterior.getId());
+            assertThat(parcial.excessAmount()).isEqualByComparingTo("0.00");
+        });
+        verify(bankTransactionRepository).applyPartialRefund(eq(user.getId()),
+                eq(anterior.getId()), any());
+        verify(bankTransactionRepository, never()).applyPartialRefund(any(),
+                eq(recente.getId()), any());
+    }
+
+    @Test
+    @DisplayName("Depois do teto, passar de novo não abate nem relata outra vez")
+    void tetoEIdempotente() {
+        BankTransaction compra = tx("2026-08-05", "-100.00", "Loja Tal Comercio");
+        compra.setRefundedAmount(new BigDecimal("100.00"));
+        BankTransaction primeiro = tx("2026-08-08", "60.00", "Estorno de \"Loja Tal Comercio\"");
+        primeiro.setRefunded(true);
+        primeiro.setRefundOfId(compra.getId());
+        BankTransaction segundo = tx("2026-09-02", "60.00", "Estorno de \"Loja Tal Comercio\"");
+        segundo.setRefunded(true);
+        segundo.setRefundOfId(compra.getId());
+        when(bankTransactionRepository.findAllByUserIdOrderByDateDesc(user.getId()))
+                .thenReturn(List.of(segundo, primeiro, compra));
+
+        RefundReconciliationService.Outcome resultado = service.sweep(EMAIL, false);
+
+        assertThat(resultado.partials()).isEmpty();
+        assertThat(resultado.volume()).isEqualByComparingTo(BigDecimal.ZERO);
+        verify(bankTransactionRepository, never()).applyPartialRefund(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("Compra já abatida em parte não é par exato de um estorno do valor bruto")
+    void parPorValorNaoIgnoraOAbate() {
+        // -100 com 60 já devolvidos e um "Estorno" de +100 sem nome: parear
+        // pelo valor bruto daria 160 estornados numa compra de 100
+        BankTransaction compra = tx("2026-08-05", "-100.00", "Loja Tal Comercio");
+        compra.setRefundedAmount(new BigDecimal("60.00"));
+        BankTransaction credito = tx("2026-08-06", "100.00", "Estorno");
+        when(bankTransactionRepository.findAllByUserIdOrderByDateDesc(user.getId()))
+                .thenReturn(List.of(credito, compra));
+
+        RefundReconciliationService.Outcome resultado = service.sweep(EMAIL, false);
+
+        assertThat(resultado.pairs()).isZero();
+        verify(bankTransactionRepository, never()).markAsRefundPair(any(), any());
     }
 
     @Test

@@ -331,10 +331,17 @@ public interface BankTransactionRepository extends JpaRepository<BankTransaction
     /**
      * Abate um estorno PARCIAL na compra (V40). Soma em vez de atribuir: uma
      * compra pode receber dois créditos parciais em faturas diferentes.
+     *
+     * <p>Soma com TETO no valor da compra. A varredura já manda só o que
+     * resta, mas decide com o que leu; duas passadas ao mesmo tempo leem a
+     * mesma compra e cada uma manda um abate que cabe. O teto que vale nos
+     * dois casos é o que está na própria escrita.
      */
     @Modifying
     @Transactional
-    @Query("update BankTransaction t set t.refundedAmount = t.refundedAmount + :amount "
+    @Query("update BankTransaction t set t.refundedAmount = "
+            + "case when t.refundedAmount + :amount > abs(t.amount) then abs(t.amount) "
+            + "else t.refundedAmount + :amount end "
             + "where t.user.id = :userId and t.id = :compraId")
     int applyPartialRefund(@Param("userId") UUID userId,
                            @Param("compraId") UUID compraId,

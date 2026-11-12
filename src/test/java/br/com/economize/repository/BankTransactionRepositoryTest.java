@@ -263,4 +263,27 @@ class BankTransactionRepositoryTest {
         assertThat(alteradas).isZero();
         assertThat(repository.findById(alheia.getId()).orElseThrow().getAccountId()).isNull();
     }
+
+    // ------------------------------------------------- o teto do estorno
+
+    @Test
+    @DisplayName("O abate parcial soma, e para no valor da compra")
+    void abateParcialTemTeto() {
+        BankTransaction compra = transacao(dono, "-100.00", JULHO_10);
+
+        repository.applyPartialRefund(dono.getId(), compra.getId(), new BigDecimal("60.00"));
+        em.clear();
+        assertThat(repository.findById(compra.getId()).orElseThrow().getRefundedAmount())
+                .isEqualByComparingTo("60.00");
+
+        // O serviço já manda só o que resta, mas ele decide com o que LEU: duas
+        // varreduras ao mesmo tempo (a higiene e o botão) leem a mesma compra
+        // e mandam, cada uma, um abate que cabe. O teto que não depende de
+        // quem leu o quê é o do próprio UPDATE
+        repository.applyPartialRefund(dono.getId(), compra.getId(), new BigDecimal("60.00"));
+        em.clear();
+        BankTransaction lida = repository.findById(compra.getId()).orElseThrow();
+        assertThat(lida.getRefundedAmount()).isEqualByComparingTo("100.00");
+        assertThat(lida.getNetAmount()).isEqualByComparingTo("0.00");
+    }
 }
