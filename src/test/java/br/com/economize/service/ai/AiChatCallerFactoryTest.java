@@ -287,6 +287,22 @@ class AiChatCallerFactoryTest {
     }
 
     @Test
+    @DisplayName("Resposta fora do contrato (HTML de proxy, JSON quebrado) vira PROVIDER, não 500")
+    void serverUnparseableReplyShouldBeClassified() {
+        AiProviderException html = serverFailure(new org.springframework.web.client.UnknownContentTypeException(
+                String.class, org.springframework.http.MediaType.TEXT_HTML, HttpStatus.OK, "OK",
+                new org.springframework.http.HttpHeaders(), "<html>proxy</html>".getBytes()));
+        assertThat(html.getReason()).isEqualTo(AiProviderException.Reason.PROVIDER);
+        assertThat(html.getMessage()).doesNotContain("proxy");
+
+        AiProviderException quebrado = serverFailure(
+                new org.springframework.http.converter.HttpMessageNotReadableException("JSON truncado",
+                        mock(org.springframework.http.HttpInputMessage.class)));
+        assertThat(quebrado.getReason()).isEqualTo(AiProviderException.Reason.PROVIDER);
+        assertThat(quebrado.getMessage()).doesNotContain("truncado");
+    }
+
+    @Test
     @DisplayName("503 do provedor na chave do servidor vira PROVIDER")
     void serverUnavailableShouldBeClassified() throws Exception {
         RuntimeException cause = springAiFailure(HttpStatus.SERVICE_UNAVAILABLE, "{\"error\":\"overloaded\"}");

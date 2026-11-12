@@ -188,6 +188,17 @@ public class AiChatCallerFactory {
                         e.getClass().getSimpleName());
                 throw new AiProviderException(AiProviderException.Reason.NETWORK,
                         "Não foi possível falar com o provedor de IA.");
+            } catch (org.springframework.web.client.RestClientException
+                     | org.springframework.http.converter.HttpMessageConversionException e) {
+                // Resposta que chegou mas não é o JSON do contrato (página HTML de
+                // um proxy, corpo truncado, tipo de conteúdo inesperado): é falha
+                // do provedor, não erro nosso — sem isto escapava como 500
+                // genérico. Vem DEPOIS de ResourceAccessException, que também é
+                // RestClientException e tem a mensagem própria de rede
+                log.warn("Provedor de IA do servidor respondeu fora do contrato ({})",
+                        e.getClass().getSimpleName());
+                throw new AiProviderException(AiProviderException.Reason.PROVIDER,
+                        "O provedor de IA respondeu num formato inesperado.");
             }
             // Em Spring AI 1.1.x content() pode ser nulo quando o Gemini bloqueia
             // ou não gera texto. Propagar nulo faria Mono.fromCallable completar
