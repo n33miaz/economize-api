@@ -200,9 +200,13 @@ class PasswordServiceTest {
         when(userRepository.findByEmail(EMAIL)).thenReturn(Optional.of(user));
         when(passwordEncoder.matches("SenhaAtual1", "$2a$10$hashAtual")).thenReturn(true);
         when(passwordEncoder.encode("NovaSenha123")).thenReturn("$2a$10$novoHash");
+        // a versão que o UPDATE da revogação deixou no banco
+        when(userRepository.findSessionVersionByEmail(EMAIL)).thenReturn(Optional.of(1));
 
-        service.changePassword(EMAIL, "SenhaAtual1", "NovaSenha123");
+        User changed = service.changePassword(EMAIL, "SenhaAtual1", "NovaSenha123");
 
+        // o usuário devolvido já está na versão nova: é dela que sai o token da resposta
+        assertThat(changed.getSessionVersion()).isEqualTo(1);
         assertThat(user.getPassword()).isEqualTo("$2a$10$novoHash");
         verify(userRepository).save(user);
         // trocar a senha derruba as sessões emitidas com a antiga

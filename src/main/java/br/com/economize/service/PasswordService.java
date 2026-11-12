@@ -91,8 +91,12 @@ public class PasswordService {
         log.info("Senha redefinida via token de recuperação para o usuário {}", user.getId());
     }
 
+    /**
+     * Troca a senha e devolve o usuário JÁ na versão de sessão nova, para quem
+     * chama emitir o token que mantém a pessoa logada neste aparelho.
+     */
     @Transactional
-    public void changePassword(String email, String currentPassword, String newPassword) {
+    public User changePassword(String email, String currentPassword, String newPassword) {
         User user = userRepository.findByEmail(email)
                 .orElseThrow(() -> new IllegalArgumentException("Usuário não encontrado"));
 
@@ -106,10 +110,16 @@ public class PasswordService {
         user.setMustChangePassword(false);
         userRepository.save(user);
         // Trocar a senha derruba TODAS as sessões, inclusive a de quem trocou:
-        // não há como distinguir "o meu token" de "a cópia do meu token". O
-        // app entra de novo com a senha nova que acabou de digitar
+        // não há como distinguir "o meu token" de "a cópia do meu token". Quem
+        // trocou não é expulso porque a resposta leva um token novo, emitido
+        // já na versão nova; os outros aparelhos ficam de fora
         sessionVersions.revokeAll(user);
+        // A versão foi somada por UPDATE no banco e a entidade não grava a
+        // coluna: relê o valor (na mesma transação) só para o token sair certo
+        user.setSessionVersion(userRepository.findSessionVersionByEmail(email)
+                .orElseThrow(() -> new IllegalArgumentException("Usuário não encontrado")));
         log.info("Senha alterada pelo próprio usuário {}", user.getId());
+        return user;
     }
 
     private void issueResetToken(User user) {

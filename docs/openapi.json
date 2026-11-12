@@ -10348,7 +10348,7 @@
     },
     "/api/v1/users/me/change-password": {
       "post": {
-        "description": "Exige a senha atual; se não conferir, retorna 400.",
+        "description": "Exige a senha atual; se não conferir, retorna 400. A troca derruba todas as sessões da conta, e a resposta traz um `token` NOVO (mesmo formato do login: token e nome) para este aparelho continuar logado; os outros aparelhos precisam entrar de novo.",
         "operationId": "changePassword",
         "requestBody": {
           "content": {
@@ -10362,6 +10362,13 @@
         },
         "responses": {
           "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthResponse"
+                }
+              }
+            },
             "description": "OK"
           }
         },

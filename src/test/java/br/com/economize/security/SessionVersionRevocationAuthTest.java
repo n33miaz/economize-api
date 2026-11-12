@@ -67,22 +67,30 @@ class SessionVersionRevocationAuthTest {
     private String issuer;
 
     @Test
-    @DisplayName("trocar a senha derruba o token antigo; o token do novo login vale")
+    @DisplayName("trocar a senha derruba os tokens antigos; o token devolvido pela troca vale")
     void changingThePasswordRevokesOldTokens() {
         User user = newUser();
         String old = login(user.getEmail(), PASSWORD);
+        // outro aparelho logado na mesma conta
+        String otherDevice = jwtUtil.generateToken(userRepository.findByEmail(user.getEmail()).orElseThrow());
         me(old).expectStatus().isOk();
+        me(otherDevice).expectStatus().isOk();
 
-        client.post().uri("/api/v1/users/me/change-password")
+        String returned = client.post().uri("/api/v1/users/me/change-password")
                 .header(HttpHeaders.AUTHORIZATION, "Bearer " + old)
                 .contentType(MediaType.APPLICATION_JSON)
                 .bodyValue(Map.of("currentPassword", PASSWORD, "newPassword", "senha-nova-456"))
                 .exchange()
-                .expectStatus().isNoContent();
+                .expectStatus().isOk()
+                .expectBody(Map.class)
+                .returnResult().getResponseBody()
+                .get("token").toString();
 
         me(old).expectStatus().isUnauthorized();
-        String fresh = login(user.getEmail(), "senha-nova-456");
-        me(fresh).expectStatus().isOk();
+        me(otherDevice).expectStatus().isUnauthorized();
+        // quem trocou segue logado com o token da resposta, sem novo login
+        me(returned).expectStatus().isOk();
+        me(login(user.getEmail(), "senha-nova-456")).expectStatus().isOk();
     }
 
     @Test
