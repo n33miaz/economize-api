@@ -22,7 +22,7 @@ public record AiSettingsResponse(
         @Schema(description = "Provedor em vigor", example = "GEMINI")
         String provider,
 
-        @Schema(description = "Modelo em vigor", example = "gemini-2.0-flash")
+        @Schema(description = "Modelo em vigor", example = "gemini-flash-latest")
         String model,
 
         @Schema(description = "Últimos 4 caracteres da chave do usuário; nulo quando a origem é SERVER",

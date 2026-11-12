@@ -269,7 +269,7 @@
           "model": {
             "default": "",
             "description": "Modelo em vigor",
-            "example": "gemini-2.0-flash",
+            "example": "gemini-flash-latest",
             "type": "string"
           },
           "provider": {

@@ -68,7 +68,7 @@ class UserAiSettingsServiceTest {
 
     private UserAiSettingsService service(SecretCipher cipher) {
         return new UserAiSettingsService(userRepository, repository, cipher, properties,
-                callerFactory, httpClient, "gemini-2.0-flash");
+                callerFactory, httpClient, "gemini-flash-latest");
     }
 
     private UserAiSettings storedFor(User user, SecretCipher cipher, AiProvider provider, String model) {
@@ -112,10 +112,25 @@ class UserAiSettingsServiceTest {
 
         assertThat(response.source()).isEqualTo(AiSettingsResponse.SOURCE_SERVER);
         assertThat(response.provider()).isEqualTo("GEMINI");
-        assertThat(response.model()).isEqualTo("gemini-2.0-flash");
+        assertThat(response.model()).isEqualTo("gemini-flash-latest");
         assertThat(response.keyStatus()).isEqualTo(AiSettingsResponse.KEY_SERVER);
         assertThat(response.keyLast4()).isNull();
         assertThat(response.byokAvailable()).isTrue();
+    }
+
+    @Test
+    @DisplayName("Modelo salvo que saiu do catálogo (gemini-2.0-flash) aparece como o padrão, sem reescrever o banco")
+    void currentShouldShowDefaultForRetiredModel() {
+        SecretCipher cipher = new SecretCipher(KEY_1, "k1", "");
+        UserAiSettings stored = storedFor(ana, cipher, AiProvider.GEMINI, "gemini-2.0-flash");
+        when(repository.findByUserId(ana.getId())).thenReturn(Optional.of(stored));
+
+        AiSettingsResponse response = service(cipher).current(ana.getEmail());
+
+        assertThat(response.model()).isEqualTo("gemini-flash-latest");
+        // só a leitura muda: a linha continua com o que o usuário escolheu
+        assertThat(stored.getModel()).isEqualTo("gemini-2.0-flash");
+        verify(repository, never()).save(any());
     }
 
     @Test
@@ -172,7 +187,7 @@ class UserAiSettingsServiceTest {
     @DisplayName("Salvar substitui a configuração anterior: chave velha não é arquivada em lugar nenhum")
     void saveShouldReplaceInPlace() {
         SecretCipher cipher = new SecretCipher(KEY_1, "k1", "");
-        UserAiSettings existente = storedFor(ana, cipher, AiProvider.GEMINI, "gemini-2.0-flash");
+        UserAiSettings existente = storedFor(ana, cipher, AiProvider.GEMINI, "gemini-2.5-flash");
         String cifraAntiga = existente.getApiKeyCipher();
         when(repository.findByUserId(ana.getId())).thenReturn(Optional.of(existente));
         when(repository.save(any(UserAiSettings.class))).thenAnswer(i -> i.getArgument(0));
@@ -271,7 +286,7 @@ class UserAiSettingsServiceTest {
     void currentShouldNotLeakAnotherOwnersSettings() {
         SecretCipher cipher = new SecretCipher(KEY_1, "k1", "");
         when(repository.findByUserId(ana.getId()))
-                .thenReturn(Optional.of(storedFor(ana, cipher, AiProvider.ANTHROPIC, "claude-sonnet-4-5")));
+                .thenReturn(Optional.of(storedFor(ana, cipher, AiProvider.ANTHROPIC, "claude-sonnet-5")));
         when(repository.findByUserId(bruno.getId())).thenReturn(Optional.empty());
 
         AiSettingsResponse doBruno = service(cipher).current(bruno.getEmail());

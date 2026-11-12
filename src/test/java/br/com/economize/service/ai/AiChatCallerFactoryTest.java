@@ -10,9 +10,15 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.ai.retry.NonTransientAiException;
+import org.springframework.ai.retry.TransientAiException;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.http.HttpStatus;
+import org.springframework.mock.http.client.MockClientHttpResponse;
+import org.springframework.web.client.ResponseErrorHandler;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Optional;
 import java.util.UUID;
@@ -47,6 +53,9 @@ class AiChatCallerFactoryTest {
     @Autowired
     private AiProviderProperties properties;
 
+    @Autowired
+    private ResponseErrorHandler responseErrorHandler;
+
     private UserAiSettingsRepository repository;
     private OpenAiCompatibleChatClient httpClient;
     private ChatClient serverChatClient;
@@ -68,7 +77,7 @@ class AiChatCallerFactoryTest {
         ChatClient.Builder builder = mock(ChatClient.Builder.class);
         when(builder.build()).thenReturn(serverChatClient);
         return new AiChatCallerFactory(repository, cipher, properties, httpClient, builder,
-                "gemini-2.0-flash", serverApiKey);
+                "gemini-flash-latest", serverApiKey);
     }
 
     @Test
@@ -129,7 +138,7 @@ class AiChatCallerFactoryTest {
 
         assertThat(caller).isPresent();
         assertThat(caller.get().userOwned()).isFalse();
-        assertThat(caller.get().describe()).contains("servidor").contains("gemini-2.0-flash");
+        assertThat(caller.get().describe()).contains("servidor").contains("gemini-flash-latest");
         verifyNoInteractions(httpClient);
     }
 
@@ -193,7 +202,7 @@ class AiChatCallerFactoryTest {
     void shouldUseUserKeyWhenPresent() {
         SecretCipher cipher = new SecretCipher(KEY_1, "k1", "");
         when(repository.findByUserId(user.getId()))
-                .thenReturn(Optional.of(settingsWith(cipher, AiProvider.ANTHROPIC, "claude-sonnet-4-5")));
+                .thenReturn(Optional.of(settingsWith(cipher, AiProvider.ANTHROPIC, "claude-sonnet-5")));
         when(httpClient.complete(any(), anyString(), anyList(), anyString(), any())).thenReturn("resposta");
         AiChatCallerFactory factory = factory(cipher);
 
@@ -204,13 +213,118 @@ class AiChatCallerFactoryTest {
         ArgumentCaptor<AiCallTarget> alvo = ArgumentCaptor.forClass(AiCallTarget.class);
         verify(httpClient).complete(alvo.capture(), anyString(), anyList(), anyString(), any(Duration.class));
         assertThat(alvo.getValue().provider()).isEqualTo(AiProvider.ANTHROPIC);
-        assertThat(alvo.getValue().model()).isEqualTo("claude-sonnet-4-5");
+        assertThat(alvo.getValue().model()).isEqualTo("claude-sonnet-5");
         assertThat(alvo.getValue().apiKey()).isEqualTo(CHAVE_DO_USUARIO);
         // o alvo é montado a partir do catálogo do CONTEXTO: endpoint sobrescrito
         // pelo perfil de teste e teto de tokens vindo do default curado, os dois
         // ao mesmo tempo — é essa combinação que o mecanismo antigo destruía
         assertThat(alvo.getValue().endpoint()).isEqualTo("https://example.test/anthropic/chat/completions");
         assertThat(alvo.getValue().maxTokens()).isEqualTo(4096);
+    }
+
+    @Test
+    @DisplayName("Modelo salvo aposentado (gemini-2.0-flash) sai no padrão do provedor, não em 404")
+    void shouldUseProviderDefaultForRetiredSavedModel() {
+        SecretCipher cipher = new SecretCipher(KEY_1, "k1", "");
+        UserAiSettings stored = settingsWith(cipher, AiProvider.GEMINI, "gemini-2.0-flash");
+        AiChatCallerFactory factory = factory(cipher);
+
+        AiCallTarget alvo = factory.targetFor(user, stored);
+
+        assertThat(alvo.model()).isEqualTo("gemini-flash-latest");
+        assertThat(stored.getModel()).isEqualTo("gemini-2.0-flash");
+    }
+
+    @Test
+    @DisplayName("Modelo fora do catálogo mas não aposentado (claude-sonnet-4-5) segue sendo usado")
+    void shouldKeepSavedModelThatIsOnlyOffTheList() {
+        SecretCipher cipher = new SecretCipher(KEY_1, "k1", "");
+        AiChatCallerFactory factory = factory(cipher);
+
+        AiCallTarget alvo = factory.targetFor(user, settingsWith(cipher, AiProvider.ANTHROPIC, "claude-sonnet-4-5"));
+
+        assertThat(alvo.model()).isEqualTo("claude-sonnet-4-5");
+    }
+
+    /**
+     * Monta a exceção pelo MESMO {@code ResponseErrorHandler} que o Spring AI
+     * pluga no RestClient em produção: se o formato da mensagem mudar numa
+     * atualização, este teste quebra em vez de o 500 genérico voltar calado.
+     */
+    private RuntimeException springAiFailure(HttpStatus status, String body) throws Exception {
+        MockClientHttpResponse response = new MockClientHttpResponse(
+                body.getBytes(StandardCharsets.UTF_8), status);
+        try {
+            responseErrorHandler.handleError(response);
+        } catch (RuntimeException e) {
+            return e;
+        }
+        throw new AssertionError("o handler do Spring AI não levantou nada para " + status);
+    }
+
+    private AiProviderException serverFailure(RuntimeException cause) {
+        when(repository.findByUserId(user.getId())).thenReturn(Optional.empty());
+        ChatClient.ChatClientRequestSpec request = mock(ChatClient.ChatClientRequestSpec.class);
+        when(serverChatClient.prompt(any(Prompt.class))).thenReturn(request);
+        when(request.call()).thenThrow(cause);
+        AiChatCallerFactory factory = factory(new SecretCipher(KEY_1, "k1", ""));
+        return catchThrowableOfType(
+                () -> factory.resolve(user, true).orElseThrow().complete("sistema", "pergunta"),
+                AiProviderException.class);
+    }
+
+    @Test
+    @DisplayName("404 do modelo aposentado na chave do servidor vira MODEL, não 500 genérico")
+    void serverModelNotFoundShouldBeClassified() throws Exception {
+        RuntimeException cause = springAiFailure(HttpStatus.NOT_FOUND,
+                "{\"error\":{\"message\":\"This model models/gemini-2.0-flash is no longer available.\"}}");
+        assertThat(cause).isInstanceOf(NonTransientAiException.class);
+
+        AiProviderException error = serverFailure(cause);
+
+        assertThat(error.getReason()).isEqualTo(AiProviderException.Reason.MODEL);
+        assertThat(error.getMessage()).contains("modelo").doesNotContain("gemini-2.0-flash");
+    }
+
+    @Test
+    @DisplayName("Resposta fora do contrato (HTML de proxy, JSON quebrado) vira PROVIDER, não 500")
+    void serverUnparseableReplyShouldBeClassified() {
+        AiProviderException html = serverFailure(new org.springframework.web.client.UnknownContentTypeException(
+                String.class, org.springframework.http.MediaType.TEXT_HTML, HttpStatus.OK, "OK",
+                new org.springframework.http.HttpHeaders(), "<html>proxy</html>".getBytes()));
+        assertThat(html.getReason()).isEqualTo(AiProviderException.Reason.PROVIDER);
+        assertThat(html.getMessage()).doesNotContain("proxy");
+
+        AiProviderException quebrado = serverFailure(
+                new org.springframework.http.converter.HttpMessageNotReadableException("JSON truncado",
+                        mock(org.springframework.http.HttpInputMessage.class)));
+        assertThat(quebrado.getReason()).isEqualTo(AiProviderException.Reason.PROVIDER);
+        assertThat(quebrado.getMessage()).doesNotContain("truncado");
+    }
+
+    @Test
+    @DisplayName("503 do provedor na chave do servidor vira PROVIDER")
+    void serverUnavailableShouldBeClassified() throws Exception {
+        RuntimeException cause = springAiFailure(HttpStatus.SERVICE_UNAVAILABLE, "{\"error\":\"overloaded\"}");
+        assertThat(cause).isInstanceOf(TransientAiException.class);
+
+        AiProviderException error = serverFailure(cause);
+
+        assertThat(error.getReason()).isEqualTo(AiProviderException.Reason.PROVIDER);
+    }
+
+    @Test
+    @DisplayName("401/403 viram AUTH e 429 vira RATE_LIMIT, sem ecoar o corpo do provedor")
+    void serverAuthAndQuotaShouldBeClassified() throws Exception {
+        assertThat(serverFailure(springAiFailure(HttpStatus.UNAUTHORIZED, "{\"segredo\":\"x\"}")).getReason())
+                .isEqualTo(AiProviderException.Reason.AUTH);
+        assertThat(AiChatCallerFactory.classifyServerFailure(
+                springAiFailure(HttpStatus.FORBIDDEN, "nao")).getReason())
+                .isEqualTo(AiProviderException.Reason.AUTH);
+        AiProviderException quota = AiChatCallerFactory.classifyServerFailure(
+                springAiFailure(HttpStatus.TOO_MANY_REQUESTS, "{\"segredo\":\"quota\"}"));
+        assertThat(quota.getReason()).isEqualTo(AiProviderException.Reason.RATE_LIMIT);
+        assertThat(quota.getMessage()).doesNotContain("segredo");
     }
 
     @Test
