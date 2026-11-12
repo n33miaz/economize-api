@@ -9,6 +9,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
+import org.springframework.boot.test.autoconfigure.orm.jpa.TestEntityManager;
 
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
@@ -44,6 +45,9 @@ class WishDomainRepositoryTest {
 
     @Autowired
     private UserRepository userRepository;
+
+    @Autowired
+    private TestEntityManager entityManager;
 
     private User dono;
     private User estranho;
@@ -153,6 +157,29 @@ class WishDomainRepositoryTest {
         assertThat(devolucaoMaior).isZero();
         assertThat(wishRepository.findById(meta.getId()).orElseThrow().getSavedAmount())
                 .isEqualByComparingTo("500.00");
+    }
+
+    @Test
+    @DisplayName("Salvar uma meta lida antes do aporte não apaga o saldo atômico")
+    void saveDeEntidadeAntigaPreservaSaldoAjustadoAtomicamente() {
+        Wish meta = desejo(dono, "Moto", "18000", Wish.Status.GOAL);
+        entityManager.flush();
+        entityManager.clear();
+
+        // Esta instância fica com saldo zero enquanto outra requisição aporta cem.
+        Wish carregadaAntes = wishRepository.findById(meta.getId()).orElseThrow();
+        int aporte = wishRepository.adjustSavedAmount(meta.getId(), dono.getId(),
+                new BigDecimal("100.00"), new BigDecimal("999999999999999.9999"),
+                List.of(Wish.Status.PURCHASED, Wish.Status.ARCHIVED));
+
+        carregadaAntes.setName("Moto revisada");
+        wishRepository.saveAndFlush(carregadaAntes);
+        entityManager.clear();
+
+        Wish gravada = wishRepository.findById(meta.getId()).orElseThrow();
+        assertThat(aporte).isOne();
+        assertThat(gravada.getSavedAmount()).isEqualByComparingTo("100.00");
+        assertThat(gravada.getName()).isEqualTo("Moto revisada");
     }
 
     // -------------------------------------------------------------- renda

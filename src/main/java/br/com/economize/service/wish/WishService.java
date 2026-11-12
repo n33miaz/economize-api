@@ -35,6 +35,9 @@ public class WishService {
      * desejo é barato, mas a listagem varre todos e o app renderiza todos.
      */
     private static final int MAX_WISHES = 100;
+    private static final BigDecimal SALDO_MAXIMO = new BigDecimal("999999999999999.9999");
+    private static final List<Wish.Status> STATUS_ENCERRADOS = List.of(
+            Wish.Status.PURCHASED, Wish.Status.ARCHIVED);
 
     private final WishRepository wishRepository;
     private final UserRepository userRepository;
@@ -99,13 +102,39 @@ public class WishService {
         User user = requireUser(email);
         Wish wish = requireWish(user.getId(), id);
 
+        BigDecimal saldoLido = wish.getSavedAmount() == null ? BigDecimal.ZERO : wish.getSavedAmount();
+        BigDecimal saldoPedido = request.savedAmount() != null ? request.savedAmount() : saldoLido;
+        BigDecimal alvoPedido = request.targetAmount() != null ? request.targetAmount() : wish.getTargetAmount();
+
+        // A checagem considera o retrato final do PATCH: subir alvo e saldo no
+        // mesmo pedido é válido, embora cada campo isolado pudesse não ser.
+        if (saldoPedido.compareTo(alvoPedido) > 0) {
+            throw new IllegalArgumentException("Valor já guardado não pode ser maior que o valor do desejo");
+        }
+
+        if (request.savedAmount() != null) {
+            BigDecimal delta = saldoPedido.subtract(saldoLido);
+            if (delta.signum() != 0 && wishRepository.adjustSavedAmount(
+                    id, user.getId(), delta, SALDO_MAXIMO, STATUS_ENCERRADOS) != 1) {
+                // O UPDATE recusa meta encerrada de propósito; separar o caso
+                // evita mandar a pessoa "tentar de novo" algo que nunca passará.
+                if (STATUS_ENCERRADOS.contains(wish.getStatus())) {
+                    throw new IllegalArgumentException("Meta comprada ou arquivada não aceita mudança no valor guardado");
+                }
+                throw new IllegalArgumentException("O saldo da meta mudou enquanto era atualizado; tente novamente");
+            }
+            // O UPDATE limpa o contexto para não reaproveitar saldo antigo.
+            // Recarregar antes do save preserva um aporte concorrente também na
+            // resposta e deixa esta gravação cuidar apenas dos demais campos.
+            wish = requireWish(user.getId(), id);
+        }
+
         if (request.name() != null) {
             String name = request.name().trim();
             if (name.isEmpty()) throw new IllegalArgumentException("Nome do desejo não pode ser vazio");
             wish.setName(name);
         }
         if (request.targetAmount() != null) wish.setTargetAmount(request.targetAmount());
-        if (request.savedAmount() != null) wish.setSavedAmount(request.savedAmount());
         if (request.categoryId() != null) {
             validateCategory(request.categoryId(), user.getId());
             wish.setCategoryId(request.categoryId());
@@ -113,12 +142,6 @@ public class WishService {
         if (request.targetDate() != null) wish.setTargetDate(request.targetDate());
         if (request.note() != null) wish.setNote(trimToNull(request.note()));
         if (request.status() != null) wish.setStatus(parseStatus(request.status()));
-
-        // A checagem roda DEPOIS de aplicar tudo: um PATCH que sobe o alvo e o
-        // guardado ao mesmo tempo seria rejeitado se comparado campo a campo
-        if (wish.getSavedAmount().compareTo(wish.getTargetAmount()) > 0) {
-            throw new IllegalArgumentException("Valor já guardado não pode ser maior que o valor do desejo");
-        }
 
         Wish stored = wishRepository.save(wish);
         WishBaseline baseline = projectionService.baselineFor(user.getId());

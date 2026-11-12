@@ -34,6 +34,8 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -155,6 +157,13 @@ class WishServiceTest {
         Wish existente = wish("Moto", "1000");
         existente.setSavedAmount(new BigDecimal("900"));
         when(wishRepository.findByIdAndUserId(id, USER_ID)).thenReturn(Optional.of(existente));
+        // O saldo só muda pelo UPDATE atômico; o stub reproduz o efeito dele
+        // na linha que o serviço relê em seguida
+        when(wishRepository.adjustSavedAmount(eq(id), eq(USER_ID), any(), any(), any()))
+                .thenAnswer(inv -> {
+                    existente.setSavedAmount(existente.getSavedAmount().add(inv.getArgument(2)));
+                    return 1;
+                });
 
         // comparar campo a campo rejeitaria: 2.000 guardados contra o alvo
         // ANTIGO de 1.000. A checagem tem de ver o estado final
@@ -163,6 +172,23 @@ class WishServiceTest {
 
         assertThat(existente.getTargetAmount()).isEqualByComparingTo("5000");
         assertThat(existente.getSavedAmount()).isEqualByComparingTo("2000");
+        // Vai como diferença, para somar com um aporte concorrente em vez de apagá-lo
+        verify(wishRepository).adjustSavedAmount(eq(id), eq(USER_ID),
+                argThat(d -> d.compareTo(new BigDecimal("1100")) == 0), any(), any());
+    }
+
+    @Test
+    void metaEncerradaRecusaMudarOGuardadoComMotivoProprio() {
+        UUID id = UUID.randomUUID();
+        Wish existente = wish("Moto", "1000");
+        existente.setStatus(Wish.Status.PURCHASED);
+        when(wishRepository.findByIdAndUserId(id, USER_ID)).thenReturn(Optional.of(existente));
+        when(wishRepository.adjustSavedAmount(any(), any(), any(), any(), any())).thenReturn(0);
+
+        assertThatThrownBy(() -> service.update(EMAIL, id, new WishRequests.UpdateWish(
+                null, null, new BigDecimal("500"), null, null, null, null)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("comprada ou arquivada");
     }
 
     @Test
