@@ -81,17 +81,21 @@ public class InvestmentMovementService {
     private final ConnectorAccountRepository accountRepository;
     private final UserRepository userRepository;
     private final int defaultMonths;
+    // "Hoje" na zona financeira (FinancialClockConfig), não na do servidor
+    private final java.time.Clock clock;
 
     public InvestmentMovementService(BankTransactionRepository transactionRepository,
                                      CategoryRepository categoryRepository,
                                      ConnectorAccountRepository accountRepository,
                                      UserRepository userRepository,
-                                     @Value("${economize.investments.movement-months-default:12}") int defaultMonths) {
+                                     @Value("${economize.investments.movement-months-default:12}") int defaultMonths,
+                                     java.time.Clock clock) {
         this.transactionRepository = transactionRepository;
         this.categoryRepository = categoryRepository;
         this.accountRepository = accountRepository;
         this.userRepository = userRepository;
         this.defaultMonths = defaultMonths;
+        this.clock = clock;
     }
 
     public InvestmentResponses.Movements movements(String email, Integer months) {
@@ -109,7 +113,7 @@ public class InvestmentMovementService {
             throw new IllegalArgumentException(String.format(
                     "Janela inválida: months deve estar entre 1 e %d (recebido: %d)", MAX_MONTHS, window));
         }
-        LocalDate to = LocalDate.now(ZoneOffset.UTC);
+        LocalDate to = LocalDate.now(clock);
         LocalDate from = to.withDayOfMonth(1).minusMonths(window - 1L);
         OffsetDateTime start = from.atStartOfDay().atOffset(ZoneOffset.UTC);
         OffsetDateTime end = to.plusDays(1).atStartOfDay().atOffset(ZoneOffset.UTC);

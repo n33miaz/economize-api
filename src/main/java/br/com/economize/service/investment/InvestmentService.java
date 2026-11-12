@@ -25,7 +25,6 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
-import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -75,6 +74,8 @@ public class InvestmentService {
     private final ObjectProvider<PluggyClient> pluggyClient;
     private final ExchangeRateLookup exchangeRates;
     private final int maxManualPositions;
+    // "Hoje" na zona financeira (FinancialClockConfig), não na do servidor
+    private final java.time.Clock clock;
 
     public InvestmentService(InvestmentPositionRepository positionRepository,
                              PluggyItemRepository pluggyItemRepository,
@@ -82,7 +83,8 @@ public class InvestmentService {
                              InvestmentMovementService movementService,
                              ObjectProvider<PluggyClient> pluggyClient,
                              ExchangeRateLookup exchangeRates,
-                             @Value("${economize.investments.max-manual-positions:200}") int maxManualPositions) {
+                             @Value("${economize.investments.max-manual-positions:200}") int maxManualPositions,
+                             java.time.Clock clock) {
         this.positionRepository = positionRepository;
         this.pluggyItemRepository = pluggyItemRepository;
         this.userRepository = userRepository;
@@ -90,6 +92,7 @@ public class InvestmentService {
         this.pluggyClient = pluggyClient;
         this.exchangeRates = exchangeRates;
         this.maxManualPositions = maxManualPositions;
+        this.clock = clock;
     }
 
     // ------------------------------------------------------------------ sync
@@ -198,7 +201,7 @@ public class InvestmentService {
      * "Banco Inter" é onde ele vê o CDB, mesmo que o emissor seja outro banco.
      * O emissor entra só como rede, quando o conector não tem nome.
      */
-    private static void apply(InvestmentPosition p, PluggyItem item, PluggyInvestmentMapper.Mapped m) {
+    private void apply(InvestmentPosition p, PluggyItem item, PluggyInvestmentMapper.Mapped m) {
         p.setPluggyItemId(item.getId());
         String institution = item.getConnectorName() != null ? item.getConnectorName() : m.issuer();
         p.setInstitution(truncate(institution, INSTITUTION_MAX));
@@ -215,14 +218,14 @@ public class InvestmentService {
         p.setCurrentValue(m.currentValue());
         p.setMaturityDate(m.maturityDate());
         // sem data no provedor, a posição é "de hoje": foi lida agora
-        p.setPositionDate(m.positionDate() != null ? m.positionDate() : LocalDate.now(ZoneOffset.UTC));
+        p.setPositionDate(m.positionDate() != null ? m.positionDate() : LocalDate.now(clock));
     }
 
     // -------------------------------------------------------------- posições
 
     public List<InvestmentResponses.PositionItem> list(String email) {
         User user = requireUser(email);
-        LocalDate today = LocalDate.now(ZoneOffset.UTC);
+        LocalDate today = LocalDate.now(clock);
         return positionRepository.findAllByUserIdOrderByNameAsc(user.getId()).stream()
                 .map(p -> InvestmentResponses.PositionItem.from(p, isStale(p, today)))
                 .toList();
@@ -305,7 +308,7 @@ public class InvestmentService {
 
     public InvestmentResponses.Summary summary(String email) {
         User user = requireUser(email);
-        LocalDate today = LocalDate.now(ZoneOffset.UTC);
+        LocalDate today = LocalDate.now(clock);
         List<InvestmentPosition> positions = positionRepository.findAllByUserIdOrderByNameAsc(user.getId());
 
         BigDecimal totalInvested = BigDecimal.ZERO;

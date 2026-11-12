@@ -38,16 +38,20 @@ public class ReportService {
         User user = userRepository.findByEmail(email)
                 .orElseThrow(() -> new IllegalArgumentException("Usuário não encontrado"));
 
+        // A regra da Análise (BankTransaction#countsInTotals) e o valor LÍQUIDO:
+        // somando o bruto de tudo, a aplicação, a duplicata descartada e o par
+        // de estorno entravam nos totais e podiam virar a categoria dominante
         var transactions = bankTransactionRepository.findAllByUserIdOrderByDateDesc(user.getId()).stream()
                 .filter(tx -> !tx.getDate().isBefore(start) && !tx.getDate().isAfter(end))
+                .filter(BankTransaction::countsInTotals)
                 .toList();
 
         BigDecimal income = transactions.stream()
-                .map(BankTransaction::getAmount)
+                .map(BankTransaction::getNetAmount)
                 .filter(amount -> amount.signum() > 0)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
         BigDecimal expense = transactions.stream()
-                .map(BankTransaction::getAmount)
+                .map(BankTransaction::getNetAmount)
                 .filter(amount -> amount.signum() < 0)
                 .reduce(BigDecimal.ZERO, BigDecimal::add)
                 .abs();
@@ -59,7 +63,7 @@ public class ReportService {
         Map<String, CategorySplit> byCategory = new LinkedHashMap<>();
         for (BankTransaction tx : transactions) {
             String cat = tx.getCategory() != null ? tx.getCategory() : "OTHER";
-            byCategory.computeIfAbsent(cat, k -> new CategorySplit()).add(tx.getAmount());
+            byCategory.computeIfAbsent(cat, k -> new CategorySplit()).add(tx.getNetAmount());
         }
 
         // A dominante é a de maior GASTO: é o que a pergunta "no que foi meu

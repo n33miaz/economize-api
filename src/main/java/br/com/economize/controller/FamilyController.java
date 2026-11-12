@@ -19,7 +19,6 @@ import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
 import java.time.YearMonth;
-import java.time.ZoneOffset;
 import java.util.List;
 import java.util.UUID;
 
@@ -39,6 +38,8 @@ public class FamilyController {
     private final FamilyService familyService;
     private final FamilyAnalyticsService familyAnalyticsService;
     private final FamilyTransferService familyTransferService;
+    // "Hoje" na zona financeira (FinancialClockConfig), não na do servidor
+    private final java.time.Clock clock;
 
     @Operation(summary = "Minha casa",
             description = "Grupo, membros (com o que cada um compartilha), os meus parâmetros de "
@@ -185,8 +186,8 @@ public class FamilyController {
      * como a pessoal): são várias pessoas numa resposta só, e a tela sempre
      * pede com o recorte do chip.
      */
-    private static AnalysisWindow resolveWindow(String month, String start, String end) {
+    private AnalysisWindow resolveWindow(String month, String start, String end) {
         AnalysisWindow requested = AnalysisWindow.resolve(month, start, end);
-        return requested != null ? requested : AnalysisWindow.ofMonth(YearMonth.now(ZoneOffset.UTC));
+        return requested != null ? requested : AnalysisWindow.ofMonth(YearMonth.now(clock));
     }
 }

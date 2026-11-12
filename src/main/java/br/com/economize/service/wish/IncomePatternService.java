@@ -103,6 +103,8 @@ public class IncomePatternService {
     private final CategoryRepository categoryRepository;
     private final UserRepository userRepository;
     private final PurchaseAdvisor advisor;
+    // "Hoje" na zona financeira (FinancialClockConfig), não na do servidor
+    private final java.time.Clock clock;
 
     /** Datas de uma ocorrência já resolvida (mês já reduzido ao maior crédito). */
     private record Occ(LocalDate date, BigDecimal amount) {
@@ -140,7 +142,7 @@ public class IncomePatternService {
 
     @Transactional(readOnly = true)
     public IncomePatternResponse analyze(String email) {
-        return analyze(email, LocalDate.now(ZoneOffset.UTC));
+        return analyze(email, LocalDate.now(clock));
     }
 
     /** Sobrecarga com "hoje" explícito — é o que torna o cálculo testável. */
@@ -473,7 +475,7 @@ public class IncomePatternService {
 
         List<PurchaseAdvisor.PurchaseRecord> result = new ArrayList<>();
         for (BankTransaction tx : transactions) {
-            if (tx.isIgnored() || tx.isInternalTransfer() || tx.isRefunded()) continue;
+            if (!tx.countsInTotals()) continue;
             if (tx.getAmount() == null || tx.getAmount().signum() >= 0) continue;
             boolean isGrocery = (tx.getCategoryId() != null && categoryIds.contains(tx.getCategoryId()))
                     || matchesGroceryKeyword(tx.getNormalizedDescription());

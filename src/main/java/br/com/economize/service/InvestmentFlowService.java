@@ -133,8 +133,9 @@ public class InvestmentFlowService {
         BigDecimal resgatado = BigDecimal.ZERO;
         for (BankTransaction tx : todas) {
             // Já fora da soma por decisão do usuário ou por outra varredura:
-            // não há o que fazer, e remarcar só inflaria o relatório
-            if (tx.isInternalTransfer() || tx.isIgnored()) continue;
+            // não há o que fazer, e remarcar só inflaria o relatório. O par de
+            // estorno entra nessa conta: já saiu pela varredura de estorno
+            if (!tx.countsInTotals()) continue;
             if (!ehMovimentoDeInvestimento(tx.getDescription())) continue;
             marcar.add(tx.getId());
             BigDecimal valor = tx.getAmount();

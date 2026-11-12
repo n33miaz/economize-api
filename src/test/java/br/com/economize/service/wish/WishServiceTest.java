@@ -17,6 +17,10 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 
+import org.mockito.Spy;
+import java.time.OffsetDateTime;
+import java.time.ZoneId;
+import java.time.Clock;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
@@ -48,8 +52,16 @@ class WishServiceTest {
     @Mock
     private WishProjectionService projectionService;
 
+    // UTC como os dados destes testes; a virada do fuso tem teste próprio
+    @Spy
+    private Clock clock = Clock.systemUTC();
+
     @InjectMocks
     private WishService service;
+
+    // 23h30 do dia 31 em São Paulo já é 1º de abril no servidor (02h30 UTC)
+    private static final Clock NOITE_DE_31_DE_MARCO = Clock.fixed(
+            OffsetDateTime.parse("2026-03-31T23:30:00-03:00").toInstant(), ZoneId.of("America/Sao_Paulo"));
 
     private User user;
 
@@ -239,6 +251,22 @@ class WishServiceTest {
                 "Moto", new BigDecimal("18000"), null, null, null, "   "));
 
         assertThat(item.note()).isNull();
+    }
+
+
+    @Test
+    void oHojeDaCompraSegueAZonaFinanceira() {
+        UUID id = UUID.randomUUID();
+        when(wishRepository.findByIdAndUserId(id, USER_ID)).thenReturn(Optional.of(wish("Moto", "18000")));
+        WishService noBrasil = new WishService(wishRepository, userRepository, categoryRepository,
+                projectionService, NOITE_DE_31_DE_MARCO);
+
+        assertThat(noBrasil.purchase(EMAIL, id, new WishRequests.PurchaseWish(null, null)).purchasedAt())
+                .isEqualTo(LocalDate.of(2026, 3, 31));
+        // 01/04 ainda é amanhã para quem está no Brasil, mesmo já sendo hoje em UTC
+        assertThatThrownBy(() -> noBrasil.purchase(EMAIL, id,
+                new WishRequests.PurchaseWish(LocalDate.of(2026, 4, 1), null)))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 
     private static Wish wish(String name, String target) {

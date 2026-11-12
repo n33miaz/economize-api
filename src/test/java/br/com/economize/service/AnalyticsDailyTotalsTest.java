@@ -60,7 +60,7 @@ class AnalyticsDailyTotalsTest {
         user = User.builder().id(UUID.randomUUID()).email(EMAIL).name("Dono").password("x").build();
         lenient().when(userRepository.findByEmail(EMAIL)).thenReturn(Optional.of(user));
         service = new AnalyticsService(bankTransactionRepository, categoryRepository,
-                userRepository, cycleCaveatService);
+                userRepository, cycleCaveatService, java.time.Clock.systemUTC());
     }
 
     @Test
@@ -147,6 +147,21 @@ class AnalyticsDailyTotalsTest {
     }
 
     // ------------------------------------------------------------------ apoio
+
+    @Test
+    @DisplayName("FUSO: o dia é o dia UTC do instante, o mesmo relógio que recorta a janela")
+    void diaNoMesmoFusoDaJanela() {
+        // 23h de 31/08 com offset -03:00 é 02h de 01/09 em UTC: a consulta de
+        // setembro traz a linha, e a chave tem de cair em setembro também.
+        // Com o offset original ela saía como 31/08, que a grade descarta
+        BankTransaction viradaDoMes = tx("2026-09-01", "-80.00");
+        viradaDoMes.setDate(OffsetDateTime.parse("2026-08-31T23:00:00-03:00"));
+        daJanela(viradaDoMes);
+
+        assertThat(service.dailyTotals(EMAIL, janela()))
+                .extracting(DailyTotalResponse::date)
+                .containsExactly(LocalDate.parse("2026-09-01"));
+    }
 
     private AnalysisWindow janela() {
         return AnalysisWindow.of(LocalDate.parse("2026-09-01"), LocalDate.parse("2026-09-30"));
