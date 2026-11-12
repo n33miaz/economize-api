@@ -239,6 +239,76 @@ class CategoryBudgetServiceTest {
                 .isEqualTo(BigDecimal.ZERO);
     }
 
+    // ------------------------------------------------------------- hierarquia
+
+    private static final UUID CASA = UUID.randomUUID();
+    private static final UUID LUZ = UUID.randomUUID();
+    private static final UUID PERSONALIZADA = UUID.randomUUID();
+
+    /** Casa (sistema) com a filha Luz (sistema) e uma filha criada pelo usuário. */
+    private void comHierarquia() {
+        Category casa = Category.builder().id(CASA).name("Casa").build();
+        Category luz = Category.builder().id(LUZ).name("Luz").parent(casa).build();
+        Category minha = Category.builder().id(PERSONALIZADA).name("Diarista")
+                .user(user).parent(casa).build();
+        when(categoryRepository.findVisibleTo(user.getId())).thenReturn(List.of(casa, luz, minha));
+    }
+
+    private void comTetoEm(UUID categoria, String limite) {
+        when(budgetRepository.findAllByUserId(user.getId())).thenReturn(List.of(
+                CategoryBudget.builder().id(UUID.randomUUID()).user(user).categoryId(categoria)
+                        .monthlyLimit(new BigDecimal(limite)).build()));
+    }
+
+    private BankTransaction txEm(UUID categoria, String valor) {
+        BankTransaction tx = tx(valor, "2026-09-05");
+        tx.setCategoryId(categoria);
+        return tx;
+    }
+
+    @Test
+    @DisplayName("Teto no pai cobre o gasto das filhas — como a Análise soma")
+    void tetoNoPaiCobreAsFilhas() {
+        comHierarquia();
+        comTetoEm(CASA, "300.00");
+        gastos(txEm(CASA, "-100.00"), txEm(LUZ, "-250.00"));
+
+        CategoryBudgetService.Status status = service.statusFor(EMAIL, mesDeSetembro(),
+                LocalDate.parse("2026-09-28"));
+
+        assertThat(status.lines()).singleElement().satisfies(linha -> {
+            assertThat(linha.categoryName()).isEqualTo("Casa");
+            assertThat(linha.spent()).isEqualByComparingTo("350.00");
+            assertThat(linha.exceeded()).isTrue();
+        });
+    }
+
+    @Test
+    @DisplayName("Teto numa filha continua só nela — o gasto do pai e da irmã não entram")
+    void tetoNaFilhaFicaNela() {
+        comHierarquia();
+        comTetoEm(LUZ, "300.00");
+        gastos(txEm(CASA, "-100.00"), txEm(LUZ, "-250.00"), txEm(PERSONALIZADA, "-80.00"));
+
+        assertThat(service.statusFor(EMAIL, mesDeSetembro(), LocalDate.parse("2026-09-28"))
+                .lines()).singleElement()
+                .extracting(CategoryBudgetService.Line::spent)
+                .isEqualTo(new BigDecimal("250.00"));
+    }
+
+    @Test
+    @DisplayName("Categoria pessoal sob um pai do sistema conta no teto do pai")
+    void categoriaPessoalContaNoPai() {
+        comHierarquia();
+        comTetoEm(CASA, "1000.00");
+        gastos(txEm(PERSONALIZADA, "-80.00"));
+
+        assertThat(service.statusFor(EMAIL, mesDeSetembro(), LocalDate.parse("2026-09-28"))
+                .lines()).singleElement()
+                .extracting(CategoryBudgetService.Line::spent)
+                .isEqualTo(new BigDecimal("80.00"));
+    }
+
     // ------------------------------------------------------------------ apoio
 
     private AnalysisWindow mesDeSetembro() {

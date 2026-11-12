@@ -108,8 +108,14 @@ public class CategoryBudgetService {
         List<CategoryBudget> tetos = budgetRepository.findAllByUserId(user.getId());
         if (tetos.isEmpty()) return new Status(0, 0, List.of());
 
-        Map<UUID, String> nomes = nomesDasCategorias(user.getId());
-        Map<UUID, BigDecimal> gastoPorCategoria = new HashMap<>();
+        // Um catálogo só: dá o nome de cada teto e a raiz de cada lançamento
+        Map<UUID, Category> catalogo = catalogoDe(user.getId());
+        // Duas somas, porque o teto do pai e o da filha respondem perguntas
+        // diferentes. Somar só pelo id exato deixava o teto posto em "Casa"
+        // com gasto zero quando o extrato estava todo em "Casa › Luz" — nunca
+        // avisava estouro, enquanto a Análise mostrava o pai cheio
+        Map<UUID, BigDecimal> gastoExato = new HashMap<>();
+        Map<UUID, BigDecimal> gastoPelaRaiz = new HashMap<>();
         for (BankTransaction tx : bankTransactionRepository
                 .findAllByUserIdAndDateGreaterThanEqualAndDateLessThanOrderByDateDesc(
                         user.getId(), window.startInstant(), window.endExclusiveInstant())) {
@@ -118,7 +124,11 @@ public class CategoryBudgetService {
             if (tx.getAmount().signum() >= 0 || tx.getCategoryId() == null) continue;
             // O teto compara com o que a compra custou de fato: estorno parcial
             // abate (V40), como em toda soma do app
-            gastoPorCategoria.merge(tx.getCategoryId(), tx.getNetAmount().abs(), BigDecimal::add);
+            BigDecimal valor = tx.getNetAmount().abs();
+            gastoExato.merge(tx.getCategoryId(), valor, BigDecimal::add);
+            // A raiz pela MESMA regra da Análise, para os dois números baterem
+            gastoPelaRaiz.merge(AnalyticsService.rootIdOf(tx.getCategoryId(), catalogo),
+                    valor, BigDecimal::add);
         }
 
         // Dias já corridos DENTRO da janela: o gasto até hoje só se compara
@@ -129,7 +139,13 @@ public class CategoryBudgetService {
 
         List<Line> linhas = new ArrayList<>();
         for (CategoryBudget teto : tetos) {
-            BigDecimal gasto = gastoPorCategoria.getOrDefault(teto.getCategoryId(), BigDecimal.ZERO);
+            // Teto na raiz cobre ela e as filhas; teto numa filha continua só
+            // nela. Categoria fora do catálogo é tratada como raiz de si mesma,
+            // igual ao rootIdOf
+            Category categoria = catalogo.get(teto.getCategoryId());
+            boolean ehRaiz = categoria == null || categoria.isRoot();
+            BigDecimal gasto = (ehRaiz ? gastoPelaRaiz : gastoExato)
+                    .getOrDefault(teto.getCategoryId(), BigDecimal.ZERO);
             BigDecimal limite = teto.getMonthlyLimit();
             // Teto proporcional à janela: um limite mensal contra um ciclo de
             // 45 dias precisa crescer, e contra um de 20 precisa encolher
@@ -148,7 +164,7 @@ public class CategoryBudgetService {
             boolean noRitmoDeEstourar = !estourou
                     && Materiality.vale(acimaDoRitmo) && acimaDoRitmo.signum() > 0;
 
-            linhas.add(new Line(teto.getCategoryId(), nomes.get(teto.getCategoryId()),
+            linhas.add(new Line(teto.getCategoryId(), categoria == null ? null : categoria.getName(),
                     limite, limiteDaJanela, gasto, esperadoAteHoje,
                     estourou ? excedente : BigDecimal.ZERO, estourou, noRitmoDeEstourar));
         }
@@ -159,6 +175,13 @@ public class CategoryBudgetService {
         log.info("Tetos de categoria: {} teto(s), {} estourado(s), {} acima do ritmo, user={}",
                 linhas.size(), estourados, emRisco, user.getId());
         return new Status(estourados, emRisco, linhas);
+    }
+
+    private Map<UUID, Category> catalogoDe(UUID userId) {
+        Map<UUID, Category> catalogo = new HashMap<>();
+        categoryRepository.findVisibleTo(userId)
+                .forEach(categoria -> catalogo.put(categoria.getId(), categoria));
+        return catalogo;
     }
 
     private Map<UUID, String> nomesDasCategorias(UUID userId) {
