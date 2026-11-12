@@ -381,6 +381,17 @@ public interface BankTransactionRepository extends JpaRepository<BankTransaction
     int clearFamilyTransfer(@Param("userId") UUID userId, @Param("ids") Collection<UUID> ids);
 
     /**
+     * Solta TODAS as marcas de Pix da casa de um usuário — quem sai da casa
+     * (ou a vê desfeita) não tem mais com quem trocar dinheiro "da casa".
+     * Amarrado ao user_id: nunca toca linha de outra pessoa.
+     */
+    @Modifying
+    @Transactional
+    @Query("update BankTransaction t set t.familyTransfer = false "
+            + "where t.user.id = :userId and t.familyTransfer = true")
+    int clearAllFamilyTransfers(@Param("userId") UUID userId);
+
+    /**
      * Solta a marca de descarte E o motivo. Sem limpar o motivo, a linha
      * voltaria para as somas carregando "descartada porque duplicada", e a
      * próxima varredura leria isso como decisão já tomada.

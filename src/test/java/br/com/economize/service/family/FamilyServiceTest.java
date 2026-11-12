@@ -69,6 +69,10 @@ class FamilyServiceTest {
     private CategoryRepository categoryRepository;
     @Mock
     private ConnectorAccountRepository connectorAccountRepository;
+    @Mock
+    private br.com.economize.repository.BankTransactionRepository bankTransactionRepository;
+    @Mock
+    private FamilyTransferService familyTransferService;
 
     @InjectMocks
     private FamilyService service;
@@ -263,6 +267,25 @@ class FamilyServiceTest {
         FamilyMember saved = capturedMember();
         assertThat(saved.getGroup()).isSameAs(casa);
         assertThat(saved.getRole()).isEqualTo(FamilyMember.Role.MEMBER);
+        // quem entra já tem o histórico varrido: o Pix do casal sai dos totais
+        // sem depender de alguém lembrar do /reconcile-transfers
+        verify(familyTransferService).reconcileInNewTransaction(BIA);
+    }
+
+    @Test
+    @DisplayName("Falha da varredura ao entrar não derruba o join")
+    void varreduraQueFalhaNaoDerrubaOJoin() {
+        when(memberRepository.existsByUserId(bia.getId())).thenReturn(false);
+        conviteVivo("ABCD2345");
+        when(memberRepository.findAllByGroupIdOrderByJoinedAtAsc(casa.getId()))
+                .thenAnswer(inv -> List.of(anaOwner, capturedMember()));
+        when(familyTransferService.reconcileInNewTransaction(BIA))
+                .thenThrow(new IllegalStateException("banco fora"));
+
+        FamilyResponses.FamilyResponse response = service.join(BIA, new FamilyRequests.JoinFamily("ABCD2345"));
+
+        assertThat(response.role()).isEqualTo("MEMBER");
+        verify(memberRepository).save(any());
     }
 
     @Test
@@ -341,6 +364,9 @@ class FamilyServiceTest {
         service.removeMember(BIA, biaMember.getId().toString());
 
         verify(memberRepository, org.mockito.Mockito.times(2)).delete(biaMember);
+        // as marcas de Pix da casa saem SÓ das linhas de quem saiu
+        verify(bankTransactionRepository, org.mockito.Mockito.times(2)).clearAllFamilyTransfers(bia.getId());
+        verify(bankTransactionRepository, never()).clearAllFamilyTransfers(ana.getId());
     }
 
     @Test
@@ -355,6 +381,9 @@ class FamilyServiceTest {
 
         service.removeMember(ANA, biaMember.getId().toString());
         verify(memberRepository).delete(biaMember);
+        // removida pelo dono: limpa as linhas da Bia, nunca as da Ana
+        verify(bankTransactionRepository).clearAllFamilyTransfers(bia.getId());
+        verify(bankTransactionRepository, never()).clearAllFamilyTransfers(ana.getId());
     }
 
     @Test
@@ -400,6 +429,9 @@ class FamilyServiceTest {
         verify(inviteRepository).deleteAll(List.of(invite));
         verify(memberRepository).deleteAll(List.of(anaOwner, biaMember));
         verify(groupRepository).delete(casa);
+        // desfeita a casa, ninguém mais tem "Pix da casa"
+        verify(bankTransactionRepository).clearAllFamilyTransfers(ana.getId());
+        verify(bankTransactionRepository).clearAllFamilyTransfers(bia.getId());
     }
 
     // ------------------------------------------------------------ o que eu compartilho

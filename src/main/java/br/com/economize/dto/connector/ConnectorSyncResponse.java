@@ -2,6 +2,7 @@ package br.com.economize.dto.connector;
 
 import br.com.economize.service.connector.OpenFinanceProvider;
 
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -16,12 +17,16 @@ public record ConnectorSyncResponse(
         int uncategorized,
         int reconciled,
         String format,
-        int itemsSynced
+        int itemsSynced,
+        // Campo novo e aditivo: o app publicado ignora; o novo mostra quais
+        // bancos ficaram de fora por pedirem reconexão. Vazio quando nenhum
+        List<OpenFinanceProvider.SkippedConnection> skippedConnections
 ) {
 
     public static ConnectorSyncResponse from(OpenFinanceProvider.SyncResult sync) {
         var result = sync.result();
         return new ConnectorSyncResponse(result.uploadId(), result.transactionsImported(), result.suggested(),
-                result.uncategorized(), result.reconciled(), result.format(), sync.itemsSynced());
+                result.uncategorized(), result.reconciled(), result.format(), sync.itemsSynced(),
+                sync.skippedConnections());
     }
 }
