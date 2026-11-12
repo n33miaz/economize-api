@@ -1,6 +1,7 @@
 package br.com.economize.service.wish;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.List;
 
 /**
@@ -23,8 +24,8 @@ import java.util.List;
  * @param monthlyExpense  mediana do que saiu nesses mesmos ciclos
  * @param cyclesConsidered quantos ciclos COM DADOS entraram na mediana
  * @param gaps            o que falta para o cálculo ficar completo (códigos para a tela)
- * @param lastClosedCycle sobra efetivamente apurada no último ciclo fechado;
- *                        não é a estimativa da mediana
+ * @param lastClosedCycle sobra efetivamente apurada no último ciclo fechado COM
+ *                        dados; não é a estimativa da mediana. Nulo se nenhum tem
  */
 public record WishBaseline(
         BigDecimal workIncome,
@@ -39,9 +40,11 @@ public record WishBaseline(
 ) {
     /**
      * A medida de um ciclo concreto. O identificador é o mês em que o ciclo
-     * começa (também para ciclo salarial), igual ao {@code cycleMonth} do aporte.
+     * começa (também para ciclo salarial), igual ao {@code cycleMonth} do aporte;
+     * {@code start} e {@code end} são o período real, com o fim INCLUSIVO, para a
+     * tela não ter de refazer o recorte do dia-âncora.
      */
-    public record ClosedCycle(String cycleMonth, BigDecimal leftover) {
+    public record ClosedCycle(String cycleMonth, LocalDate start, LocalDate end, BigDecimal leftover) {
     }
 
     /** Mantém os chamadores antigos enquanto o ciclo fechado é acrescentado. */

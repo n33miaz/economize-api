@@ -15,6 +15,7 @@ import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.YearMonth;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.UUID;
@@ -113,25 +114,24 @@ public class WishProjectionService {
 
         // A âncora do salário, quando existe, recorta os ciclos do jeito que o
         // usuário vive o mês (EC-135) — e não do jeito do calendário
-        Short anchorDay = sources.stream()
-                .filter(s -> s.getKind() == IncomeSource.Kind.SALARY && s.getAnchorDay() != null)
-                .map(IncomeSource::getAnchorDay)
-                .findFirst()
-                .orElse(null);
+        Short anchorDay = salaryAnchorDay(sources);
 
         List<BigDecimal> leftovers = new ArrayList<>();
         List<BigDecimal> expenses = new ArrayList<>();
         WishBaseline.ClosedCycle lastClosedCycle = null;
         for (CycleWindow cycle : completedCycleWindows(anchorDay, CYCLES_SAMPLED, today)) {
             AnalyticsService.CycleNet net = analyticsService.netFor(userId, cycle.window());
+            // ciclo sem extrato importado não é ciclo em que nada aconteceu
+            if (!hasData(net)) continue;
             if (lastClosedCycle == null) {
                 // A mediana serve para prever; esta é a sobra que de fato fechou
-                // e é a única que pode virar aporte medido.
+                // e é a única que pode virar aporte medido. Os ciclos vêm do mais
+                // recente para o mais antigo, então o primeiro COM DADOS é o que
+                // vale — um ciclo vazio daria uma sobra 0 que nunca aconteceu.
                 lastClosedCycle = new WishBaseline.ClosedCycle(
-                        cycle.month().toString(), scale2(net.leftover()));
+                        cycle.month().toString(), cycle.window().start(), cycle.window().end(),
+                        scale2(net.leftover()));
             }
-            // ciclo sem extrato importado não é ciclo em que nada aconteceu
-            if (net.income().signum() == 0 && net.expense().signum() == 0) continue;
             leftovers.add(net.leftover());
             expenses.add(net.expense());
         }
@@ -262,14 +262,34 @@ public class WishProjectionService {
 
     /** Sobrecarga de teste: a fronteira do fechamento não depende do relógio da máquina. */
     boolean isCycleClosed(UUID userId, YearMonth cycleMonth, LocalDate today) {
-        Short anchorDay = incomeSourceRepository.findAllByUserIdAndActiveTrue(userId).stream()
-                .filter(s -> s.getKind() == IncomeSource.Kind.SALARY && s.getAnchorDay() != null)
-                .map(IncomeSource::getAnchorDay)
-                .findFirst()
-                .orElse(null);
+        Short anchorDay = salaryAnchorDay(incomeSourceRepository.findAllByUserIdAndActiveTrue(userId));
         if (anchorDay == null) return cycleMonth.isBefore(YearMonth.from(today));
         LocalDate end = anchoredOn(cycleMonth.plusMonths(1), anchorDay).minusDays(1);
         return end.isBefore(today);
+    }
+
+    /**
+     * O dia-âncora que recorta os ciclos. Com dois salários ativos, a escolha
+     * precisa ser a MESMA na listagem (GET) e no aporte (POST), senão o ciclo
+     * oferecido na tela pode ser recusado como "não fechado". Por isso a regra
+     * é estável e não depende de hoje: o salário ativo mais antigo (createdAt),
+     * com desempate pelo id. A regra do CommittedIncomeService ("o que cai
+     * primeiro a partir de hoje") muda com a data e não serve de identidade.
+     */
+    static Short salaryAnchorDay(List<IncomeSource> activeSources) {
+        return activeSources.stream()
+                .filter(s -> s.getKind() == IncomeSource.Kind.SALARY && s.getAnchorDay() != null)
+                .min(Comparator.comparing(IncomeSource::getCreatedAt,
+                                Comparator.nullsLast(Comparator.naturalOrder()))
+                        .thenComparing(IncomeSource::getId,
+                                Comparator.nullsLast(Comparator.naturalOrder())))
+                .map(IncomeSource::getAnchorDay)
+                .orElse(null);
+    }
+
+    /** O mesmo critério de "ciclo com extrato" para a mediana e para a sobra medida. */
+    private static boolean hasData(AnalyticsService.CycleNet net) {
+        return net.income().signum() != 0 || net.expense().signum() != 0;
     }
 
     private List<CycleWindow> completedCycleWindows(Short anchorDay, int count, LocalDate today) {
