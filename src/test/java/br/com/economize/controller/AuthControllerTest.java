@@ -7,6 +7,7 @@ import br.com.economize.repository.UserRepository;
 import br.com.economize.security.JwtAuthenticationFilter;
 import br.com.economize.security.JwtUtil;
 import br.com.economize.security.SecurityConfig;
+import br.com.economize.security.SessionVersionService;
 import br.com.economize.service.MfaService;
 import br.com.economize.service.TrustedDeviceService;
 import br.com.economize.service.PasswordService;
@@ -46,6 +47,11 @@ class AuthControllerTest {
     // O login consulta os aparelhos conhecidos antes de exigir o segundo passo
     @MockitoBean
     private TrustedDeviceService deviceService;
+
+    // "Sair de todos os aparelhos" (V45). A revogação de verdade, com banco e
+    // cache, é provada no SessionVersionRevocationAuthTest
+    @MockitoBean
+    private SessionVersionService sessionVersions;
 
     @Test
     @DisplayName("POST /forgot-password - Deve responder 202 com mensagem neutra")
@@ -116,5 +122,16 @@ class AuthControllerTest {
                 .expectStatus().isBadRequest();
 
         Mockito.verifyNoInteractions(passwordService);
+    }
+
+    @Test
+    @DisplayName("POST /logout-all - sem token responde 401 e não revoga nada")
+    void logoutAllRequiresAuthentication() {
+        webTestClient.post()
+                .uri("/api/v1/auth/logout-all")
+                .exchange()
+                .expectStatus().isUnauthorized();
+
+        Mockito.verifyNoInteractions(sessionVersions);
     }
 }

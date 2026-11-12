@@ -76,7 +76,16 @@ class ClientIpForwardedHeadersTest {
                 .jsonPath("$.resolvedClientIp").isEqualTo(CLIENT);
     }
 
+    @Autowired
+    private br.com.economize.repository.UserRepository userRepository;
+
     private WebTestClient.BodyContentSpec connection(String forwardedFor) {
+        // Desde a V45 o filtro confere a versão da sessão no banco: token de
+        // conta que não existe não autentica mais, então a conta precisa existir
+        if (userRepository.findByEmail("teste@economize.app").isEmpty()) {
+            userRepository.save(br.com.economize.model.User.builder()
+                    .name("Teste").email("teste@economize.app").password("x").build());
+        }
         return client.get().uri("/api/v1/users/me/connection")
                 .header(HttpHeaders.AUTHORIZATION, "Bearer " + jwtUtil.generateToken("teste@economize.app"))
                 .header("X-Forwarded-For", forwardedFor)

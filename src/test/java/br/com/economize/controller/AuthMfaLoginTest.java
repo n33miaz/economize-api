@@ -7,6 +7,7 @@ import br.com.economize.repository.UserRepository;
 import br.com.economize.security.JwtAuthenticationFilter;
 import br.com.economize.security.JwtUtil;
 import br.com.economize.security.SecurityConfig;
+import br.com.economize.security.SessionVersionService;
 import br.com.economize.service.MfaService;
 import br.com.economize.service.TrustedDeviceService;
 import br.com.economize.service.PasswordService;
@@ -64,6 +65,11 @@ class AuthMfaLoginTest {
     @MockitoBean
     private TrustedDeviceService deviceService;
 
+    // "Sair de todos os aparelhos" (V45). A revogação de verdade, com banco e
+    // cache, é provada no SessionVersionRevocationAuthTest
+    @MockitoBean
+    private SessionVersionService sessionVersions;
+
     private User ana;
 
     @BeforeEach
@@ -119,7 +125,7 @@ class AuthMfaLoginTest {
     @Test
     @DisplayName("o desafio do primeiro passo não abre a API")
     void theChallengeIsNotASession() {
-        String challenge = jwtUtil.generateMfaChallenge("ana@example.com");
+        String challenge = jwtUtil.generateMfaChallenge(ana);
 
         // /users/me é rota autenticada; com o desafio no cabeçalho continua 401
         webTestClient.get().uri("/api/v1/users/me")
@@ -132,7 +138,7 @@ class AuthMfaLoginTest {
     @DisplayName("o segundo passo troca o desafio pela sessão")
     void secondStepIssuesTheSession() {
         when(mfaService.verify(any(User.class), anyString())).thenReturn(true);
-        String challenge = jwtUtil.generateMfaChallenge("ana@example.com");
+        String challenge = jwtUtil.generateMfaChallenge(ana);
 
         webTestClient.post().uri("/api/v1/auth/login/mfa")
                 .contentType(MediaType.APPLICATION_JSON)
@@ -151,7 +157,7 @@ class AuthMfaLoginTest {
     @DisplayName("código errado responde 401 e não emite sessão")
     void secondStepRejectsWrongCode() {
         when(mfaService.verify(any(User.class), anyString())).thenReturn(false);
-        String challenge = jwtUtil.generateMfaChallenge("ana@example.com");
+        String challenge = jwtUtil.generateMfaChallenge(ana);
 
         webTestClient.post().uri("/api/v1/auth/login/mfa")
                 .contentType(MediaType.APPLICATION_JSON)
@@ -180,7 +186,7 @@ class AuthMfaLoginTest {
     @Test
     @DisplayName("desafio adulterado responde o MESMO 401 do código errado")
     void aTamperedChallengeLooksLikeAWrongCode() {
-        String challenge = jwtUtil.generateMfaChallenge("ana@example.com");
+        String challenge = jwtUtil.generateMfaChallenge(ana);
         String tampered = challenge.substring(0, challenge.length() - 2) + "xy";
 
         webTestClient.post().uri("/api/v1/auth/login/mfa")
@@ -233,7 +239,7 @@ class AuthMfaLoginTest {
         when(mfaService.verify(any(User.class), anyString())).thenReturn(true);
         when(deviceService.remember(any(User.class), anyString(), any()))
                 .thenReturn("segredo-novo-do-aparelho");
-        String challenge = jwtUtil.generateMfaChallenge("ana@example.com");
+        String challenge = jwtUtil.generateMfaChallenge(ana);
 
         webTestClient.post().uri("/api/v1/auth/login/mfa")
                 .contentType(MediaType.APPLICATION_JSON)
@@ -248,7 +254,7 @@ class AuthMfaLoginTest {
     @DisplayName("sem pedir para lembrar, nenhum aparelho é registrado")
     void withoutRememberNoDeviceIsStored() {
         when(mfaService.verify(any(User.class), anyString())).thenReturn(true);
-        String challenge = jwtUtil.generateMfaChallenge("ana@example.com");
+        String challenge = jwtUtil.generateMfaChallenge(ana);
 
         webTestClient.post().uri("/api/v1/auth/login/mfa")
                 .contentType(MediaType.APPLICATION_JSON)
@@ -272,5 +278,21 @@ class AuthMfaLoginTest {
 
         // a resposta não pode revelar se a conta tem segundo fator
         verify(mfaService, never()).isEnabledFor(any(User.class));
+    }
+
+    @Test
+    @DisplayName("desafio emitido antes de uma revogação não vira sessão")
+    void aChallengeFromBeforeARevocationIsRefused() {
+        // desafio nasceu na versão 0; depois disso a conta revogou (versão 1)
+        String challenge = jwtUtil.generateMfaChallenge(ana);
+        ana.setSessionVersion(1);
+
+        webTestClient.post().uri("/api/v1/auth/login/mfa")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(new MfaChallengeRequest(challenge, "123456"))
+                .exchange()
+                .expectStatus().isUnauthorized();
+
+        verify(mfaService, never()).verify(any(User.class), anyString());
     }
 }
