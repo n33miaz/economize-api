@@ -1,6 +1,7 @@
 package br.com.economize.service.connector.pluggy;
 
 import br.com.economize.exception.ResourceConflictException;
+import br.com.economize.exception.ServiceUnavailableException;
 import br.com.economize.model.ConnectorAccount;
 import br.com.economize.model.PluggyItem;
 import br.com.economize.model.User;
@@ -24,6 +25,7 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -178,6 +180,22 @@ public class PluggySyncService {
         // devolve o mesmo retrato velho — foi assim que nove compras de cartao
         // de setembro ficaram de fora enquanto o sync respondia 200. Ver V37.
         conferirSaude(apiKey, items);
+        // A saude vai para o banco AGORA, e nao so no saveAll do fim. Antes,
+        // NOT_FOUND / NEEDS_USER_ACTION e o carimbo do pedido de coleta viviam
+        // so em memoria: se a importacao falhasse, o app nunca via o
+        // "reconecte" e a proxima tentativa pedia OUTRA coleta (cota gasta a
+        // toa). O saveAll do Spring Data abre a propria transacao, curta, e
+        // este metodo segue sem @Transactional de proposito (ver a nota sobre
+        // ConnectorAccountService.insert mais abaixo).
+        pluggyItemRepository.saveAll(items);
+
+        // Conexao que nao existe mais ou que so a pessoa destrava fica fora da
+        // leitura: consultar as contas dela devolve 404/recusa e, antes do
+        // isolamento por item, derrubava a sincronizacao dos outros bancos.
+        List<PluggyItem> legiveis = items.stream().filter(item -> !precisaReconectar(item)).toList();
+        int aReconectar = items.size() - legiveis.size();
+        // ids no provedor das conexoes que falharam NESTA sincronizacao
+        Set<String> comFalha = new HashSet<>();
 
         LocalDate to = LocalDate.now(ZoneOffset.UTC);
         LocalDate from = to.minusDays(days);
@@ -188,8 +206,17 @@ public class PluggySyncService {
         // pagamento de fatura; conhecer é ler a listagem do provedor, não
         // escrever no banco.
         List<SyncAccount> accounts = new ArrayList<>();
-        for (PluggyItem item : items) {
-            for (Map<String, Object> account : pluggyClient.accounts(apiKey, item.getItemId())) {
+        for (PluggyItem item : legiveis) {
+            List<Map<String, Object>> contas;
+            try {
+                contas = pluggyClient.accounts(apiKey, item.getItemId());
+            } catch (RuntimeException e) {
+                // falha de UMA conexao (consentimento revogado, banco fora do
+                // ar) nao pode levar junto as outras: registra e segue
+                registrarFalha(item, e, comFalha);
+                continue;
+            }
+            for (Map<String, Object> account : contas) {
                 String accountType = String.valueOf(account.get("type"));
                 boolean creditCard = "CREDIT".equalsIgnoreCase(accountType);
                 // INVESTMENT e afins não são extrato: ficam fora do pipeline
@@ -206,7 +233,7 @@ public class PluggySyncService {
                             item.getConnectorName(), accountType);
                     continue;
                 }
-                accounts.add(new SyncAccount(providerAccountId, creditCard,
+                accounts.add(new SyncAccount(item, providerAccountId, creditCard,
                         snapshotOf(item, account, providerAccountId, creditCard), sourceOf(item)));
             }
         }
@@ -224,7 +251,22 @@ public class PluggySyncService {
         // gravação reparte o lote em um upload por banco
         Map<UUID, BankStatementService.UploadSource> sourceByAccount = new HashMap<>();
         for (SyncAccount account : accounts) {
-            List<Map<String, Object>> raw = pluggyClient.transactions(apiKey, account.id(), from, to);
+            // a conexao ja falhou numa conta anterior: as demais contas dela
+            // tambem ficam de fora, para nao gastar chamada no que esta caido
+            if (comFalha.contains(account.item().getItemId())) continue;
+            List<Map<String, Object>> raw;
+            try {
+                raw = pluggyClient.transactions(apiKey, account.id(), from, to);
+            } catch (RuntimeException e) {
+                // As contas desta conexao ja lidas ANTES da falha continuam no
+                // lote: sao lancamentos reais, a origem delas ja foi gravada e
+                // um credito de cartao ja ofertado ao pool precisa da propria
+                // linha importada para o par fechar. A conexao so nao ganha o
+                // carimbo de sincronizada; o dedup por id torna a proxima
+                // sincronizacao idempotente.
+                registrarFalha(account.item(), e, comFalha);
+                continue;
+            }
             // A ORIGEM (EC-113) só passa a existir DEPOIS de o extrato dela ter
             // sido lido. Gravá-la antes deixava, numa falha do Pluggy no meio da
             // volta, uma conta registrada com zero lançamentos: ela aparecia em
@@ -259,8 +301,25 @@ public class PluggySyncService {
                 }
             }
         }
-        log.info("Pluggy sync: {} transações na janela {}..{} em {} item(ns) para user={}",
-                parsed.size(), from, to, items.size(), user.getId());
+        List<PluggyItem> lidos = legiveis.stream()
+                .filter(item -> !comFalha.contains(item.getItemId()))
+                .toList();
+        if (lidos.isEmpty()) {
+            // Nada foi lido: responder 200 com "0 importadas" esconderia o
+            // problema. A saude ja foi gravada acima, entao o app consegue
+            // mostrar qual conexao pede reconexao mesmo com este erro.
+            if (comFalha.isEmpty()) {
+                throw new IllegalArgumentException(String.format(
+                        "Nenhuma conexão pôde ser sincronizada: %d precisa(m) ser reconectada(s) pelo app.",
+                        aReconectar));
+            }
+            throw new ServiceUnavailableException(String.format(
+                    "Nenhuma conexão pôde ser lida no provedor agora (%d com falha, %d a reconectar). "
+                            + "Tente de novo em alguns minutos.",
+                    comFalha.size(), aReconectar));
+        }
+        log.info("Pluggy sync: {} transações na janela {}..{} em {} item(ns) para user={} ({} com falha, {} a reconectar)",
+                parsed.size(), from, to, lidos.size(), user.getId(), comFalha.size(), aReconectar);
         BankStatementService.ImportResult result =
                 bankStatementService.importFromConnector(user, StatementFormat.PLUGGY, parsed, sourceByAccount);
 
@@ -269,17 +328,41 @@ public class PluggySyncService {
         // investimento ficou meses sem aparecer — a lição é não acoplar o
         // opcional ao essencial.
         try {
-            cardBillService.sync(user, apiKey, items);
+            // so as conexoes lidas: a fatura de uma conexao caida falharia de novo
+            cardBillService.sync(user, apiKey, lidos);
         } catch (Exception e) {
             log.warn("Faturas do provedor não lidas nesta sincronização: {}", e.getMessage());
         }
 
         // o carimbo vem depois da importação: sync que falhou não conta
+        // so quem foi lido por inteiro ganha o carimbo: conexao com falha ou a
+        // reconectar nao pode parecer em dia na tela
         OffsetDateTime now = OffsetDateTime.now();
-        items.forEach(item -> item.setLastSyncedAt(now));
-        pluggyItemRepository.saveAll(items);
+        lidos.forEach(item -> item.setLastSyncedAt(now));
+        pluggyItemRepository.saveAll(lidos);
 
-        return new SyncResult(result, items.size());
+        return new SyncResult(result, lidos.size());
+    }
+
+    /**
+     * Estados em que ler a conexao nao adianta: NOT_FOUND (sumiu do provedor)
+     * e NEEDS_USER_ACTION (o provedor recusou a coleta e so a pessoa
+     * destrava), os dois marcados por {@link #conferirSaude}. LOGIN_ERROR e
+     * WAITING_USER_INPUT, declarados pelo proprio Pluggy, continuam sendo
+     * lidos: o provedor ainda serve o ultimo retrato coletado, e uma falha de
+     * leitura deles fica isolada pelo try/catch por conexao.
+     */
+    private static boolean precisaReconectar(PluggyItem item) {
+        return "NOT_FOUND".equalsIgnoreCase(item.getStatus())
+                || "NEEDS_USER_ACTION".equalsIgnoreCase(item.getStatus());
+    }
+
+    private static void registrarFalha(PluggyItem item, RuntimeException e, Set<String> comFalha) {
+        comFalha.add(item.getItemId());
+        // sem itemId nem mensagem do provedor no log: sao dados de terceiro; o
+        // id interno basta para achar a linha
+        log.warn("Conexão {} falhou nesta sincronização ({}); as demais seguem.",
+                item.getId(), e.getClass().getSimpleName());
     }
 
     private ParsedTransaction mapTransaction(Map<String, Object> tx, boolean creditCard,
@@ -540,7 +623,7 @@ public class PluggySyncService {
      * tratamento de sinal e a origem pronta para virar linha assim que o extrato
      * dela for lido com sucesso.
      */
-    private record SyncAccount(String id, boolean creditCard,
+    private record SyncAccount(PluggyItem item, String id, boolean creditCard,
                                ConnectorAccountService.AccountSnapshot snapshot,
                                BankStatementService.UploadSource source) {
     }

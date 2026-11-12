@@ -166,10 +166,11 @@ class PluggySyncServiceTest {
         // conta de investimento nunca foi consultada
         verify(pluggyClient, never()).transactions(eq("api-key"), eq("acc-inv"), any(), any());
 
-        // carimbo de última sync nos dois itens, num save só
+        // carimbo de última sync nos dois itens. Dois saves: a saúde logo após
+        // conferir e o carimbo depois da importação
         assertThat(inter.getLastSyncedAt()).isNotNull();
         assertThat(nubank.getLastSyncedAt()).isNotNull();
-        verify(pluggyItemRepository).saveAll(List.of(inter, nubank));
+        verify(pluggyItemRepository, org.mockito.Mockito.times(2)).saveAll(List.of(inter, nubank));
     }
 
     @Test
@@ -741,8 +742,11 @@ class PluggySyncServiceTest {
         when(pluggyClient.transactions(eq("api-key"), eq("acc-bank"), any(LocalDate.class), any(LocalDate.class)))
                 .thenThrow(new IllegalStateException("Pluggy fora do ar"));
 
+        // a única conexão falhou: nada foi lido, e a sync diz isso em vez de
+        // responder "0 importadas"
         assertThatThrownBy(() -> service.sync(EMAIL, 90))
-                .isInstanceOf(IllegalStateException.class);
+                .isInstanceOf(br.com.economize.exception.ServiceUnavailableException.class)
+                .hasMessageContaining("Nenhuma conexão pôde ser lida");
 
         // a conta corrente NÃO ficou registrada com zero lançamentos: ela
         // apareceria em GET /accounts, abriria vazia e não teria como ser
@@ -956,5 +960,121 @@ class PluggySyncServiceTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("Nenhuma conexão");
         verify(pluggyClient, org.mockito.Mockito.times(2)).authenticate();
+    }
+
+    // ------------------------------------------------- isolamento por conexão
+
+    private PluggyItem item(String itemId) {
+        return PluggyItem.builder().id(UUID.randomUUID()).user(user).itemId(itemId).build();
+    }
+
+    private void stubAuth(List<PluggyItem> items) {
+        when(userRepository.findByEmail(EMAIL)).thenReturn(Optional.of(user));
+        when(pluggyClient.isConfigured()).thenReturn(true);
+        when(pluggyClient.authenticate()).thenReturn("api-key");
+        when(pluggyItemRepository.findAllByUserIdOrderByCreatedAtAsc(user.getId())).thenReturn(items);
+    }
+
+    private void stubImport() {
+        when(bankStatementService.importFromConnector(eq(user), eq(StatementFormat.PLUGGY), anyList(), anyMap()))
+                .thenReturn(new BankStatementService.ImportResult(UUID.randomUUID(), 1, 0, 1, 0, false, "PLUGGY"));
+    }
+
+    private void stubBankAccount(String itemId, String accountId) {
+        when(pluggyClient.accounts("api-key", itemId)).thenReturn(List.of(Map.of("id", accountId, "type", "BANK")));
+        when(pluggyClient.transactions(eq("api-key"), eq(accountId), any(LocalDate.class), any(LocalDate.class)))
+                .thenReturn(List.of(Map.of("id", "t-" + accountId, "amount", "-10.00", "date", "2026-08-10",
+                        "description", "PADARIA")));
+    }
+
+    @Test
+    @DisplayName("conexão revogada não derruba os outros bancos e nem é consultada")
+    void revokedItemDoesNotTakeDownTheOthers() {
+        PluggyItem revogado = item("item-revogado");
+        PluggyItem ok = item("item-ok");
+        stubAuth(List.of(revogado, ok));
+        // 404 no provedor: consentimento revogado lá fora
+        when(pluggyClient.item("api-key", "item-revogado")).thenReturn(null);
+        when(pluggyClient.item("api-key", "item-ok")).thenReturn(Map.of(
+                "status", "UPDATED", "lastUpdatedAt", java.time.OffsetDateTime.now().toString()));
+        stubBankAccount("item-ok", "acc-ok");
+        stubImport();
+
+        PluggySyncService.SyncResult sync = service.sync(EMAIL, 90);
+
+        assertThat(sync.itemsSynced()).isEqualTo(1);
+        // o item NOT_FOUND não é consultado: nem contas, nem pedido de coleta
+        verify(pluggyClient, never()).accounts("api-key", "item-revogado");
+        verify(pluggyClient, never()).requestUpdate("api-key", "item-revogado");
+        // um evento de importação só, com a linha do banco que funcionou
+        verify(bankStatementService, org.mockito.Mockito.times(1))
+                .importFromConnector(eq(user), eq(StatementFormat.PLUGGY), anyList(), anyMap());
+        assertThat(revogado.getStatus()).isEqualTo("NOT_FOUND");
+        // a conexão revogada não ganha carimbo de "sincronizada"
+        assertThat(revogado.getLastSyncedAt()).isNull();
+        assertThat(ok.getLastSyncedAt()).isNotNull();
+    }
+
+    @Test
+    @DisplayName("falha de leitura de UMA conexão é isolada: as outras importam")
+    void failingItemIsIsolated() {
+        PluggyItem caido = item("item-caido");
+        PluggyItem ok = item("item-ok");
+        stubAuth(List.of(caido, ok));
+        when(pluggyClient.accounts("api-key", "item-caido")).thenThrow(new IllegalStateException("banco fora"));
+        stubBankAccount("item-ok", "acc-ok");
+        stubImport();
+
+        PluggySyncService.SyncResult sync = service.sync(EMAIL, 90);
+
+        assertThat(sync.itemsSynced()).isEqualTo(1);
+        assertThat(caido.getLastSyncedAt()).isNull();
+        // o carimbo final só leva quem foi lido
+        verify(pluggyItemRepository).saveAll(List.of(ok));
+    }
+
+    @Test
+    @DisplayName("a saúde é gravada mesmo quando nada pode ser importado")
+    void healthIsPersistedEvenWhenNothingIsImported() {
+        PluggyItem revogado = item("item-revogado");
+        PluggyItem velho = item("item-velho");
+        stubAuth(List.of(revogado, velho));
+        when(pluggyClient.item("api-key", "item-revogado")).thenReturn(null);
+        // retrato velho: a sync pede coleta nova e o provedor recusa
+        when(pluggyClient.item("api-key", "item-velho")).thenReturn(Map.of("status", "UPDATED"));
+        when(pluggyClient.requestUpdate("api-key", "item-velho")).thenReturn(null);
+
+        // Os dois exigem ação da pessoa: nada a ler, e a resposta diz isso
+        assertThatThrownBy(() -> service.sync(EMAIL, 90))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("reconectada");
+
+        // ...mas o "reconecte" e o carimbo do pedido de coleta chegaram ao
+        // banco: a próxima tentativa não pede outra coleta nas próximas horas
+        verify(pluggyItemRepository).saveAll(List.of(revogado, velho));
+        assertThat(revogado.getStatus()).isEqualTo("NOT_FOUND");
+        assertThat(velho.getStatus()).isEqualTo("NEEDS_USER_ACTION");
+        assertThat(velho.getUpdateRequestedAt()).isNotNull();
+        verify(pluggyClient, never()).accounts(anyString(), anyString());
+        verify(bankStatementService, never()).importFromConnector(any(), any(), anyList(), anyMap());
+    }
+
+    @Test
+    @DisplayName("importação que falha não carimba, mas a saúde já foi gravada")
+    void importFailureKeepsHealthSaved() {
+        PluggyItem ok = item("item-ok");
+        stubAuth(List.of(ok));
+        when(pluggyClient.item("api-key", "item-ok")).thenReturn(Map.of(
+                "status", "LOGIN_ERROR", "lastUpdatedAt", java.time.OffsetDateTime.now().toString()));
+        stubBankAccount("item-ok", "acc-ok");
+        when(bankStatementService.importFromConnector(eq(user), eq(StatementFormat.PLUGGY), anyList(), anyMap()))
+                .thenThrow(new IllegalStateException("banco de dados fora"));
+
+        assertThatThrownBy(() -> service.sync(EMAIL, 90)).isInstanceOf(IllegalStateException.class);
+
+        // um save só (o da saúde); o do carimbo nunca chegou
+        verify(pluggyItemRepository, org.mockito.Mockito.times(1)).saveAll(List.of(ok));
+        assertThat(ok.getStatus()).isEqualTo("LOGIN_ERROR");
+        assertThat(ok.getLastSyncedAt()).isNull();
     }
 }
