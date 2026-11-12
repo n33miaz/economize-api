@@ -8,12 +8,14 @@ import br.com.economize.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.temporal.ChronoUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -118,6 +120,7 @@ public class RefundReconciliationService {
      * @param dryRun true = só relata. É como o dono olha antes de qualquer
      *               marca, porque o critério é heurístico e a conta é dele.
      */
+    @Transactional
     public Outcome sweep(String email, boolean dryRun) {
         User user = userRepository.findByEmail(email)
                 .orElseThrow(() -> new ResourceNotFoundException("Usuário não encontrado"));
@@ -140,11 +143,11 @@ public class RefundReconciliationService {
         }
 
         List<Pair> pares = new ArrayList<>();
-        List<UUID> marcar = new ArrayList<>();
-        List<UUID[]> vinculos = new ArrayList<>();
         List<Partial> parciais = new ArrayList<>();
-        // (compra, valor) de cada abate parcial: gravado na compra, não no crédito
-        List<Object[]> abates = new ArrayList<>();
+        // Quanto cada compra já recebeu de abate NESTA passada. Os abates só
+        // vão ao banco no fim, então sem esta conta dois créditos da mesma
+        // passada enxergariam, os dois, a compra inteira
+        Map<UUID, BigDecimal> abatidoAgora = new HashMap<>();
 
         // EC-236: primeiro os que NOMEIAM a compra. Vêm antes porque o nome é
         // prova mais forte que a coincidência de valor — deixá-los para o
@@ -161,6 +164,10 @@ public class RefundReconciliationService {
             for (BankTransaction candidata : todas) {
                 if (foraDaVarredura(candidata) || candidata.getAmount().signum() >= 0) continue;
                 if (consumidos.contains(candidata.getId())) continue;
+                // Compra que já voltou inteira não tem mais o que devolver: o
+                // crédito seguinte não é dela, e cai no caminho de sempre do
+                // estorno que não acha a compra
+                if (restante(candidata, abatidoAgora).signum() <= 0) continue;
                 if (candidata.getDate().isAfter(credito.getDate())) continue;
                 if (Math.abs(ChronoUnit.DAYS.between(credito.getDate().toLocalDate(),
                         candidata.getDate().toLocalDate())) > JANELA_NOMEADA_DIAS) continue;
@@ -180,7 +187,8 @@ public class RefundReconciliationService {
                 // Marcar aqui somaria errado nas duas pontas
                 continue;
             }
-            if (comparacao < 0) {
+            BigDecimal resta = restante(compra, abatidoAgora);
+            if (comparacao < 0 || resta.compareTo(compra.getAmount().abs()) < 0) {
                 // PARCIAL — devolveram parte. Até 17/09/2026 era só reportado:
                 // marcar o crédito sozinho tiraria os R$ 18,50 da receita e
                 // deixaria a compra inteira na despesa. O dono decidiu o
@@ -189,13 +197,31 @@ public class RefundReconciliationService {
                 // (marca + vínculo, como num par inteiro) e a compra fica,
                 // valendo o líquido. A categoria passa a mostrar 586,41 e não
                 // 604,91 com uma transferência de 18,50 solta ao lado.
+                //
+                // TETO: o que se abate é no máximo o que RESTA da compra, e não
+                // o crédito inteiro. Comparar com o valor bruto deixava uma
+                // compra de 100 com dois créditos de 60 ficar com 120
+                // estornados. O segundo crédito abate 40. Os 20 que sobram não
+                // viram receita (o crédito sai das somas, marcado e ligado à
+                // compra, como todo estorno) e não somem: vão no relatório
+                // (excessAmount), no log, e continuam deriváveis do banco —
+                // a soma dos créditos ligados à compra menos o valor dela.
+                // Ligado, e não solto: crédito marcado sem vínculo é o que a
+                // varredura trata como "ainda procurando a compra", e ele
+                // voltaria a ser pareado e relatado a cada passada.
+                BigDecimal abate = credito.getAmount().min(resta);
+                BigDecimal excedente = credito.getAmount().subtract(abate);
+                if (excedente.signum() > 0) {
+                    log.warn("Estorno maior que o que restava da compra: crédito {} de {}, "
+                                    + "abatido {}, excedente {} fora das somas, compra {}, user={}",
+                            credito.getId(), credito.getAmount(), abate, excedente,
+                            compra.getId(), user.getId());
+                }
                 parciais.add(new Partial(compra.getId(), credito.getId(),
-                        credito.getAmount(), compra.getAmount().abs(),
-                        compra.getDescription(), credito.getDescription()));
+                        abate, compra.getAmount().abs(),
+                        compra.getDescription(), credito.getDescription(), excedente));
                 consumidos.add(credito.getId());
-                marcar.add(credito.getId());
-                vinculos.add(new UUID[] {credito.getId(), compra.getId()});
-                abates.add(new Object[] {compra.getId(), credito.getAmount()});
+                abatidoAgora.merge(compra.getId(), abate, BigDecimal::add);
                 continue;
             }
 
@@ -205,9 +231,6 @@ public class RefundReconciliationService {
                     compra.getDate().toLocalDate().toString(),
                     credito.getDate().toLocalDate().toString(),
                     compra.getDescription(), credito.getDescription()));
-            marcar.add(compra.getId());
-            marcar.add(credito.getId());
-            vinculos.add(new UUID[] {credito.getId(), compra.getId()});
         }
         for (List<BankTransaction> mesmoValor : porValor.values()) {
             if (mesmoValor.size() < 2) continue;
@@ -220,6 +243,11 @@ public class RefundReconciliationService {
                 BankTransaction compra = null;
                 for (BankTransaction candidata : compras) {
                     if (consumidos.contains(candidata.getId())) continue;
+                    // Compra já abatida em parte não vale mais o valor bruto:
+                    // o crédito do tamanho dela inteira deixou de ser par
+                    // exato, e sem par exato não marca
+                    if (restante(candidata, abatidoAgora)
+                            .compareTo(candidata.getAmount().abs()) != 0) continue;
                     long dias = Math.abs(ChronoUnit.DAYS.between(
                             credito.getDate().toLocalDate(), candidata.getDate().toLocalDate()));
                     // A compra vem ANTES do estorno, nunca depois: dinheiro não
@@ -247,21 +275,41 @@ public class RefundReconciliationService {
                         compra.getDate().toLocalDate().toString(),
                         credito.getDate().toLocalDate().toString(),
                         compra.getDescription(), credito.getDescription()));
-                marcar.add(compra.getId());
-                marcar.add(credito.getId());
-                vinculos.add(new UUID[] {credito.getId(), compra.getId()});
             }
         }
 
-        if (!dryRun && !marcar.isEmpty()) {
-            bankTransactionRepository.markAsRefundPair(user.getId(), marcar);
-            for (UUID[] vinculo : vinculos) {
-                bankTransactionRepository.linkRefund(user.getId(), vinculo[0], vinculo[1]);
+        if (!dryRun) {
+            // REIVINDICA cada crédito antes de mexer na compra dele. O que foi
+            // decidido acima saiu de uma LEITURA, e outra varredura (a higiene
+            // e o botão rodam juntos) pode ter lido o mesmo crédito solto e
+            // decidido o mesmo. O UPDATE condicionado é quem desempata: só a
+            // varredura que alterou a linha do crédito abate ou marca a
+            // compra. Sem isto, o estorno de 60 era abatido duas vezes — 100,
+            // que cabe no teto e é mentira. Tudo na transação do método: a
+            // reivindicação sem o abate deixaria um crédito ligado a uma
+            // compra que não o recebeu.
+            //
+            // Quem perde sai também do RELATÓRIO: é dele que a higiene tira os
+            // ids que o desfazer solta, e esta passada não marcou aquela linha
+            List<Pair> paresFeitos = new ArrayList<>();
+            List<UUID> comprasInteiras = new ArrayList<>();
+            for (Pair par : pares) {
+                if (!reivindica(user, par.refundId(), par.purchaseId())) continue;
+                comprasInteiras.add(par.purchaseId());
+                paresFeitos.add(par);
             }
-            for (Object[] abate : abates) {
+            List<Partial> parciaisFeitos = new ArrayList<>();
+            for (Partial parcial : parciais) {
+                if (!reivindica(user, parcial.refundId(), parcial.purchaseId())) continue;
                 bankTransactionRepository.applyPartialRefund(user.getId(),
-                        (UUID) abate[0], (BigDecimal) abate[1]);
+                        parcial.purchaseId(), parcial.refundedAmount());
+                parciaisFeitos.add(parcial);
             }
+            if (!comprasInteiras.isEmpty()) {
+                bankTransactionRepository.markAsRefundPair(user.getId(), comprasInteiras);
+            }
+            pares = paresFeitos;
+            parciais = parciaisFeitos;
         }
         // O volume conta também o que voltou parcialmente: é dinheiro que
         // deixou de contar como gasto, e é isso que o recado do vigia diz
@@ -317,11 +365,17 @@ public class RefundReconciliationService {
      *
      * <p>Achado na fatura real do dono: {@code Estorno de
      * "Mercadolivre*Homenow"} de R$ 18,50 sobre uma compra de R$ 604,91.
-     * Reportado e não marcado — ver o comentário no pareamento por nome.
+     * Ver o comentário no pareamento por nome.
+     *
+     * @param refundedAmount o que foi ABATIDO da compra — nunca mais do que
+     *                       restava dela
+     * @param excessAmount   o que o crédito trouxe além do que restava; zero no
+     *                       caso comum. Não é receita nem abate: fica dito aqui
+     *                       para não sumir
      */
     public record Partial(UUID purchaseId, UUID refundId, BigDecimal refundedAmount,
                           BigDecimal purchaseAmount, String purchaseDescription,
-                          String refundDescription) {
+                          String refundDescription, BigDecimal excessAmount) {
     }
 
     /**
@@ -336,6 +390,29 @@ public class RefundReconciliationService {
                        List<Pair> details) {
             this(scanned, pairs, volume, dryRun, details, List.of());
         }
+    }
+
+    /** O crédito ficou com esta varredura? Falso quando outra chegou antes. */
+    private boolean reivindica(User user, UUID creditoId, UUID compraId) {
+        boolean ganhou = bankTransactionRepository
+                .claimRefund(user.getId(), creditoId, compraId) == 1;
+        if (!ganhou) {
+            log.info("Estorno já reivindicado por outra varredura: crédito {}, compra {}, user={}",
+                    creditoId, compraId, user.getId());
+        }
+        return ganhou;
+    }
+
+    /**
+     * Quanto da compra ainda pode voltar: o valor dela menos o que já foi
+     * abatido — o gravado por passadas anteriores e o desta.
+     */
+    private static BigDecimal restante(BankTransaction compra, Map<UUID, BigDecimal> abatidoAgora) {
+        BigDecimal jaGravado = compra.getRefundedAmount() == null
+                ? BigDecimal.ZERO : compra.getRefundedAmount();
+        return compra.getAmount().abs().subtract(jaGravado)
+                .subtract(abatidoAgora.getOrDefault(compra.getId(), BigDecimal.ZERO))
+                .max(BigDecimal.ZERO);
     }
 
     /** Linha que já saiu das somas por outro motivo não entra na varredura. */

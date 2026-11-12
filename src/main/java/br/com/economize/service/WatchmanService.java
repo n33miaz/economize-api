@@ -110,7 +110,9 @@ public class WatchmanService {
                 case FAMILY_TRANSFER ->
                         bankTransactionRepository.clearFamilyTransfer(user.getId(), ids);
                 case DUPLICATE -> bankTransactionRepository.clearIgnored(user.getId(), ids);
-                case REFUND -> bankTransactionRepository.clearRefund(user.getId(), ids);
+                // O estorno não se solta em bloco: o abate da compra é a soma de
+                // várias passadas, e só o desta sai (ver releaseRefunds)
+                case REFUND -> bankTransactionRepository.releaseRefunds(user.getId(), ids);
                 default -> throw new IllegalStateException("Vigia sem desfazer: " + run.getKind());
             }
         }
