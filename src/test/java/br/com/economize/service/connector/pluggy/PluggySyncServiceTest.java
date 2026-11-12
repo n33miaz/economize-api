@@ -912,4 +912,49 @@ class PluggySyncServiceTest {
                 .findFirst()
                 .orElseThrow(() -> new AssertionError("Transação não importada: " + externalId));
     }
+
+    @Test
+    @DisplayName("segunda sync do mesmo usuário enquanto a primeira roda responde 409")
+    void secondConcurrentSyncOfSameUserIsRejected() {
+        when(userRepository.findByEmail(EMAIL)).thenReturn(Optional.of(user));
+        when(pluggyClient.isConfigured()).thenReturn(true);
+        // Sem threads nem latch: a segunda sync entra DE DENTRO da primeira,
+        // no momento em que ela autentica — determinístico e com a trava tomada
+        java.util.concurrent.atomic.AtomicReference<Throwable> segunda = new java.util.concurrent.atomic.AtomicReference<>();
+        when(pluggyClient.authenticate()).thenAnswer(inv -> {
+            try {
+                service.sync(EMAIL, 90);
+            } catch (Throwable t) {
+                segunda.set(t);
+            }
+            return "api-key";
+        });
+        when(pluggyItemRepository.findAllByUserIdOrderByCreatedAtAsc(user.getId())).thenReturn(List.of());
+
+        assertThatThrownBy(() -> service.sync(EMAIL, 90))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Nenhuma conexão");
+
+        assertThat(segunda.get())
+                .isInstanceOf(br.com.economize.exception.ResourceConflictException.class)
+                .hasMessageContaining("sincronização em andamento");
+        // a recusada não chegou ao provedor: authenticate só rodou uma vez
+        verify(pluggyClient, org.mockito.Mockito.times(1)).authenticate();
+    }
+
+    @Test
+    @DisplayName("sync que falha no meio solta a trava: a próxima do mesmo usuário roda")
+    void failedSyncReleasesTheGuard() {
+        when(userRepository.findByEmail(EMAIL)).thenReturn(Optional.of(user));
+        when(pluggyClient.isConfigured()).thenReturn(true);
+        when(pluggyClient.authenticate()).thenReturn("api-key");
+        when(pluggyItemRepository.findAllByUserIdOrderByCreatedAtAsc(user.getId())).thenReturn(List.of());
+
+        assertThatThrownBy(() -> service.sync(EMAIL, 90)).isInstanceOf(IllegalArgumentException.class);
+        // se a trava tivesse ficado presa, aqui viria 409 em vez do mesmo erro
+        assertThatThrownBy(() -> service.sync(EMAIL, 90))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Nenhuma conexão");
+        verify(pluggyClient, org.mockito.Mockito.times(2)).authenticate();
+    }
 }

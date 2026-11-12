@@ -1,5 +1,6 @@
 package br.com.economize.service.connector.pluggy;
 
+import br.com.economize.exception.ResourceConflictException;
 import br.com.economize.model.ConnectorAccount;
 import br.com.economize.model.PluggyItem;
 import br.com.economize.model.User;
@@ -25,7 +26,9 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Sincroniza as conexões Pluggy DO USUÁRIO autenticado (tabela pluggy_items —
@@ -97,6 +100,18 @@ public class PluggySyncService {
     private final CardBillService cardBillService;
 
     /**
+     * Usuários com sincronização rodando agora. Duas syncs simultâneas do
+     * mesmo usuário importavam a mesma janela em paralelo: o dedup de cada uma
+     * não enxergava o que a outra ainda não tinha gravado, e o resultado era
+     * linha duplicada ou unique violado (500). A segunda agora recebe 409.
+     *
+     * <p>Trava em memória, e não no banco, porque a API roda em UMA instância
+     * no Render (plano free). Se um dia houver réplicas, esta trava deixa de
+     * valer entre elas e precisa virar advisory lock do Postgres.
+     */
+    private final Set<UUID> syncsEmAndamento = ConcurrentHashMap.newKeySet();
+
+    /**
      * Contrato do APK publicado: enabled/owner/configured/itemCount existem e
      * mantêm o tipo. "owner" ficou legado — com itens por usuário, toda conta
      * gerencia as próprias conexões — e responde sempre true; "configured"
@@ -126,6 +141,22 @@ public class PluggySyncService {
                     MIN_SYNC_DAYS, MAX_SYNC_DAYS, days));
         }
         User user = requireUser(email);
+        // O lançamento do 409 fica FORA do try: dentro dele, o finally de quem
+        // foi recusado soltaria a trava de quem ainda está sincronizando
+        if (!syncsEmAndamento.add(user.getId())) {
+            throw new ResourceConflictException(
+                    "Já existe uma sincronização em andamento. Aguarde ela terminar.");
+        }
+        try {
+            return syncLocked(user, days);
+        } finally {
+            // Solta mesmo quando a sync falha no meio: sem isso uma exceção do
+            // provedor travaria o usuário até o próximo deploy
+            syncsEmAndamento.remove(user.getId());
+        }
+    }
+
+    private SyncResult syncLocked(User user, int days) {
         if (!pluggyClient.isConfigured()) {
             throw new IllegalArgumentException(
                     "Conector Pluggy sem credenciais — defina PLUGGY_CLIENT_ID e PLUGGY_CLIENT_SECRET");
