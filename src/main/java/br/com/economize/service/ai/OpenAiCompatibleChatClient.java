@@ -100,8 +100,7 @@ public class OpenAiCompatibleChatClient {
         String content = extractContent(body);
         if (content == null || content.isBlank()) {
             log.warn("Provedor de IA {} respondeu sem conteúdo utilizável", target.provider());
-            throw new AiProviderException(AiProviderException.Reason.PROVIDER,
-                    "O provedor de IA respondeu sem conteúdo.");
+            throw AiProviderException.emptyResponse();
         }
         return content;
     }

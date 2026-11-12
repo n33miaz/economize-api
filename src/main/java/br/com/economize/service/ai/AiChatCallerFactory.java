@@ -164,7 +164,15 @@ public class AiChatCallerFactory {
                         : new UserMessage(turn.content()));
             }
             messages.add(new UserMessage(userPrompt));
-            return serverChatClient.prompt(new Prompt(messages)).call().content();
+            String content = serverChatClient.prompt(new Prompt(messages)).call().content();
+            // Em Spring AI 1.1.x content() pode ser nulo quando o Gemini bloqueia
+            // ou não gera texto. Propagar nulo faria Mono.fromCallable completar
+            // vazio e o controller responder 200 sem corpo.
+            if (content == null || content.isBlank()) {
+                log.warn("Provedor de IA do servidor respondeu sem conteúdo utilizável");
+                throw AiProviderException.emptyResponse();
+            }
+            return content;
         }
 
         @Override
