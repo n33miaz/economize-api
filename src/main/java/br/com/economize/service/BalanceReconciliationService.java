@@ -98,6 +98,8 @@ public class BalanceReconciliationService {
                         agora.minusDays(DIAS_DE_MOVIMENTO), Materiality.PISO_DE_AVISO));
 
         List<Finding> achados = new ArrayList<>();
+        // Uma soma por conta, de propósito: são poucas contas por usuário e
+        // cada uma tem a própria data de leitura como corte
         for (ConnectorAccount conta : contas) {
             if (!examinavel(conta)) continue;
             achados.addAll(examinar(user.getId(), conta, comMovimento, agora));
