@@ -2,6 +2,8 @@ package br.com.economize.dto.user;
 
 import br.com.economize.config.ClientIpResolver.HopKind;
 
+import io.swagger.v3.oas.annotations.media.Schema;
+
 import java.util.List;
 
 /**
@@ -24,8 +26,15 @@ import java.util.List;
  * @param trueClientIp     {@code True-Client-IP}, se veio
  * @param realIp           {@code X-Real-IP}, se veio
  * @param forwarded        linhas do cabeçalho {@code Forwarded} (RFC 7239)
- * @param remoteAddress    endereço de quem abriu o soquete com a aplicação
- * @param remoteAddressKind classificação do endereço do soquete
+ * @param remoteAddress    o {@code getRemoteAddress()} da requisição. NÃO é
+ *                         necessariamente o soquete: com cabeçalhos
+ *                         encaminhados em modo nativo (o caso do Render) ele
+ *                         chega reescrito para a ponta esquerda do
+ *                         {@code X-Forwarded-For}, que é texto do cliente
+ * @param remoteAddressKind classificação do {@code remoteAddress}
+ * @param remoteAddressRewritten verdadeiro quando o {@code remoteAddress} é
+ *                         igual ao primeiro salto do {@code X-Forwarded-For}:
+ *                         sinal de que foi reescrito a partir do cabeçalho
  * @param resolvedClientIp o que o {@code ClientIpResolver} escolheu
  */
 public record ConnectionInfoResponse(
@@ -34,8 +43,13 @@ public record ConnectionInfoResponse(
         String trueClientIp,
         String realIp,
         List<String> forwarded,
+        @Schema(description = "Endereço remoto visto pela aplicação. Pode NÃO ser o soquete: com cabeçalhos "
+                + "encaminhados em modo nativo ele vem reescrito para o primeiro valor do X-Forwarded-For.")
         String remoteAddress,
         HopKind remoteAddressKind,
+        @Schema(description = "Verdadeiro quando o remoteAddress é igual ao primeiro salto do X-Forwarded-For, "
+                + "sinal de que foi reescrito a partir do cabeçalho.")
+        boolean remoteAddressRewritten,
         String resolvedClientIp) {
 
     /**
