@@ -112,7 +112,9 @@ public class GlobalExceptionHandler {
         }
 
         /**
-         * EC-107: falha do provedor de IA do USUÁRIO. Precisa vir antes do
+         * EC-107: falha do provedor de IA — da chave do USUÁRIO e, desde
+         * 12/11/2026, também da chave do servidor (antes o 404 do modelo
+         * aposentado saía daqui como 500 genérico). Precisa vir antes do
          * handler de WebClientResponseException e ser uma exceção própria por um
          * motivo de segurança, não de estilo: aquele handler registra
          * {@code getResponseBodyAsString()} em log, e corpo bruto de provedor é
@@ -122,7 +124,7 @@ public class GlobalExceptionHandler {
          */
         @ExceptionHandler(br.com.economize.service.ai.AiProviderException.class)
         public ProblemDetail handleAiProviderException(br.com.economize.service.ai.AiProviderException ex) {
-                log.warn("Provedor de IA do usuário falhou: motivo={}", ex.getReason());
+                log.warn("Provedor de IA falhou: motivo={}", ex.getReason());
                 ProblemDetail problemDetail = ProblemDetail.forStatusAndDetail(HttpStatus.BAD_GATEWAY,
                                 ex.getMessage());
                 problemDetail.setTitle("Erro no Provedor de IA");
