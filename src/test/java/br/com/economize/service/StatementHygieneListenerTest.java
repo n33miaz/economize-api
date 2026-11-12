@@ -41,6 +41,22 @@ class StatementHygieneListenerTest {
     }
 
     @Test
+    @DisplayName("importação que diz as datas é limpa só na janela delas")
+    void shouldRunHygieneOnlyOverTheImportedWindow() {
+        UUID userId = UUID.randomUUID();
+        java.time.OffsetDateTime primeira = java.time.OffsetDateTime.parse("2026-06-10T09:00:00Z");
+        java.time.OffsetDateTime ultima = java.time.OffsetDateTime.parse("2026-06-12T18:00:00Z");
+
+        listener.onStatementImported(new StatementImportedEvent(
+                userId, StatementFormat.PLUGGY, 3, UUID.randomUUID(), primeira, ultima));
+
+        verify(hygieneService, timeout(2000)).runFor(userId, new HygieneWindow(primeira, ultima));
+        // e NÃO a varredura do histórico inteiro, que é o que este caminho
+        // deixou de fazer
+        verify(hygieneService, org.mockito.Mockito.never()).runFor(userId);
+    }
+
+    @Test
     @DisplayName("arquivo repetido não traz linha nova, então não há o que limpar")
     void shouldSkipWhenImportBroughtNothingNew() {
         listener.onStatementImported(

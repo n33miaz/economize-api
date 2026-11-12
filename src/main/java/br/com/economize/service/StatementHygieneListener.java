@@ -38,7 +38,14 @@ public class StatementHygieneListener {
     public void onStatementImported(StatementImportedEvent event) {
         // importação duplicada/vazia não traz transação nova — nada a limpar
         if (event.getTransactionsImported() <= 0) return;
-        Mono.fromCallable(() -> hygieneService.runFor(event.getUserId()))
+        // O evento diz de que dia a que dia a importação mexeu: a faxina lê
+        // só isso e o que está em volta. Evento sem datas (publicado por
+        // código antigo, ou vindo de fora) cai na varredura total, que é o
+        // que sempre foi feito
+        HygieneWindow janela = HygieneWindow.of(event.getEarliestDate(), event.getLatestDate());
+        Mono.fromCallable(() -> janela == null
+                        ? hygieneService.runFor(event.getUserId())
+                        : hygieneService.runFor(event.getUserId(), janela))
                 .subscribeOn(Schedulers.boundedElastic())
                 .subscribe(
                         resultado -> log.info("Faxina pós-importação concluída, user={}", event.getUserId()),
