@@ -1,6 +1,7 @@
 package br.com.economize.dto.recurrence;
 
 import jakarta.validation.constraints.DecimalMin;
+import jakarta.validation.constraints.Digits;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.Size;
@@ -31,6 +32,7 @@ public record UpdateRecurringSeriesRequest(
         String amountType,
 
         @DecimalMin(value = "0.00", inclusive = false, message = "Valor esperado deve ser positivo")
+        @Digits(integer = 15, fraction = 4, message = "Valor esperado deve ter no máximo 15 inteiros e 4 casas decimais")
         BigDecimal expectedAmount,
 
         String cadence,
