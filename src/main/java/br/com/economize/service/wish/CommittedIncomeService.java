@@ -15,7 +15,6 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.YearMonth;
-import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.UUID;
@@ -54,12 +53,14 @@ public class CommittedIncomeService {
     private final IncomeSourceRepository incomeSourceRepository;
     private final RecurringSeriesService recurringSeriesService;
     private final UserRepository userRepository;
+    // "Hoje" na zona financeira (FinancialClockConfig), não na do servidor
+    private final java.time.Clock clock;
 
     @Transactional(readOnly = true)
     public WishResponses.CommittedOverview overview(String email) {
         User user = userRepository.findByEmail(email)
                 .orElseThrow(() -> new ResourceNotFoundException("Usuário não encontrado"));
-        return overview(user.getId(), LocalDate.now(ZoneOffset.UTC));
+        return overview(user.getId(), LocalDate.now(clock));
     }
 
     /** Sobrecarga com "hoje" explícito — é o que torna o recorte testável. */

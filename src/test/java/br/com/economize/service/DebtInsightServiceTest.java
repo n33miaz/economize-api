@@ -193,6 +193,42 @@ class DebtInsightServiceTest {
         assertThat(grupo.items()).hasSize(12);
     }
 
+
+    @Test
+    void ignoradoEEstornadoFicamForaEOEstornoParcialContaPeloLiquido() {
+        BankTransaction ignorado = debito("EMPRESTIMO PESSOAL", "450.00");
+        ignorado.setIgnored(true);
+        BankTransaction estornado = debito("EMPRESTIMO CONSIGNADO", "300.00");
+        estornado.setRefunded(true);
+        // débito gravado negativo, como no extrato: 1.000 menos 200 devolvidos
+        BankTransaction parcial = debito("PARCELA 02/24 FINANCIAMENTO", "-1000.00");
+        parcial.setRefundedAmount(new BigDecimal("200.00"));
+        givenTransactions(ignorado, estornado, parcial, debito("NETFLIX", "-200.00"));
+
+        DebtOverviewResponse resposta = service.summarize(EMAIL, JANELA);
+
+        assertThat(resposta.totalExpense()).isEqualByComparingTo("1000.00");
+        assertThat(resposta.totalDebt()).isEqualByComparingTo("800.00");
+        assertThat(resposta.shareOfExpense()).isEqualByComparingTo("80.0");
+        assertThat(resposta.groups()).extracting(DebtOverviewResponse.DebtGroup::kind)
+                .containsExactly("FINANCING");
+        assertThat(resposta.groups().get(0).total()).isEqualByComparingTo("800.00");
+    }
+
+    @Test
+    void estornoMaiorQueACompraNaoViraDespesa() {
+        // -100 com dois estornos parciais de 60: o líquido seria +20
+        BankTransaction devolvidaAMais = debito("EMPRESTIMO PESSOAL", "-100.00");
+        devolvidaAMais.setRefundedAmount(new BigDecimal("120.00"));
+        givenTransactions(devolvidaAMais);
+
+        DebtOverviewResponse resposta = service.summarize(EMAIL, JANELA);
+
+        assertThat(resposta.totalExpense()).isEqualByComparingTo("0");
+        assertThat(resposta.totalDebt()).isEqualByComparingTo("0");
+        assertThat(resposta.groups()).isEmpty();
+    }
+
     private void givenTransactions(BankTransaction... transactions) {
         when(bankTransactionRepository
                 .findAllByUserIdAndDateGreaterThanEqualAndDateLessThanOrderByDateDesc(

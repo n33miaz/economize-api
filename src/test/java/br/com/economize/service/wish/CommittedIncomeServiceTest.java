@@ -15,6 +15,10 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 
+import org.mockito.Spy;
+import java.time.OffsetDateTime;
+import java.time.ZoneId;
+import java.time.Clock;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
@@ -41,8 +45,16 @@ class CommittedIncomeServiceTest {
     @Mock
     private UserRepository userRepository;
 
+    // UTC como os dados destes testes; a virada do fuso tem teste próprio
+    @Spy
+    private Clock clock = Clock.systemUTC();
+
     @InjectMocks
     private CommittedIncomeService service;
+
+    // 23h30 do dia 31 em São Paulo já é 1º de abril no servidor (02h30 UTC)
+    private static final Clock NOITE_DE_31_DE_MARCO = Clock.fixed(
+            OffsetDateTime.parse("2026-03-31T23:30:00-03:00").toInstant(), ZoneId.of("America/Sao_Paulo"));
 
     @BeforeEach
     void setUp() {
@@ -191,6 +203,21 @@ class CommittedIncomeServiceTest {
         // a tela precisa dizer que é média do histórico, senão o total parece
         // mais exato do que é
         assertThat(service.overview(USER, HOJE).afterSalary().get(0).estimated()).isTrue();
+    }
+
+
+    @Test
+    void oHojeDoResumoSegueAZonaFinanceira() {
+        when(userRepository.findByEmail("bia@economize.dev")).thenReturn(java.util.Optional.of(
+                br.com.economize.model.User.builder().id(USER).email("bia@economize.dev").build()));
+        givenSalary("4400", (short) 5);
+
+        new CommittedIncomeService(incomeSourceRepository, recurringSeriesService, userRepository,
+                NOITE_DE_31_DE_MARCO).overview("bia@economize.dev");
+
+        // antes do salário: de HOJE (31/03) à véspera do dia 5
+        org.mockito.Mockito.verify(recurringSeriesService).upcomingExpenses(
+                eq(USER), eq(LocalDate.of(2026, 3, 31)), eq(LocalDate.of(2026, 4, 4)));
     }
 
     private void givenSalary(String amount, short anchorDay) {

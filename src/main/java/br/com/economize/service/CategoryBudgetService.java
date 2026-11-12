@@ -114,7 +114,7 @@ public class CategoryBudgetService {
                 .findAllByUserIdAndDateGreaterThanEqualAndDateLessThanOrderByDateDesc(
                         user.getId(), window.startInstant(), window.endExclusiveInstant())) {
             // As mesmas exclusões de toda soma do app
-            if (tx.isInternalTransfer() || tx.isIgnored() || tx.isRefunded()) continue;
+            if (!tx.countsInTotals()) continue;
             if (tx.getAmount().signum() >= 0 || tx.getCategoryId() == null) continue;
             // O teto compara com o que a compra custou de fato: estorno parcial
             // abate (V40), como em toda soma do app

@@ -41,17 +41,21 @@ public class AiAssistantService {
     private final BankTransactionRepository bankTransactionRepository;
     private final TransactionRepository transactionRepository;
     private final CategoryRepository categoryRepository;
+    // "Hoje" na zona financeira (FinancialClockConfig), não na do servidor
+    private final java.time.Clock clock;
 
     public AiAssistantService(AiChatCallerFactory chatCallerFactory,
                               UserRepository userRepository,
                               BankTransactionRepository bankTransactionRepository,
                               TransactionRepository transactionRepository,
-                              CategoryRepository categoryRepository) {
+                              CategoryRepository categoryRepository,
+                              java.time.Clock clock) {
         this.chatCallerFactory = chatCallerFactory;
         this.userRepository = userRepository;
         this.bankTransactionRepository = bankTransactionRepository;
         this.transactionRepository = transactionRepository;
         this.categoryRepository = categoryRepository;
+        this.clock = clock;
     }
 
     /**
@@ -151,7 +155,7 @@ public class AiAssistantService {
      * que fazia qualquer resposta contradizer o painel por construção.
      */
     AssistantContext buildFinancialContext(User user, List<Transaction> walletTxs) {
-        LocalDate hoje = LocalDate.now(ZoneOffset.UTC);
+        LocalDate hoje = LocalDate.now(clock);
         LocalDate inicio = hoje.minusDays(CONTEXT_DAYS);
         OffsetDateTime de = inicio.atStartOfDay().atOffset(ZoneOffset.UTC);
         OffsetDateTime ate = hoje.plusDays(1).atStartOfDay().atOffset(ZoneOffset.UTC);
@@ -162,9 +166,10 @@ public class AiAssistantService {
         // As marcas aplicadas AQUI, e não na consulta, porque o número de
         // excluídos vai no prompt: a IA precisa poder explicar a diferença
         // entre o extrato e a soma em vez de fingir que ela não existe
+        // O Pix do casal CONTA: esta é a visão pessoal, e nela ele é receita
+        // ou despesa como na Análise; só a consolidação da casa o tira
         List<BankTransaction> contam = naJanela.stream()
-                .filter(tx -> !tx.isInternalTransfer() && !tx.isIgnored()
-                        && !tx.isRefunded() && !tx.isFamilyTransfer())
+                .filter(BankTransaction::countsInTotals)
                 .toList();
 
         Map<UUID, Category> categorias = categoryRepository.findVisibleTo(user.getId()).stream()

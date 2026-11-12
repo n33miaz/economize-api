@@ -190,6 +190,44 @@ class AssistantContextTest {
 
     // ------------------------------------------------------------------ apoio
 
+
+    @Test
+    @DisplayName("Compra com estorno parcial pesa o líquido nos totais e na categoria")
+    void estornoParcialContaPeloLiquido() {
+        BankTransaction parcial = despesa("-604.91", "SUPERMERCADO SERO", MERCADO);
+        parcial.setRefundedAmount(new BigDecimal("18.50"));
+
+        AssistantContext contexto = contexto(List.of(parcial));
+
+        assertThat(contexto.expense()).isEqualByComparingTo("586.41");
+        assertThat(contexto.categories().get(0).amount()).isEqualByComparingTo("586.41");
+    }
+
+    @Test
+    @DisplayName("A linha mostra o líquido e diz o bruto e o estornado, para bater com o total")
+    void linhaComEstornoParcialMostraOLiquido() {
+        BankTransaction parcial = despesa("-604.91", "SUPERMERCADO SERO", MERCADO);
+        parcial.setRefundedAmount(new BigDecimal("18.50"));
+
+        String texto = contexto(List.of(parcial, despesa("-4.00", "Click M", TRANSPORTE))).render();
+
+        assertThat(texto).contains("SUPERMERCADO SERO | R$ -586.41 (bruto R$ -604.91, estornado R$ 18.50) |");
+        // linha sem estorno segue como era
+        assertThat(texto).contains("Click M | R$ -4.00 | Transporte");
+    }
+
+    @Test
+    @DisplayName("Compra estornada além do valor não entra como receita")
+    void estornoMaiorQueACompraNaoViraReceita() {
+        BankTransaction devolvidaAMais = despesa("-100.00", "Loja", MERCADO);
+        devolvidaAMais.setRefundedAmount(new BigDecimal("120.00"));
+
+        AssistantContext contexto = contexto(List.of(devolvidaAMais));
+
+        assertThat(contexto.income()).isEqualByComparingTo("0");
+        assertThat(contexto.expense()).isEqualByComparingTo("0");
+    }
+
     private AssistantContext contexto(List<BankTransaction> linhas) {
         return AssistantContext.of(DE, ATE, linhas, 0, CATEGORIAS, List.of());
     }

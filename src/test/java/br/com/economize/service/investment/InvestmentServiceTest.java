@@ -27,6 +27,8 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.http.HttpHeaders;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 
+import java.time.ZoneId;
+import java.time.Clock;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
@@ -98,7 +100,7 @@ class InvestmentServiceTest {
         when(exchangeRates.rate(any())).thenReturn(Optional.empty());
 
         service = new InvestmentService(positionRepository, pluggyItemRepository, userRepository,
-                movementService, pluggyClientProvider, exchangeRates, 3);
+                movementService, pluggyClientProvider, exchangeRates, 3, Clock.systemUTC());
     }
 
     // ------------------------------------------------------------------ sync
@@ -515,6 +517,23 @@ class InvestmentServiceTest {
 
         assertThat(items).extracting(InvestmentResponses.PositionItem::stale).containsExactly(true, false, false);
         assertThat(items).extracting(InvestmentResponses.PositionItem::editable).containsExactly(false, false, true);
+    }
+
+
+    @Test
+    @DisplayName("FUSO: a posição de 7 dias atrás no Brasil não vira stale só porque o servidor já virou o dia")
+    void staleSegueAZonaFinanceira() {
+        InvestmentService noBrasil = new InvestmentService(positionRepository, pluggyItemRepository,
+                userRepository, movementService, pluggyClientProvider, exchangeRates, 3,
+                Clock.fixed(OffsetDateTime.parse("2026-03-31T23:30:00-03:00").toInstant(),
+                        ZoneId.of("America/Sao_Paulo")));
+        InvestmentPosition noLimite = InvestmentPosition.builder()
+                .id(UUID.randomUUID()).user(user).source(Source.CONNECTOR).name("A").type(Type.OTHER)
+                .positionDate(LocalDate.of(2026, 3, 24)).build();
+        when(positionRepository.findAllByUserIdOrderByNameAsc(user.getId())).thenReturn(List.of(noLimite));
+
+        assertThat(noBrasil.list(EMAIL)).extracting(InvestmentResponses.PositionItem::stale)
+                .containsExactly(false);
     }
 
     private static InvestmentRequests.CreatePosition request(String name, String type, String indexer, String currency) {

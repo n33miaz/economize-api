@@ -14,7 +14,6 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
-import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -40,6 +39,8 @@ public class WishService {
     private final UserRepository userRepository;
     private final CategoryRepository categoryRepository;
     private final WishProjectionService projectionService;
+    // "Hoje" na zona financeira (FinancialClockConfig), não na do servidor
+    private final java.time.Clock clock;
 
     @Transactional(readOnly = true)
     public WishResponses.WishList list(String email) {
@@ -132,9 +133,9 @@ public class WishService {
         User user = requireUser(email);
         Wish wish = requireWish(user.getId(), id);
 
-        LocalDate when = request.purchasedAt() != null
-                ? request.purchasedAt() : LocalDate.now(ZoneOffset.UTC);
-        if (when.isAfter(LocalDate.now(ZoneOffset.UTC))) {
+        LocalDate today = LocalDate.now(clock);
+        LocalDate when = request.purchasedAt() != null ? request.purchasedAt() : today;
+        if (when.isAfter(today)) {
             throw new IllegalArgumentException("Data da compra não pode estar no futuro");
         }
         wish.setStatus(Wish.Status.PURCHASED);
