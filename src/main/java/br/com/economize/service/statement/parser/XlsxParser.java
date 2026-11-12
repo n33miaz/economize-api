@@ -55,7 +55,7 @@ public class XlsxParser implements StatementParserStrategy {
     @Autowired
     public XlsxParser(StatementImportProperties limits) {
         this.limits = limits;
-        ZipSecureFile.setMaxEntrySize(limits.getMaxXlsxExpandedSize().toBytes());
+        ZipSecureFile.setMaxEntrySize(limits.getMaxXlsxEntrySize().toBytes());
     }
 
     @Override

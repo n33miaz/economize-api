@@ -37,14 +37,26 @@ public class StatementImportProperties {
     /** Lançamentos por arquivo. Acima disso não é extrato, é ataque ou engano. */
     private int maxRows = 20_000;
 
-    /** Páginas de PDF. Extrato mensal tem poucas; anual de cartão, dezenas. */
-    private int maxPdfPages = 50;
+    /**
+     * Páginas de PDF. O extrato anual do Mercado Pago (1.682 lançamentos no
+     * app) passa de 100 páginas; 200 dá folga. O custo real de cada página é
+     * contido pelos tetos de glifos e de fluxo decodificado, não por este.
+     */
+    private int maxPdfPages = 200;
+
+    /**
+     * Tamanho DECODIFICADO máximo de cada fluxo do PDF (conteúdo de página,
+     * formulário, fonte embutida). O PDFBox descomprime cada fluxo inteiro no
+     * heap; o conteúdo de uma página densa fica na casa das centenas de KB, e
+     * 16 MB ainda aceita uma fonte embutida completa.
+     */
+    private DataSize maxPdfStreamSize = DataSize.ofMegabytes(16);
 
     /**
      * Caracteres (glifos) de texto extraído do PDF. Um PDF pequeno pode
      * desenhar texto sem fim (fluxos comprimidos, repetição); o teto é contado
-     * glifo a glifo, então vale mesmo dentro de uma página só. 50 páginas
-     * densas dão uns 250 mil caracteres.
+     * glifo a glifo, então vale mesmo dentro de uma página só. 200 páginas
+     * densas dão perto de 1 milhão de caracteres.
      */
     private int maxPdfTextChars = 1_000_000;
 
@@ -57,4 +69,13 @@ public class StatementImportProperties {
      * em ~75 MB, e ainda cobre uns 25 mil lançamentos de três colunas.
      */
     private DataSize maxXlsxExpandedSize = DataSize.ofMegabytes(5);
+
+    /**
+     * Tamanho expandido máximo de CADA entrada, conferido pelo próprio POI
+     * enquanto lê. Parece redundante com a soma acima, mas não é: a soma é
+     * medida com o leitor de ZIP do Java e o POI usa outro (commons-compress);
+     * um ZIP forjado para os dois enxergarem entradas diferentes escaparia da
+     * soma e ainda bateria aqui.
+     */
+    private DataSize maxXlsxEntrySize = DataSize.ofMegabytes(5);
 }

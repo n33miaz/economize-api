@@ -1,11 +1,13 @@
 package br.com.economize.service.statement.parser;
 
 import br.com.economize.config.StatementImportProperties;
+import org.apache.pdfbox.cos.COSName;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.PDPageContentStream;
 import org.apache.pdfbox.pdmodel.font.PDType1Font;
 import org.apache.pdfbox.pdmodel.font.Standard14Fonts;
+import org.apache.pdfbox.pdmodel.common.PDStream;
 import org.apache.poi.openxml4j.util.ZipSecureFile;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
@@ -19,7 +21,9 @@ import org.springframework.util.unit.DataSize;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
 import java.util.zip.ZipEntry;
@@ -112,6 +116,7 @@ class StatementParserLimitsTest {
     @DisplayName("XLSX com várias entradas, cada uma abaixo dos tetos do POI, é recusado pela SOMA")
     void xlsxSomaDasEntradasRecusada() throws IOException {
         limits.setMaxXlsxExpandedSize(DataSize.ofKilobytes(80));
+        limits.setMaxXlsxEntrySize(DataSize.ofMegabytes(64));
         // bytes aleatórios: razão ~1:1, cada entrada de 20 KB passa no POI
         byte[] aleatorio = new byte[20 * 1024];
         new java.util.Random(42).nextBytes(aleatorio);
@@ -126,8 +131,11 @@ class StatementParserLimitsTest {
     @Test
     @DisplayName("XLSX com razão de compressão absurda (zip bomb) é recusado como erro do cliente")
     void xlsxZipBombRecusado() throws IOException {
-        // 4 MB de zeros: abaixo do teto de soma (5 MB), então quem recusa é a
-        // trava de razão do POI (1:100) — a que já existia, e que antes saía 500
+        // Soma e teto por entrada bem acima dos 4 MB de zeros: quem recusa só
+        // pode ser a trava de razão do POI (1:100) — a que já existia, e que
+        // antes saía 500
+        limits.setMaxXlsxExpandedSize(DataSize.ofMegabytes(64));
+        limits.setMaxXlsxEntrySize(DataSize.ofMegabytes(64));
         byte[] bomba = comBomba(planilha(1, false), 4 * 1024 * 1024);
         assertThat(bomba.length).isLessThan(64 * 1024);
         XlsxParser parser = new XlsxParser(limits);
@@ -140,9 +148,12 @@ class StatementParserLimitsTest {
     @Test
     @DisplayName("XLSX que se expande além do teto por entrada é recusado mesmo com razão normal")
     void xlsxAcimaDoTetoExpandidoRecusado() throws IOException {
-        // descrições aleatórias: compressão "honesta", que passa na trava de razão
+        // descrições aleatórias: compressão "honesta", que passa na trava de
+        // razão; a soma (10 MB) também passa — só o teto por entrada do POI
+        // (50 KB) barra as ~135 KB de strings
         byte[] grande = planilha(3000, true);
-        limits.setMaxXlsxExpandedSize(DataSize.ofKilobytes(50));
+        limits.setMaxXlsxExpandedSize(DataSize.ofMegabytes(10));
+        limits.setMaxXlsxEntrySize(DataSize.ofKilobytes(50));
         XlsxParser parser = new XlsxParser(limits);
 
         assertThatThrownBy(() -> parser.parse(new ByteArrayInputStream(grande)))
@@ -206,6 +217,35 @@ class StatementParserLimitsTest {
 
         assertThat(txs).hasSize(3);
         assertThat(txs.get(0).getDescription()).contains("MERCADO");
+    }
+
+    @Test
+    @DisplayName("PDF pequeno com fluxo que se expande além do teto é recusado sem decodificá-lo inteiro")
+    void pdfFluxoExpandidoRecusado() throws IOException {
+        // 16 MB de espaços em FlateDecode viram poucos KB no arquivo
+        byte[] arquivo;
+        try (PDDocument doc = new PDDocument(); ByteArrayOutputStream out = new ByteArrayOutputStream()) {
+            PDPage page = new PDPage();
+            doc.addPage(page);
+            PDStream conteudo = new PDStream(doc);
+            byte[] espacos = new byte[64 * 1024];
+            Arrays.fill(espacos, (byte) ' ');
+            try (OutputStream os = conteudo.createOutputStream(COSName.FLATE_DECODE)) {
+                for (int i = 0; i < 256; i++) os.write(espacos);
+            }
+            page.setContents(conteudo);
+            doc.save(out);
+            arquivo = out.toByteArray();
+        }
+        assertThat(arquivo.length).isLessThan(128 * 1024);
+        // Teto de 1 MB: a medição aborta ao passar de 1 MB decodificado — o
+        // fluxo nunca existe inteiro na memória, nem na medição nem no PDFBox,
+        // que só o leria depois dela
+        limits.setMaxPdfStreamSize(DataSize.ofMegabytes(1));
+
+        assertThatThrownBy(() -> pdfParser().parse(new ByteArrayInputStream(arquivo)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("PDF se expande além do limite");
     }
 
     @Test
