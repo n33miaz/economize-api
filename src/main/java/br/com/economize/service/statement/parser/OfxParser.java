@@ -86,6 +86,12 @@ public class OfxParser implements StatementParserStrategy {
             // compra como hoje mudaria o histórico em vez de apenas rejeitá-la.
             log.warn("OFX descartou {} lançamento(s) sem DTPOSTED válido", ignoradasSemData);
         }
+        if (result.isEmpty() && ignoradasSemData > 0) {
+            // Sem data a transação não pode ser deduplicada nem entrar no
+            // ciclo certo; dizer que não havia transação esconderia o defeito
+            // real do arquivo e convidaria a pessoa a tentar importá-lo de novo.
+            throw new IllegalArgumentException("As datas das transações do arquivo são inválidas; nenhuma pôde ser importada");
+        }
         return result;
     }
 

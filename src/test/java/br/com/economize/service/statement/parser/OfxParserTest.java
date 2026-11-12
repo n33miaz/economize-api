@@ -10,6 +10,7 @@ import java.time.OffsetDateTime;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class OfxParserTest {
 
@@ -61,7 +62,9 @@ class OfxParserTest {
                 </OFX>
                 """;
 
-        assertThat(parser.parse(new ByteArrayInputStream(ofx.getBytes(StandardCharsets.UTF_8)))).isEmpty();
+        assertThatThrownBy(() -> parser.parse(new ByteArrayInputStream(ofx.getBytes(StandardCharsets.UTF_8))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("As datas das transações do arquivo são inválidas; nenhuma pôde ser importada");
     }
 
     // Cabeçalho sintético no formato do banco que mente: declara 1252 e grava
