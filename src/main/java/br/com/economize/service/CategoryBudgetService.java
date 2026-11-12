@@ -46,6 +46,10 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class CategoryBudgetService {
 
+    // Limites da coluna monthly_limit NUMERIC(19,4): 4 casas e 15 dígitos inteiros
+    private static final int MAX_CASAS_DO_TETO = 4;
+    private static final BigDecimal TETO_MAXIMO = new BigDecimal("999999999999999.9999");
+
     private final CategoryBudgetRepository budgetRepository;
     private final CategoryRepository categoryRepository;
     private final BankTransactionRepository bankTransactionRepository;
@@ -60,6 +64,15 @@ public class CategoryBudgetService {
         User user = requireUser(email);
         if (monthlyLimit == null || monthlyLimit.signum() <= 0) {
             throw new IllegalArgumentException("O teto precisa ser maior que zero");
+        }
+        // A coluna é NUMERIC(19,4) com CHECK > 0. Mais de 4 casas o banco
+        // arredonda: 0.00001 virava 0 e violava o CHECK (500). E mais de 15
+        // dígitos inteiros estoura a coluna. Os dois são erro do cliente: 400
+        if (monthlyLimit.stripTrailingZeros().scale() > MAX_CASAS_DO_TETO) {
+            throw new IllegalArgumentException("O teto pode ter no máximo 4 casas decimais");
+        }
+        if (monthlyLimit.compareTo(TETO_MAXIMO) > 0) {
+            throw new IllegalArgumentException("O teto passa do valor máximo aceito");
         }
         // Categoria do sistema ou do próprio usuário; a de outro dono responde
         // 404, e não 403, para não confirmar que ela existe

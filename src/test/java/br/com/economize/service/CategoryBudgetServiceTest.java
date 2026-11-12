@@ -97,6 +97,32 @@ class CategoryBudgetServiceTest {
     }
 
     @Test
+    @DisplayName("Teto que não cabe na coluna NUMERIC(19,4) é 400, não 500 do banco")
+    void tetoForaDaColunaERecusado() {
+        // 0.00001 o banco arredonda para 0 e o CHECK > 0 estoura
+        assertThatThrownBy(() -> service.set(EMAIL, MERCADO, new BigDecimal("0.00001")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("4 casas");
+        // 10^16 passa dos 15 dígitos inteiros da coluna
+        assertThatThrownBy(() -> service.set(EMAIL, MERCADO, new BigDecimal("1E16")))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("máximo");
+        verify(budgetRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("Zeros à direita não contam como casa: 800.000000 é um teto válido")
+    void zerosADireitaNaoContam() {
+        when(budgetRepository.findByUserIdAndCategoryId(user.getId(), MERCADO))
+                .thenReturn(Optional.empty());
+
+        service.set(EMAIL, MERCADO, new BigDecimal("800.000000"));
+        service.set(EMAIL, MERCADO, new BigDecimal("999999999999999.9999"));
+
+        verify(budgetRepository, org.mockito.Mockito.times(2)).save(any());
+    }
+
+    @Test
     @DisplayName("Categoria de outro dono responde 'não encontrada', não 'proibida'")
     void categoriaAlheiaNaoConfirmaExistencia() {
         assertThatThrownBy(() -> service.set(EMAIL, UUID.randomUUID(), new BigDecimal("100")))
