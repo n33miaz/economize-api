@@ -67,9 +67,11 @@ public class InstallmentProjectionService {
 
     private final BankTransactionRepository bankTransactionRepository;
     private final UserRepository userRepository;
+    // "Hoje" na zona financeira (FinancialClockConfig), não na do servidor
+    private final java.time.Clock clock;
 
     public Overview overviewFor(String email) {
-        return overviewFor(email, YearMonth.now());
+        return overviewFor(email, YearMonth.now(clock));
     }
 
     /** @param hoje injetado para o teste mandar no relógio. */

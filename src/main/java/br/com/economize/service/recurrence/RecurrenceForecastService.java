@@ -85,6 +85,8 @@ public class RecurrenceForecastService {
     private final RecurringSeriesRepository seriesRepository;
     private final RecurringSeriesLinkRepository linkRepository;
     private final UserRepository userRepository;
+    // "Hoje" na zona financeira (FinancialClockConfig), não na do servidor
+    private final java.time.Clock clock;
 
     /**
      * {@code window} nulo = projeção por mês do calendário a partir de hoje, o
@@ -96,14 +98,14 @@ public class RecurrenceForecastService {
      * tem onde consultá-la, e inventar uma coluna para ela transformaria uma
      * decisão de tela em migration.
      *
-     * <p>O "hoje" é lido em UTC, o mesmo fuso em que o extrato data o lançamento
-     * e em que a contagem de ocorrências recorta o período. Ler o dia no fuso do
-     * servidor e as ocorrências em UTC deixaria a virada do ciclo depender de
-     * onde a API está hospedada.
+     * <p>O "hoje" é lido na zona financeira ({@code FinancialClockConfig}), não
+     * no fuso do servidor: em UTC a previsão abria o mês seguinte às 21h do
+     * Brasil. O extrato segue datado em UTC, e é nesse fuso que a contagem de
+     * ocorrências recorta o período.
      */
     public ForecastResponse forecast(String email, Integer months, BigDecimal startingBalance,
                                      AnalysisWindow window) {
-        return forecast(email, months, startingBalance, window, LocalDate.now(ZoneOffset.UTC));
+        return forecast(email, months, startingBalance, window, LocalDate.now(clock));
     }
 
     ForecastResponse forecast(String email, Integer monthsParam, BigDecimal startingBalance,

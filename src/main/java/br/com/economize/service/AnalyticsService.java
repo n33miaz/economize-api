@@ -133,7 +133,10 @@ public class AnalyticsService {
                 .findAllByUserIdAndDateGreaterThanEqualAndDateLessThanOrderByDateDesc(
                         user.getId(), window.startInstant(), window.endExclusiveInstant())) {
             if (!tx.countsInTotals()) continue;
-            LocalDate dia = tx.getDate().toLocalDate();
+            // O dia UTC do instante, que é o fuso em que a janela recorta e em
+            // que os parsers gravam a data do extrato. Lido no offset original,
+            // 31/08 23h -03:00 entrava na consulta de setembro e saía como 31/08
+            LocalDate dia = tx.getDate().atZoneSameInstant(ZoneOffset.UTC).toLocalDate();
             BigDecimal[] somas = porDia.computeIfAbsent(dia,
                     k -> new BigDecimal[] {BigDecimal.ZERO, BigDecimal.ZERO});
             // Líquido, não bruto: a compra com estorno parcial vale o que

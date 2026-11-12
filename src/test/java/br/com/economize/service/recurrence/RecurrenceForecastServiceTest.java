@@ -19,6 +19,8 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 
+import java.time.ZoneId;
+import java.time.Clock;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalTime;
@@ -626,6 +628,25 @@ class RecurrenceForecastServiceTest {
         LocalDate start = month.atDay(Math.min(anchorDay, month.lengthOfMonth()));
         LocalDate nextStart = nextMonth.atDay(Math.min(anchorDay, nextMonth.lengthOfMonth()));
         return AnalysisWindow.of(start, nextStart.minusDays(1));
+    }
+
+
+    // 23h30 do dia 31 em São Paulo já é 1º de abril no servidor (02h30 UTC)
+    private static final Clock NOITE_DE_31_DE_MARCO = Clock.fixed(
+            OffsetDateTime.parse("2026-03-31T23:30:00-03:00").toInstant(), ZoneId.of("America/Sao_Paulo"));
+    private static final Clock MADRUGADA_DE_1_DE_ABRIL = Clock.fixed(
+            OffsetDateTime.parse("2026-04-01T00:30:00-03:00").toInstant(), ZoneId.of("America/Sao_Paulo"));
+
+    @Test
+    void forecastOpensInTheMonthOfTheFinancialZone() {
+        stubSeries();
+
+        assertThat(new RecurrenceForecastService(seriesRepository, linkRepository, userRepository,
+                NOITE_DE_31_DE_MARCO).forecast(EMAIL, 1, null, null).months().get(0).month())
+                .isEqualTo("2026-03");
+        assertThat(new RecurrenceForecastService(seriesRepository, linkRepository, userRepository,
+                MADRUGADA_DE_1_DE_ABRIL).forecast(EMAIL, 1, null, null).months().get(0).month())
+                .isEqualTo("2026-04");
     }
 
     private RecurringSeries monthly(String key, String name, RecurringSeries.Flow flow,
