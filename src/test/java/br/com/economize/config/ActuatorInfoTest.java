@@ -29,13 +29,23 @@ import org.springframework.test.web.reactive.server.WebTestClient;
         properties = {
                 "management.endpoints.web.exposure.include=health,info,metrics",
                 "management.info.build.enabled=true",
-                "management.info.java.enabled=true"
+                // os mesmos valores de produção — a guarda no fim do arquivo
+                // cobra que o application.properties principal diga o mesmo
+                "management.info.java.enabled=false",
+                "management.endpoint.health.show-details=when-authorized"
         })
 @DisplayName("Identidade da build no /actuator/info (EC-044)")
 class ActuatorInfoTest {
 
     @Autowired
     private WebTestClient client;
+
+    @Autowired
+    private br.com.economize.security.JwtUtil jwtUtil;
+
+    private String token() {
+        return "Bearer " + jwtUtil.generateToken("teste@economize.app");
+    }
 
     @Test
     @DisplayName("O /info diz a versão da build, e não um objeto vazio")
@@ -71,5 +81,45 @@ class ActuatorInfoTest {
         client.get().uri("/actuator/metrics").exchange().expectStatus().isUnauthorized();
         client.get().uri("/actuator/metrics/jvm.memory.used").exchange()
                 .expectStatus().isUnauthorized();
+    }
+
+    @Test
+    @DisplayName("Com token, a saúde detalha e as métricas respondem")
+    void comTokenDetalhaEMede() {
+        client.get().uri("/actuator/health")
+                .header(org.springframework.http.HttpHeaders.AUTHORIZATION, token())
+                .exchange()
+                .expectBody()
+                .jsonPath("$.components").exists();
+        client.get().uri("/actuator/metrics/jvm.memory.used")
+                .header(org.springframework.http.HttpHeaders.AUTHORIZATION, token())
+                .exchange()
+                .expectStatus().isOk();
+    }
+
+    @Test
+    @DisplayName("O /info não diz a versão da JVM")
+    void infoNaoDizAJvm() {
+        client.get().uri("/actuator/info")
+                .exchange()
+                .expectBody()
+                .jsonPath("$.java").doesNotExist();
+    }
+
+    @Test
+    @DisplayName("A configuração de PRODUÇÃO é a que este teste exercita")
+    void producaoUsaOsMesmosValores() throws java.io.IOException {
+        // O properties de teste substitui o principal: sem esta leitura direta,
+        // alguém reabre o detalhe em produção e os testes acima seguem verdes
+        java.util.Properties producao = new java.util.Properties();
+        try (var in = java.nio.file.Files.newInputStream(
+                java.nio.file.Path.of("src/main/resources/application.properties"))) {
+            producao.load(in);
+        }
+        org.assertj.core.api.Assertions.assertThat(
+                producao.getProperty("management.endpoint.health.show-details"))
+                .isEqualTo("when-authorized");
+        org.assertj.core.api.Assertions.assertThat(
+                producao.getProperty("management.info.java.enabled")).isEqualTo("false");
     }
 }
