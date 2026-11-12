@@ -303,6 +303,12 @@ public class BankStatementService {
         ReconciliationLedger ledger = new ReconciliationLedger(existing);
         // linhas já gravadas que ganham a origem desta importação (EC-113)
         Map<UUID, UUID> accountBackfill = new java.util.LinkedHashMap<>();
+        // As datas em que esta importação MEXE: o que entra e o que muda de
+        // origem. É o recorte que a faxina vai ler (ver HygieneWindow) — linha
+        // reconhecida e descartada não entra, senão reimportar dois anos de
+        // extrato por causa de uma linha nova devolveria a faxina ao extrato
+        // inteiro
+        List<OffsetDateTime> datasTocadas = new ArrayList<>();
 
         // 1º passe: o que já existe pelo id externo sai da frente, mas consome o
         // crédito da PRÓPRIA linha no ledger — senão uma transação nova de mesmo
@@ -330,6 +336,9 @@ public class BankStatementService {
                 // veio do extrato da conta corrente.
                 if (tx.getAccountId() != null && known.getAccountId() == null && known.getId() != null) {
                     accountBackfill.put(known.getId(), tx.getAccountId());
+                    // ganhar conta de origem muda de que lado a linha fica na
+                    // varredura de duplicatas: ela conta como alterada
+                    datasTocadas.add(known.getDate());
                 }
                 continue;
             }
@@ -406,6 +415,7 @@ public class BankStatementService {
                     .accountId(tx.getAccountId())
                     .build();
             toSave.add(entity);
+            datasTocadas.add(entity.getDate());
             bySource.get(sourceOf.apply(tx)).add(entity);
         }
 
@@ -491,10 +501,17 @@ public class BankStatementService {
             if (upload.getTransactionsImported() > principal.getTransactionsImported()) principal = upload;
         }
         // UM evento por importação, e só quando tudo gravou: quem escuta agenda
-        // a faxina do extrato INTEIRO do usuário, então um evento por banco
-        // dispararia N faxinas concorrentes sobre os mesmos lançamentos. Em
-        // falha parcial não sai nenhum — a próxima sincronização publica.
-        eventPublisher.publish(new StatementImportedEvent(user.getId(), format, toSave.size(), principal.getId()));
+        // a faxina do usuário, então um evento por banco dispararia N faxinas
+        // concorrentes sobre os mesmos lançamentos. Em falha parcial não sai
+        // nenhum — a próxima sincronização publica.
+        //
+        // O evento leva o intervalo de datas do LOTE INTEIRO (todas as fontes):
+        // a faxina lê só essa janela, e o uploadId é só o do upload principal.
+        datasTocadas.removeIf(java.util.Objects::isNull);
+        OffsetDateTime maisAntiga = datasTocadas.isEmpty() ? null : java.util.Collections.min(datasTocadas);
+        OffsetDateTime maisNova = datasTocadas.isEmpty() ? null : java.util.Collections.max(datasTocadas);
+        eventPublisher.publish(new StatementImportedEvent(user.getId(), format, toSave.size(), principal.getId(),
+                maisAntiga, maisNova));
         return new ImportResult(principal.getId(), toSave.size(), suggested, uncategorized, reconciled, false,
                 format.name());
     }

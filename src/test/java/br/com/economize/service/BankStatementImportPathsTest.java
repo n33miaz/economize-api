@@ -361,6 +361,28 @@ class BankStatementImportPathsTest {
     }
 
     @Test
+    @DisplayName("O evento diz de que dia a que dia a importação mexeu, somando as conexões")
+    void eventoCarregaOIntervaloDeTodasAsFontes() {
+        // A faxina lê só esta janela. O upload principal é o do Nubank (duas
+        // linhas); o dia mais antigo está no Inter — se as datas saíssem só
+        // do upload principal, a linha do Inter ficaria sem faxina
+        OffsetDateTime maio2 = OffsetDateTime.of(2026, 5, 2, 8, 0, 0, 0, ZoneOffset.UTC);
+        OffsetDateTime maio20 = OffsetDateTime.of(2026, 5, 20, 21, 30, 0, 0, ZoneOffset.UTC);
+        service.importFromConnector(
+                user, StatementFormat.PLUGGY,
+                List.of(tx("PLUGGY-i1", "-45.90", "MERCADO", CONTA_INTER).toBuilder().date(maio2).build(),
+                        tx("PLUGGY-n1", "-30.00", "IFOOD", CONTA_NUBANK),
+                        tx("PLUGGY-n2", "-12.00", "PADARIA", CONTA_NUBANK).toBuilder().date(maio20).build()),
+                DUAS_CONEXOES);
+
+        ArgumentCaptor<DomainEvent> eventos = ArgumentCaptor.forClass(DomainEvent.class);
+        verify(eventPublisher, times(1)).publish(eventos.capture());
+        StatementImportedEvent evento = (StatementImportedEvent) eventos.getValue();
+        assertThat(evento.getEarliestDate()).isEqualTo(maio2);
+        assertThat(evento.getLatestDate()).isEqualTo(maio20);
+    }
+
+    @Test
     @DisplayName("Mesmo dia e mesmo valor em bancos diferentes: as duas compras entram")
     void mesmoDiaEValorEmBancosDiferentesNaoViraDuplicata() {
         // É o caso que proíbe importar conexão por conexão: a segunda leria a
