@@ -286,6 +286,56 @@ public interface BankTransactionRepository extends JpaRepository<BankTransaction
             + "where t.user.id = :userId and t.id in :ids")
     int markAsFamilyTransfer(@Param("userId") UUID userId, @Param("ids") Collection<UUID> ids);
 
+    // ------------------------------------------------------------------
+    // A conferência de saldo (BalanceReconciliationService). Ela roda ao abrir
+    // o extrato e carregava TODOS os lançamentos do usuário para responder
+    // duas perguntas por conta; as duas consultas abaixo respondem as mesmas
+    // perguntas no banco, pelo índice (account_id, date) da V16, sem
+    // materializar lançamento nenhum.
+    //
+    // As cláusulas são as do filtro em memória que elas substituem, linha por
+    // linha — inclusive o que parece esquecimento. NÃO "alinhe" com a regra
+    // das somas da Análise: aqui a pergunta é sobre o saldo da conta, e perna
+    // interna e par de estorno mexem no saldo de verdade.
+    // ------------------------------------------------------------------
+
+    /**
+     * Quais destas contas tiveram movimento material depois de {@code since}.
+     *
+     * <p>Movimento é qualquer linha da conta — ignorada, interna ou estornada
+     * também: a pergunta é se a conta está viva, não se a linha entra em soma.
+     * O piso é por LINHA e sobre o valor bruto; "depois" é estrito.
+     *
+     * <p>Nunca chame com a lista vazia: {@code in ()} não é SQL válido.
+     */
+    @Query("""
+            select distinct t.accountId from BankTransaction t
+            where t.user.id = :userId and t.accountId in :accountIds
+              and t.date > :since
+              and abs(t.amount) >= :floor
+            """)
+    List<UUID> findAccountsWithMovementSince(@Param("userId") UUID userId,
+                                             @Param("accountIds") Collection<UUID> accountIds,
+                                             @Param("since") OffsetDateTime since,
+                                             @Param("floor") BigDecimal floor);
+
+    /**
+     * Soma do que entrou na conta DEPOIS de {@code after}, sem as ignoradas.
+     *
+     * <p>Só a ignorada sai: é a única linha que não é dinheiro de verdade (a
+     * duplicata de outra fonte). Valor bruto, "depois" estrito. Devolve nulo
+     * quando não há linha nenhuma — quem chama trata como zero.
+     */
+    @Query("""
+            select sum(t.amount) from BankTransaction t
+            where t.user.id = :userId and t.accountId = :accountId
+              and t.date > :after
+              and t.ignored = false
+            """)
+    BigDecimal sumByAccountAfter(@Param("userId") UUID userId,
+                                 @Param("accountId") UUID accountId,
+                                 @Param("after") OffsetDateTime after);
+
     /**
      * Marca as DUAS pernas de um estorno (V29). O crédito guarda de quem é o
      * estorno; a compra só recebe a marca — quem quiser o caminho de volta
