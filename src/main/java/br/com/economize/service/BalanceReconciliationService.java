@@ -14,8 +14,10 @@ import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
@@ -97,12 +99,28 @@ public class BalanceReconciliationService {
                 bankTransactionRepository.findAccountsWithMovementSince(user.getId(), zeradas,
                         agora.minusDays(DIAS_DE_MOVIMENTO), Materiality.PISO_DE_AVISO));
 
+        // "Quanto entrou depois da leitura" tem um corte POR CONTA (a data de
+        // leitura de cada uma), e mesmo assim é uma consulta só: o banco
+        // compara cada lançamento com a data da conta dele. Era uma soma por
+        // conta — com 200 contas ligadas, 201 consultas por abertura de tela.
+        // Só entra quem a soma interessava antes: ligada, com saldo e com data
+        List<UUID> comLeitura = contas.stream()
+                .filter(BalanceReconciliationService::examinavel)
+                .filter(c -> c.getReportedBalance() != null && c.getReportedBalanceAt() != null)
+                .map(ConnectorAccount::getId)
+                .toList();
+        Map<UUID, BigDecimal> depoisDaLeitura = new HashMap<>();
+        if (!comLeitura.isEmpty()) {
+            for (Object[] linha : bankTransactionRepository
+                    .sumByAccountAfterOwnReading(user.getId(), comLeitura)) {
+                depoisDaLeitura.put((UUID) linha[0], (BigDecimal) linha[1]);
+            }
+        }
+
         List<Finding> achados = new ArrayList<>();
-        // Uma soma por conta, de propósito: são poucas contas por usuário e
-        // cada uma tem a própria data de leitura como corte
         for (ConnectorAccount conta : contas) {
             if (!examinavel(conta)) continue;
-            achados.addAll(examinar(user.getId(), conta, comMovimento, agora));
+            achados.addAll(examinar(conta, comMovimento, depoisDaLeitura, agora));
         }
         log.info("Conferência de saldo: {} conta(s) ligada(s), {} aviso(s), user={}",
                 contas.stream().filter(c -> c.getPluggyItemId() != null).count(),
@@ -118,8 +136,8 @@ public class BalanceReconciliationService {
         return conta.getPluggyItemId() != null;
     }
 
-    private List<Finding> examinar(UUID userId, ConnectorAccount conta, Set<UUID> comMovimento,
-                                   OffsetDateTime agora) {
+    private List<Finding> examinar(ConnectorAccount conta, Set<UUID> comMovimento,
+                                   Map<UUID, BigDecimal> depoisDaLeitura, OffsetDateTime agora) {
         List<Finding> achados = new ArrayList<>();
         BigDecimal saldo = conta.getReportedBalance();
         OffsetDateTime lidoEm = conta.getReportedBalanceAt();
@@ -161,10 +179,8 @@ public class BalanceReconciliationService {
             // leitura ainda não está no saldo informado. Não é erro — é a
             // diferença entre o que o banco disse e o que já se sabe hoje, e
             // dizê-la é melhor do que mostrar um número e calar
-            BigDecimal somado = bankTransactionRepository
-                    .sumByAccountAfter(userId, conta.getId(), lidoEm);
-            // Soma de nenhuma linha é nulo no banco, e zero para quem lê
-            BigDecimal depois = somado == null ? BigDecimal.ZERO : somado;
+            // Conta sem linha depois da leitura não volta da consulta: zero
+            BigDecimal depois = depoisDaLeitura.getOrDefault(conta.getId(), BigDecimal.ZERO);
             // O caso dos treze centavos do concorrente, ao pé da letra: um
             // movimento de R$ 0,13 depois da leitura é verdade e não é notícia
             if (Materiality.vale(depois)) {
