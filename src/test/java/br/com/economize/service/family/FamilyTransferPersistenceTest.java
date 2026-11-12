@@ -8,6 +8,7 @@ import br.com.economize.repository.BankTransactionRepository;
 import br.com.economize.repository.FamilyGroupRepository;
 import br.com.economize.repository.FamilyMemberRepository;
 import br.com.economize.repository.UserRepository;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -63,12 +64,13 @@ class FamilyTransferPersistenceTest {
     private BankTransactionRepository bankTransactionRepository;
 
     private User marido;
+    private User esposa;
 
     @BeforeEach
     void setUp() {
         marido = userRepository.save(User.builder()
                 .name("Neemias Cormino Manso").email("dono@economize.test").password("x").build());
-        User esposa = userRepository.save(User.builder()
+        esposa = userRepository.save(User.builder()
                 .name("Alice dos Santos Araujo").email("esposa@economize.test").password("x").build());
         FamilyGroup casa = groupRepository.save(FamilyGroup.builder()
                 .name("Casa Salada").owner(marido).build());
@@ -78,6 +80,17 @@ class FamilyTransferPersistenceTest {
         memberRepository.save(FamilyMember.builder()
                 .group(casa).user(esposa).role(FamilyMember.Role.MEMBER)
                 .shareScope(FamilyMember.ShareScope.TRANSACTIONS).build());
+    }
+
+    // Sem a transação com rollback do @DataJpaTest (desligada acima), cada
+    // teste deixa as linhas no H2; sem limpar, o segundo teste esbarra no
+    // e-mail único do primeiro
+    @AfterEach
+    void tearDown() {
+        bankTransactionRepository.deleteAll();
+        memberRepository.deleteAll();
+        groupRepository.deleteAll();
+        userRepository.deleteAll();
     }
 
     @Test
@@ -95,9 +108,43 @@ class FamilyTransferPersistenceTest {
                 .isFamilyTransfer()).isFalse();
     }
 
+    @Test
+    @DisplayName("sair da casa solta as marcas SÓ nas linhas de quem saiu")
+    void clearAllShouldTouchOnlyTheLeaversRows() {
+        BankTransaction paraEla = save("-387.11", "Pix enviado: Cp — Alice dos Santos Araujo");
+        BankTransaction dela = save(esposa, "-50.00", "Pix enviado: Neemias Cormino Manso");
+        bankTransactionRepository.markAsFamilyTransfer(marido.getId(), java.util.List.of(paraEla.getId()));
+        bankTransactionRepository.markAsFamilyTransfer(esposa.getId(), java.util.List.of(dela.getId()));
+
+        int soltas = bankTransactionRepository.clearAllFamilyTransfers(marido.getId());
+
+        assertThat(soltas).isEqualTo(1);
+        assertThat(bankTransactionRepository.findById(paraEla.getId()).orElseThrow()
+                .isFamilyTransfer()).isFalse();
+        // a linha da esposa, que segue na casa, não é tocada
+        assertThat(bankTransactionRepository.findById(dela.getId()).orElseThrow()
+                .isFamilyTransfer()).isTrue();
+    }
+
+    @Test
+    @DisplayName("a varredura em transação nova enxerga o vínculo já gravado e marca o Pix")
+    void reconcileInNewTransactionShouldMark() {
+        BankTransaction paraEla = save("-387.11", "Pix enviado: Cp — Alice dos Santos Araujo");
+
+        FamilyTransferService.Outcome resultado = service.reconcileInNewTransaction(marido.getEmail());
+
+        assertThat(resultado.marked()).isEqualTo(1);
+        assertThat(bankTransactionRepository.findById(paraEla.getId()).orElseThrow()
+                .isFamilyTransfer()).isTrue();
+    }
+
     private BankTransaction save(String valor, String descricao) {
+        return save(marido, valor, descricao);
+    }
+
+    private BankTransaction save(User dono, String valor, String descricao) {
         return bankTransactionRepository.save(BankTransaction.builder()
-                .user(marido)
+                .user(dono)
                 .transactionId(descricao + valor)
                 .type(new BigDecimal(valor).signum() < 0 ? "DEBIT" : "CREDIT")
                 .amount(new BigDecimal(valor))

@@ -8,6 +8,7 @@ import br.com.economize.model.FamilyGroup;
 import br.com.economize.model.FamilyInvite;
 import br.com.economize.model.FamilyMember;
 import br.com.economize.model.User;
+import br.com.economize.repository.BankTransactionRepository;
 import br.com.economize.repository.CategoryRepository;
 import br.com.economize.repository.ConnectorAccountRepository;
 import br.com.economize.repository.FamilyGroupRepository;
@@ -18,6 +19,8 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -66,6 +69,8 @@ public class FamilyService {
     private final UserRepository userRepository;
     private final CategoryRepository categoryRepository;
     private final ConnectorAccountRepository connectorAccountRepository;
+    private final BankTransactionRepository bankTransactionRepository;
+    private final FamilyTransferService familyTransferService;
     private final SecureRandom secureRandom = new SecureRandom();
 
     @Transactional(readOnly = true)
@@ -121,7 +126,11 @@ public class FamilyService {
 
         FamilyGroup group = me.getGroup();
         inviteRepository.deleteAll(inviteRepository.findAllByGroupId(group.getId()));
-        memberRepository.deleteAll(memberRepository.findAllByGroupIdOrderByJoinedAtAsc(group.getId()));
+        List<FamilyMember> members = memberRepository.findAllByGroupIdOrderByJoinedAtAsc(group.getId());
+        // desfazer a casa é todo mundo saindo ao mesmo tempo: cada membro perde
+        // as marcas de Pix da casa nas PRÓPRIAS linhas (ver removeMember)
+        members.forEach(this::clearFamilyTransfers);
+        memberRepository.deleteAll(members);
         groupRepository.delete(group);
         log.info("Casa {} desfeita pelo dono {}", group.getId(), user.getId());
     }
@@ -180,7 +189,45 @@ public class FamilyService {
                 .shareScope(FamilyMember.ShareScope.TOTALS)
                 .build());
         log.info("Usuário {} entrou na casa {}", user.getId(), invite.getGroup().getId());
+        reconcileAfterJoin(email, user.getId());
         return toResponse(member);
+    }
+
+    /**
+     * Varre o histórico de quem acabou de entrar atrás dos Pix para os outros
+     * membros. Sem isto, até alguém chamar /reconcile-transfers ou importar um
+     * extrato, a visão combinada contava o Pix do casal como receita de um e
+     * despesa do outro. Só as linhas de QUEM ENTROU: a API nunca escreve na
+     * conta de outro usuário, e cada membro antigo reconcilia pela sua.
+     *
+     * <p><b>Depois do commit, em transação própria.</b> Dentro da transação do
+     * join, uma exceção da varredura marcaria a transação para rollback mesmo
+     * capturada, e a pessoa não entraria na casa por causa de um enfeite. Numa
+     * transação nova ANTES do commit, o vínculo recém-criado ainda não seria
+     * visível e a varredura não acharia casa nenhuma.
+     *
+     * <p>Best-effort: falha vira log (sem descrição nem nome, só a classe do
+     * erro) e o caminho manual continua disponível.
+     */
+    private void reconcileAfterJoin(String email, UUID userId) {
+        Runnable reconcile = () -> {
+            try {
+                familyTransferService.reconcileInNewTransaction(email);
+            } catch (RuntimeException e) {
+                log.warn("Varredura da casa após a entrada falhou (user={}, {}); segue pelo caminho manual.",
+                        userId, e.getClass().getSimpleName());
+            }
+        };
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    reconcile.run();
+                }
+            });
+        } else {
+            reconcile.run();
+        }
     }
 
     /**
@@ -203,6 +250,7 @@ public class FamilyService {
         if (!self && !me.isOwner()) {
             throw new IllegalArgumentException("Só quem criou a casa pode remover outros membros");
         }
+        clearFamilyTransfers(target);
         memberRepository.delete(target);
         log.info("Membro {} removido da casa {} por {}", target.getId(), me.getGroup().getId(), user.getId());
     }
@@ -245,6 +293,18 @@ public class FamilyService {
     }
 
     // ------------------------------------------------------------------ apoio
+
+    /**
+     * Quem sai da casa deixa de ter "Pix da casa": sem isto, os Pix antigos
+     * para o ex-membro seguiam fora dos totais, inclusive numa casa nova onde
+     * ele não mora. Só as linhas do PRÓPRIO membro que sai, por UPDATE direto
+     * (sem carregar o histórico); as dos que ficam não são tocadas — cada um
+     * cuida das suas, como na marcação.
+     */
+    private void clearFamilyTransfers(FamilyMember leaving) {
+        if (leaving.getUser() == null) return;
+        bankTransactionRepository.clearAllFamilyTransfers(leaving.getUser().getId());
+    }
 
     private FamilyResponses.FamilyResponse toResponse(FamilyMember me) {
         FamilyGroup group = me.getGroup();
