@@ -241,6 +241,11 @@ class PdfObjectStreamLimitsTest {
             var filtro = FilterFactory.INSTANCE.getFilter(nome);
             assertThat(PdfDecodeBudget.original(filtro)).as(nome.getName()).isNotSameAs(filtro);
         }
+        // um embrulho por instância: a cadeia descarta filtro repetido por identidade
+        assertThat(FilterFactory.INSTANCE.getFilter(COSName.FLATE_DECODE))
+                .isSameAs(FilterFactory.INSTANCE.getFilter(COSName.FLATE_DECODE_ABBREVIATION));
+        assertThat(FilterFactory.INSTANCE.getFilter(COSName.LZW_DECODE))
+                .isSameAs(FilterFactory.INSTANCE.getFilter(COSName.LZW_DECODE_ABBREVIATION));
         // imagem fica com o original: a extração de texto não a decodifica
         var dct = FilterFactory.INSTANCE.getFilter(COSName.DCT_DECODE);
         assertThat(PdfDecodeBudget.original(dct)).isSameAs(dct);

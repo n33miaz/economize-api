@@ -12,6 +12,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.lang.reflect.Field;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -132,12 +133,19 @@ final class PdfDecodeBudget implements AutoCloseable {
             Field field = FilterFactory.class.getDeclaredField("filters");
             field.setAccessible(true);
             Map<COSName, Filter> filters = (Map<COSName, Filter>) field.get(FilterFactory.INSTANCE);
+            // um embrulho por INSTÂNCIA original, não por nome: /FlateDecode e
+            // /Fl são o mesmo objeto no PDFBox, e a decodificação em cadeia
+            // descarta filtros repetidos por identidade — dois embrulhos
+            // fariam [/FlateDecode /Fl] descomprimir duas vezes e falhar
+            Map<Filter, Limited> wrapped = new IdentityHashMap<>();
             for (COSName name : LIMITED) {
                 Filter current = filters.get(name);
                 if (current == null) {
                     throw new IllegalStateException("PDFBox sem o filtro " + name.getName());
                 }
-                if (!(current instanceof Limited)) filters.put(name, new Limited(current));
+                if (!(current instanceof Limited)) {
+                    filters.put(name, wrapped.computeIfAbsent(current, Limited::new));
+                }
             }
         } catch (ReflectiveOperationException | RuntimeException e) {
             throw new IllegalStateException("Não foi possível limitar os decodificadores do PDFBox", e);
