@@ -28,4 +28,14 @@ class BankTransactionTotalsRuleTest {
         assertThat(base().ignored(true).build().countsInTotals()).isFalse();
         assertThat(base().refunded(true).build().countsInTotals()).isFalse();
     }
+
+    @Test
+    @DisplayName("Estornos parciais que passam da compra zeram o líquido; a despesa nunca vira receita")
+    void liquidoNaoTrocaDeSinal() {
+        BankTransaction compra = base().refundedAmount(new BigDecimal("120.00")).build();
+
+        assertThat(compra.getNetAmount()).isEqualByComparingTo("0");
+        assertThat(base().refundedAmount(new BigDecimal("18.50")).build().getNetAmount())
+                .isEqualByComparingTo("-81.50");
+    }
 }

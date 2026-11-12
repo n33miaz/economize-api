@@ -182,11 +182,16 @@ public class BankTransaction {
      * <p>Para uma compra de −604,91 com 18,50 devolvidos, −586,41. Para uma
      * linha sem estorno parcial, o próprio {@code amount}. Toda soma em Java
      * lê daqui; as consultas JPQL fazem a mesma conta inline.
+     *
+     * <p>O líquido nunca troca de sinal: se os estornos parciais passarem do
+     * valor da compra (−100 com dois créditos de 60), ela vale zero, e não
+     * +20 de receita nem R$ 20 de despesa.
      */
     public BigDecimal getNetAmount() {
         if (amount == null) return null;
         if (refundedAmount == null || refundedAmount.signum() == 0) return amount;
-        return amount.add(refundedAmount);
+        BigDecimal net = amount.add(refundedAmount);
+        return net.signum() * amount.signum() < 0 ? BigDecimal.ZERO : net;
     }
 
     /**

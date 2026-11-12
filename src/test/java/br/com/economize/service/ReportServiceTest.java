@@ -261,4 +261,16 @@ class ReportServiceTest {
         assertThat(report.getDominantCategory()).isEqualTo("FOOD");
         assertThat(report.getCategoriesJson()).doesNotContain("TRANSFER").contains("586.41");
     }
+
+    @Test
+    @DisplayName("Compra estornada além do valor não vira receita nem despesa")
+    void estornoMaiorQueACompraNaoViraReceita() {
+        BankTransaction devolvidaAMais = tx("-100.00", "FOOD", 15);
+        devolvidaAMais.setRefundedAmount(new BigDecimal("120.00"));
+
+        Report report = gerar(List.of(devolvidaAMais));
+
+        assertThat(report.getTotalIncome()).isEqualByComparingTo("0");
+        assertThat(report.getTotalExpense()).isEqualByComparingTo("0");
+    }
 }

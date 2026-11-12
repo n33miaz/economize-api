@@ -215,6 +215,20 @@ class DebtInsightServiceTest {
         assertThat(resposta.groups().get(0).total()).isEqualByComparingTo("800.00");
     }
 
+    @Test
+    void estornoMaiorQueACompraNaoViraDespesa() {
+        // -100 com dois estornos parciais de 60: o líquido seria +20
+        BankTransaction devolvidaAMais = debito("EMPRESTIMO PESSOAL", "-100.00");
+        devolvidaAMais.setRefundedAmount(new BigDecimal("120.00"));
+        givenTransactions(devolvidaAMais);
+
+        DebtOverviewResponse resposta = service.summarize(EMAIL, JANELA);
+
+        assertThat(resposta.totalExpense()).isEqualByComparingTo("0");
+        assertThat(resposta.totalDebt()).isEqualByComparingTo("0");
+        assertThat(resposta.groups()).isEmpty();
+    }
+
     private void givenTransactions(BankTransaction... transactions) {
         when(bankTransactionRepository
                 .findAllByUserIdAndDateGreaterThanEqualAndDateLessThanOrderByDateDesc(

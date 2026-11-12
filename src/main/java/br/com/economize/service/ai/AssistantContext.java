@@ -69,7 +69,7 @@ public record AssistantContext(
 
     /** Uma linha citável: data, descrição, valor e categoria. */
     public record TransactionLine(LocalDate date, String description, BigDecimal amount,
-                                  String category) {
+                                  String category, String refundNote) {
     }
 
     /**
@@ -126,8 +126,11 @@ public record AssistantContext(
 
         List<TransactionLine> linhas = inWindow.stream()
                 .limit(MAX_LINES)
+                // O valor da linha é o LÍQUIDO, o mesmo que entrou no total; com
+                // estorno parcial, o bruto e o estornado vão ao lado, senão a IA
+                // somaria as linhas e contradiria o total que recebeu
                 .map(tx -> new TransactionLine(tx.getDate().toLocalDate(), tx.displayDescription(),
-                        tx.getAmount(), nomeDaCategoria(tx, categoriesById)))
+                        tx.getNetAmount(), nomeDaCategoria(tx, categoriesById), notaDeEstorno(tx)))
                 .toList();
 
         List<String> carteira = walletTxs.stream()
@@ -138,6 +141,12 @@ public record AssistantContext(
 
         return new AssistantContext(start, end, income, expense, categorias, linhas,
                 inWindow.size(), excluded, carteira, walletTxs.size());
+    }
+
+    private static String notaDeEstorno(BankTransaction tx) {
+        BigDecimal estornado = tx.getRefundedAmount();
+        if (estornado == null || estornado.signum() == 0) return null;
+        return String.format(" (bruto R$ %s, estornado R$ %s)", tx.getAmount(), estornado);
     }
 
     private static String nomeDaCategoria(BankTransaction tx, Map<UUID, Category> porId) {
@@ -188,8 +197,9 @@ public record AssistantContext(
             sb.append("Nenhum lançamento neste período.\n");
         } else {
             for (TransactionLine linha : lines) {
-                sb.append(String.format("- %s | %s | R$ %s | %s%n",
-                        linha.date(), linha.description(), linha.amount(), linha.category()));
+                sb.append(String.format("- %s | %s | R$ %s%s | %s%n",
+                        linha.date(), linha.description(), linha.amount(),
+                        linha.refundNote() != null ? linha.refundNote() : "", linha.category()));
             }
             if (totalInWindow > lines.size()) {
                 sb.append("(").append(totalInWindow - lines.size())
