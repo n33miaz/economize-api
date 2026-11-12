@@ -121,8 +121,15 @@ public class WishProjectionService {
 
         List<BigDecimal> leftovers = new ArrayList<>();
         List<BigDecimal> expenses = new ArrayList<>();
-        for (AnalysisWindow window : completedCycles(anchorDay, CYCLES_SAMPLED, today)) {
-            AnalyticsService.CycleNet net = analyticsService.netFor(userId, window);
+        WishBaseline.ClosedCycle lastClosedCycle = null;
+        for (CycleWindow cycle : completedCycleWindows(anchorDay, CYCLES_SAMPLED, today)) {
+            AnalyticsService.CycleNet net = analyticsService.netFor(userId, cycle.window());
+            if (lastClosedCycle == null) {
+                // A mediana serve para prever; esta é a sobra que de fato fechou
+                // e é a única que pode virar aporte medido.
+                lastClosedCycle = new WishBaseline.ClosedCycle(
+                        cycle.month().toString(), scale2(net.leftover()));
+            }
             // ciclo sem extrato importado não é ciclo em que nada aconteceu
             if (net.income().signum() == 0 && net.expense().signum() == 0) continue;
             leftovers.add(net.leftover());
@@ -139,7 +146,7 @@ public class WishProjectionService {
 
         return new WishBaseline(
                 scale2(workIncome), hourlyRate, hoursPerMonth, hoursPerDay,
-                monthlyLeftover, monthlyExpense, leftovers.size(), List.copyOf(gaps));
+                monthlyLeftover, monthlyExpense, leftovers.size(), List.copyOf(gaps), lastClosedCycle);
     }
 
     public WishProjection project(Wish wish, WishBaseline baseline) {
@@ -239,14 +246,42 @@ public class WishProjectionService {
      * o mês do usuário (dia 5 ao dia 4). O ciclo corrente nunca entra.
      */
     List<AnalysisWindow> completedCycles(Short anchorDay, int count, LocalDate today) {
-        List<AnalysisWindow> windows = new ArrayList<>();
+        return completedCycleWindows(anchorDay, count, today).stream()
+                .map(CycleWindow::window)
+                .toList();
+    }
+
+    /**
+     * Diz se o identificador de ciclo já fechou para este usuário. A mesma
+     * âncora que recorta a baseline também impede marcar como medida uma sobra
+     * de ciclo salarial que ainda está em andamento.
+     */
+    public boolean isCycleClosed(UUID userId, YearMonth cycleMonth) {
+        return isCycleClosed(userId, cycleMonth, today());
+    }
+
+    /** Sobrecarga de teste: a fronteira do fechamento não depende do relógio da máquina. */
+    boolean isCycleClosed(UUID userId, YearMonth cycleMonth, LocalDate today) {
+        Short anchorDay = incomeSourceRepository.findAllByUserIdAndActiveTrue(userId).stream()
+                .filter(s -> s.getKind() == IncomeSource.Kind.SALARY && s.getAnchorDay() != null)
+                .map(IncomeSource::getAnchorDay)
+                .findFirst()
+                .orElse(null);
+        if (anchorDay == null) return cycleMonth.isBefore(YearMonth.from(today));
+        LocalDate end = anchoredOn(cycleMonth.plusMonths(1), anchorDay).minusDays(1);
+        return end.isBefore(today);
+    }
+
+    private List<CycleWindow> completedCycleWindows(Short anchorDay, int count, LocalDate today) {
+        List<CycleWindow> cycles = new ArrayList<>();
 
         if (anchorDay == null) {
             YearMonth current = YearMonth.from(today);
             for (int i = 1; i <= count; i++) {
-                windows.add(AnalysisWindow.ofMonth(current.minusMonths(i)));
+                YearMonth month = current.minusMonths(i);
+                cycles.add(new CycleWindow(month, AnalysisWindow.ofMonth(month)));
             }
-            return windows;
+            return cycles;
         }
 
         // O mês cujo dia-âncora já passou é o do ciclo CORRENTE; os completos
@@ -259,9 +294,13 @@ public class WishProjectionService {
             YearMonth month = cursor.minusMonths(i);
             LocalDate start = anchoredOn(month, anchorDay);
             LocalDate end = anchoredOn(month.plusMonths(1), anchorDay).minusDays(1);
-            windows.add(AnalysisWindow.of(start, end));
+            cycles.add(new CycleWindow(month, AnalysisWindow.of(start, end)));
         }
-        return windows;
+        return cycles;
+    }
+
+    /** Junta a janela à sua chave para não inferir o ciclo da data final. */
+    private record CycleWindow(YearMonth month, AnalysisWindow window) {
     }
 
     /** Dia 31 em fevereiro é o último dia de fevereiro, não erro. */

@@ -252,6 +252,26 @@ class WishProjectionServiceTest {
     }
 
     @Test
+    void expoeASobraDoUltimoCicloFechadoSemConfundirComAMediana() {
+        givenCycles(net(5000, 4700), net(5000, 4200), net(5000, 4200));
+
+        WishBaseline baseline = service.baselineFor(USER, TODAY);
+
+        // Em 15/08, julho já fechou; a referência de 800 é a mediana dos
+        // ciclos, mas só os 300 efetivamente apurados em julho podem ser medidos.
+        assertThat(baseline.lastClosedCycle().cycleMonth()).isEqualTo("2026-07");
+        assertThat(baseline.lastClosedCycle().leftover()).isEqualByComparingTo("300.00");
+        assertThat(baseline.monthlyLeftover()).isEqualByComparingTo("800.00");
+    }
+
+    @Test
+    void cicloCorrenteOuFuturoAindaNaoEstaFechado() {
+        assertThat(service.isCycleClosed(USER, YearMonth.of(2026, 8), TODAY)).isFalse();
+        assertThat(service.isCycleClosed(USER, YearMonth.of(2026, 9), TODAY)).isFalse();
+        assertThat(service.isCycleClosed(USER, YearMonth.of(2026, 7), TODAY)).isTrue();
+    }
+
+    @Test
     void semNenhumCicloComDadosAvisaQueFaltaHistorico() {
         givenSalary("5000");
         givenWorkProfile(5, "8");

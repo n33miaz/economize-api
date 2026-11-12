@@ -18,6 +18,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.DataIntegrityViolationException;
 
 import java.math.BigDecimal;
+import java.time.YearMonth;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -45,6 +46,7 @@ class WishContributionServiceTest {
     @Mock private WishContributionRepository contributionRepository;
     @Mock private WishRepository wishRepository;
     @Mock private UserRepository userRepository;
+    @Mock private WishProjectionService projectionService;
 
     @InjectMocks private WishContributionService service;
 
@@ -82,6 +84,10 @@ class WishContributionServiceTest {
                 .thenAnswer(invocation -> invocation.getArgument(0));
     }
 
+    private void cicloFechado(String cycleMonth) {
+        when(projectionService.isCycleClosed(user.getId(), YearMonth.parse(cycleMonth))).thenReturn(true);
+    }
+
     @Test
     @DisplayName("Aporte sobe o saldo da meta e grava a linha que o explica")
     void aporteSobeSaldoEGravaLinha() {
@@ -102,6 +108,7 @@ class WishContributionServiceTest {
     void origemSeparaMedidoDeDeclarado() {
         comUsuarioEMeta();
         gravaOQueChega();
+        cicloFechado("2026-09");
 
         assertThat(service.contribute(EMAIL, wish.getId(), new BigDecimal("100"), "2026-09", null)
                 .contribution().origin()).isEqualTo(WishContribution.Origin.MEASURED);
@@ -114,6 +121,7 @@ class WishContributionServiceTest {
     @DisplayName("A sobra do mesmo ciclo não entra duas vezes")
     void sobraDoCicloEntraUmaVezSo() {
         comUsuarioEMeta();
+        cicloFechado("2026-09");
         when(contributionRepository.findByWishIdAndCycleMonth(wish.getId(), "2026-09"))
                 .thenReturn(Optional.of(WishContribution.builder()
                         .amount(new BigDecimal("420.00")).cycleMonth("2026-09").build()));
@@ -128,6 +136,41 @@ class WishContributionServiceTest {
         // E o saldo fica exatamente como estava
         assertThat(wish.getSavedAmount()).isEqualByComparingTo("1200.00");
         verify(contributionRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    @DisplayName("Último ciclo fechado é aceito uma vez e depois fica travado")
+    void cicloFechadoEntraUmaVezSo() {
+        comUsuarioEMeta();
+        cicloFechado("2026-10");
+        gravaOQueChega();
+        when(contributionRepository.findByWishIdAndCycleMonth(wish.getId(), "2026-10"))
+                .thenReturn(Optional.empty(), Optional.of(WishContribution.builder()
+                        .cycleMonth("2026-10").build()));
+
+        WishContributionService.Result primeiro = service.contribute(
+                EMAIL, wish.getId(), new BigDecimal("300.00"), "2026-10", null);
+
+        assertThat(primeiro.contribution().origin()).isEqualTo(WishContribution.Origin.MEASURED);
+        assertThatThrownBy(() -> service.contribute(
+                EMAIL, wish.getId(), new BigDecimal("300.00"), "2026-10", null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("já foi guardada");
+        verify(contributionRepository).save(any(WishContribution.class));
+    }
+
+    @Test
+    @DisplayName("Ciclo corrente não pode virar sobra medida")
+    void cicloAindaAbertoRecusaAporteMedido() {
+        comUsuarioEMeta();
+        when(projectionService.isCycleClosed(user.getId(), YearMonth.of(2026, 11))).thenReturn(false);
+
+        assertThatThrownBy(() -> service.contribute(
+                EMAIL, wish.getId(), new BigDecimal("420.00"), "2026-11", null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("depois que o ciclo fechar");
+
+        verify(contributionRepository, never()).save(any());
     }
 
     @Test

@@ -100,12 +100,19 @@ public final class WishResponses {
             BigDecimal monthlyLeftover,
             BigDecimal monthlyExpense,
             int cyclesConsidered,
-            List<String> gaps
+            List<String> gaps,
+            ClosedCycle lastClosedCycle
     ) {
         public static Baseline from(WishBaseline b) {
             return new Baseline(b.workIncome(), b.hourlyRate(), b.hoursPerMonth(),
-                    b.monthlyLeftover(), b.monthlyExpense(), b.cyclesConsidered(), b.gaps());
+                    b.monthlyLeftover(), b.monthlyExpense(), b.cyclesConsidered(), b.gaps(),
+                    b.lastClosedCycle() == null ? null : new ClosedCycle(
+                            b.lastClosedCycle().cycleMonth(), b.lastClosedCycle().leftover()));
         }
+    }
+
+    /** A sobra real de um único ciclo fechado; não é uma estimativa por mediana. */
+    public record ClosedCycle(String cycleMonth, BigDecimal leftover) {
     }
 
     public record WishList(Baseline baseline, List<WishItem> wishes) {

@@ -23,6 +23,8 @@ import java.util.List;
  * @param monthlyExpense  mediana do que saiu nesses mesmos ciclos
  * @param cyclesConsidered quantos ciclos COM DADOS entraram na mediana
  * @param gaps            o que falta para o cálculo ficar completo (códigos para a tela)
+ * @param lastClosedCycle sobra efetivamente apurada no último ciclo fechado;
+ *                        não é a estimativa da mediana
  */
 public record WishBaseline(
         BigDecimal workIncome,
@@ -32,8 +34,23 @@ public record WishBaseline(
         BigDecimal monthlyLeftover,
         BigDecimal monthlyExpense,
         int cyclesConsidered,
-        List<String> gaps
+        List<String> gaps,
+        ClosedCycle lastClosedCycle
 ) {
+    /**
+     * A medida de um ciclo concreto. O identificador é o mês em que o ciclo
+     * começa (também para ciclo salarial), igual ao {@code cycleMonth} do aporte.
+     */
+    public record ClosedCycle(String cycleMonth, BigDecimal leftover) {
+    }
+
+    /** Mantém os chamadores antigos enquanto o ciclo fechado é acrescentado. */
+    public WishBaseline(BigDecimal workIncome, BigDecimal hourlyRate, BigDecimal hoursPerMonth,
+                        BigDecimal hoursPerDay, BigDecimal monthlyLeftover,
+                        BigDecimal monthlyExpense, int cyclesConsidered, List<String> gaps) {
+        this(workIncome, hourlyRate, hoursPerMonth, hoursPerDay, monthlyLeftover,
+                monthlyExpense, cyclesConsidered, gaps, null);
+    }
     /** Falta a jornada de trabalho (dias e horas por semana). */
     public static final String GAP_WORK_PROFILE = "WORK_PROFILE";
     /** Nenhuma fonte de renda de trabalho confirmada pelo usuário. */
