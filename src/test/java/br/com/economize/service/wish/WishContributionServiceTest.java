@@ -156,7 +156,9 @@ class WishContributionServiceTest {
                 EMAIL, wish.getId(), new BigDecimal("300.00"), "2026-10", null))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("já foi guardada");
-        verify(contributionRepository).save(any(WishContribution.class));
+        // a gravação é saveAndFlush desde que a corrida pela sobra virou
+        // mensagem de negócio (índice único da V33)
+        verify(contributionRepository).saveAndFlush(any(WishContribution.class));
     }
 
     @Test
@@ -170,7 +172,7 @@ class WishContributionServiceTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("depois que o ciclo fechar");
 
-        verify(contributionRepository, never()).save(any());
+        verify(contributionRepository, never()).saveAndFlush(any());
     }
 
     @Test
@@ -272,6 +274,8 @@ class WishContributionServiceTest {
     @DisplayName("Corrida pela sobra do ciclo responde que ela já foi guardada")
     void corridaDaSobraDoCicloViraMensagemDeNegocio() {
         comUsuarioEMeta();
+        // setembro já fechou: a recusa que se quer provar é a da corrida, não a do ciclo aberto
+        cicloFechado("2026-09");
         when(contributionRepository.saveAndFlush(any(WishContribution.class)))
                 .thenThrow(new DataIntegrityViolationException("uq_wish_contributions_cycle"));
 
