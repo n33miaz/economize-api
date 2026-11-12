@@ -107,7 +107,8 @@ class BankStatementAccountOriginTest {
         ObjectProvider<AiCategorySuggester> aiSuggester = mock(ObjectProvider.class);
         service = new BankStatementService(bankTransactionRepository, statementUploadRepository,
                 userRepository, parserFactory, categorizationEngine, categoryRepository,
-                importWriter, accountService, eventPublisher, aiSuggester);
+                importWriter, accountService, eventPublisher, aiSuggester,
+                new br.com.economize.config.StatementImportProperties());
 
         lenient().when(categorizationEngine.contextFor(user.getId())).thenReturn(context);
         lenient().when(categorizationEngine.categorize(eq(context), anyString(), anyString(), anyBoolean()))
