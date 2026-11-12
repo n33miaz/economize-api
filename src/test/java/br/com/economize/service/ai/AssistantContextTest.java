@@ -190,6 +190,19 @@ class AssistantContextTest {
 
     // ------------------------------------------------------------------ apoio
 
+
+    @Test
+    @DisplayName("Compra com estorno parcial pesa o líquido nos totais e na categoria")
+    void estornoParcialContaPeloLiquido() {
+        BankTransaction parcial = despesa("-604.91", "SUPERMERCADO SERO", MERCADO);
+        parcial.setRefundedAmount(new BigDecimal("18.50"));
+
+        AssistantContext contexto = contexto(List.of(parcial));
+
+        assertThat(contexto.expense()).isEqualByComparingTo("586.41");
+        assertThat(contexto.categories().get(0).amount()).isEqualByComparingTo("586.41");
+    }
+
     private AssistantContext contexto(List<BankTransaction> linhas) {
         return AssistantContext.of(DE, ATE, linhas, 0, CATEGORIAS, List.of());
     }

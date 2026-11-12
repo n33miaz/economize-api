@@ -132,7 +132,7 @@ public class AnalyticsService {
         for (BankTransaction tx : bankTransactionRepository
                 .findAllByUserIdAndDateGreaterThanEqualAndDateLessThanOrderByDateDesc(
                         user.getId(), window.startInstant(), window.endExclusiveInstant())) {
-            if (tx.isInternalTransfer() || tx.isIgnored() || tx.isRefunded()) continue;
+            if (!tx.countsInTotals()) continue;
             LocalDate dia = tx.getDate().toLocalDate();
             BigDecimal[] somas = porDia.computeIfAbsent(dia,
                     k -> new BigDecimal[] {BigDecimal.ZERO, BigDecimal.ZERO});

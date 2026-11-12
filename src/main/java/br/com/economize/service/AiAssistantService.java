@@ -162,9 +162,10 @@ public class AiAssistantService {
         // As marcas aplicadas AQUI, e não na consulta, porque o número de
         // excluídos vai no prompt: a IA precisa poder explicar a diferença
         // entre o extrato e a soma em vez de fingir que ela não existe
+        // O Pix do casal CONTA: esta é a visão pessoal, e nela ele é receita
+        // ou despesa como na Análise; só a consolidação da casa o tira
         List<BankTransaction> contam = naJanela.stream()
-                .filter(tx -> !tx.isInternalTransfer() && !tx.isIgnored()
-                        && !tx.isRefunded() && !tx.isFamilyTransfer())
+                .filter(BankTransaction::countsInTotals)
                 .toList();
 
         Map<UUID, Category> categorias = categoryRepository.findVisibleTo(user.getId()).stream()

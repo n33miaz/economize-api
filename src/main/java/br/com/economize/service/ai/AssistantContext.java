@@ -106,7 +106,8 @@ public record AssistantContext(
         Map<String, Long> contagem = new LinkedHashMap<>();
 
         for (BankTransaction tx : inWindow) {
-            BigDecimal valor = tx.getAmount();
+            // Líquido: a compra com estorno parcial vale o que sobrou dela
+            BigDecimal valor = tx.getNetAmount();
             if (valor.signum() >= 0) {
                 income = income.add(valor);
                 continue;

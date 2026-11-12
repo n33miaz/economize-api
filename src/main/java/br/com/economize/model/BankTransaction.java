@@ -189,6 +189,19 @@ public class BankTransaction {
         return amount.add(refundedAmount);
     }
 
+    /**
+     * Se a linha entra numa soma da visão PESSOAL — a regra da Análise.
+     *
+     * <p>Ficam fora a perna entre contas do próprio dono, a linha descartada e
+     * o par de estorno; é a mesma cláusula de {@code sumByCategory}. O Pix do
+     * casal ({@code familyTransfer}) CONTA aqui: para a pessoa ele é receita ou
+     * despesa, e só sai na consolidação da casa. Quem soma lê daqui e de
+     * {@link #getNetAmount()}, em vez de repetir as três marcas.
+     */
+    public boolean countsInTotals() {
+        return !internalTransfer && !ignored && !refunded;
+    }
+
     /** Quem decidiu ignorar: a varredura de duplicatas, ou a pessoa. */
     @Enumerated(EnumType.STRING)
     @Column(name = "ignored_reason", length = 16)

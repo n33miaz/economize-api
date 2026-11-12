@@ -235,4 +235,30 @@ class ReportServiceTest {
 
         verify(eventPublisher).publish(any());
     }
+
+    // ------------------------------------------------- a regra da Análise
+
+    @Test
+    @DisplayName("Transferência interna, ignorada e estorno ficam fora; estorno parcial conta pelo líquido")
+    void segueARegraDaAnalise() {
+        BankTransaction interna = tx("-900.00", "TRANSFER", 11);
+        interna.setInternalTransfer(true);
+        BankTransaction ignorada = tx("-700.00", "TRANSFER", 12);
+        ignorada.setIgnored(true);
+        BankTransaction estornada = tx("-500.00", "TRANSFER", 13);
+        estornada.setRefunded(true);
+        BankTransaction devolucao = tx("500.00", "TRANSFER", 14);
+        devolucao.setRefunded(true);
+        BankTransaction parcial = tx("-604.91", "FOOD", 15);
+        parcial.setRefundedAmount(new BigDecimal("18.50"));
+
+        Report report = gerar(List.of(
+                tx("4400.00", "SALARY", 10), interna, ignorada, estornada, devolucao, parcial));
+
+        assertThat(report.getTotalIncome()).isEqualByComparingTo("4400.00");
+        assertThat(report.getTotalExpense()).isEqualByComparingTo("586.41");
+        // TRANSFER somaria 2.100 brutos e tomaria o lugar de FOOD
+        assertThat(report.getDominantCategory()).isEqualTo("FOOD");
+        assertThat(report.getCategoriesJson()).doesNotContain("TRANSFER").contains("586.41");
+    }
 }

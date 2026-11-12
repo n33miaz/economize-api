@@ -60,10 +60,12 @@ public class DebtInsightService {
         BigDecimal totalDebt = BigDecimal.ZERO;
 
         for (BankTransaction tx : transactions) {
-            if (tx.isInternalTransfer()) continue;
+            // A regra da Análise: débito descartado ou estornado não é gasto,
+            // e o estorno parcial desconta do valor
+            if (!tx.countsInTotals()) continue;
             if (!isExpense(tx)) continue;
 
-            BigDecimal amount = tx.getAmount() != null ? tx.getAmount().abs() : BigDecimal.ZERO;
+            BigDecimal amount = tx.getAmount() != null ? tx.getNetAmount().abs() : BigDecimal.ZERO;
             totalExpense = totalExpense.add(amount);
 
             // O apelido do usuário vence a descrição do banco quando existe: é
