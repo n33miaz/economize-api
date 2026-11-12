@@ -225,8 +225,10 @@ class ConnectorControllerTest {
     @DisplayName("POST /sync - Mesmo shape do legado, tipado, com itemsSynced; ?days= é repassado")
     void syncDevolveResultadoTipado() {
         UUID uploadId = UUID.randomUUID();
+        UUID segundoUploadId = UUID.randomUUID();
         when(provider.sync(EMAIL, 30)).thenReturn(new OpenFinanceProvider.SyncResult(
-                new BankStatementService.ImportResult(uploadId, 12, 7, 2, 3, false, "PLUGGY"), 2));
+                new BankStatementService.ImportResult(uploadId, 12, 7, 2, 3, false, "PLUGGY",
+                        List.of(uploadId, segundoUploadId)), 2));
 
         webTestClient.post()
                 .uri("/api/v1/connectors/sync?days=30")
@@ -235,6 +237,8 @@ class ConnectorControllerTest {
                 .expectStatus().isOk()
                 .expectBody()
                 .jsonPath("$.uploadId").isEqualTo(uploadId.toString())
+                .jsonPath("$.uploadIds[0]").isEqualTo(uploadId.toString())
+                .jsonPath("$.uploadIds[1]").isEqualTo(segundoUploadId.toString())
                 .jsonPath("$.transactionsImported").isEqualTo(12)
                 .jsonPath("$.suggested").isEqualTo(7)
                 .jsonPath("$.uncategorized").isEqualTo(2)

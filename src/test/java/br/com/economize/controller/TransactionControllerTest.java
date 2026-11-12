@@ -81,7 +81,7 @@ class TransactionControllerTest {
     @Test
     @DisplayName("GET /review/count - só a contagem, sem baixar a fila")
     void reviewCountReturnsOnlyTheNumber() {
-        when(reviewService.pendingCount(EMAIL)).thenReturn(1656L);
+        when(reviewService.pendingCount(EMAIL, List.of())).thenReturn(1656L);
 
         webTestClient.get()
                 .uri("/api/v1/transactions/review/count")
@@ -118,6 +118,59 @@ class TransactionControllerTest {
                 .jsonPath("$.normalizedDescription").isEqualTo("fitmax");
 
         verify(aliasService).rename(EMAIL, id, "Academia");
+    }
+
+    @Test
+    @DisplayName("GET /review aceita uploadId repetido e nÃ£o mistura outro upload")
+    void reviewQueueAcceptsRepeatedUploadId() {
+        UUID primeiroUpload = UUID.randomUUID();
+        UUID segundoUpload = UUID.randomUUID();
+        BankTransaction primeira = transaction(UUID.randomUUID());
+        primeira.setUploadId(primeiroUpload);
+        primeira.setReviewStatus(BankTransaction.ReviewStatus.SUGGESTED);
+        primeira.setNormalizedDescription("mercado");
+        BankTransaction segunda = transaction(UUID.randomUUID());
+        segunda.setUploadId(segundoUpload);
+        segunda.setReviewStatus(BankTransaction.ReviewStatus.UNCATEGORIZED);
+        segunda.setNormalizedDescription("padaria");
+        when(reviewService.reviewQueue(EMAIL, List.of(primeiroUpload, segundoUpload)))
+                .thenReturn(List.of(primeira, segunda));
+
+        webTestClient.get()
+                .uri(builder -> builder.path("/api/v1/transactions/review")
+                        .queryParam("uploadId", primeiroUpload)
+                        .queryParam("uploadId", segundoUpload)
+                        .build())
+                .header(HttpHeaders.AUTHORIZATION, bearerToken())
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.length()").isEqualTo(2)
+                .jsonPath("$[0].transactions[0].uploadId").isEqualTo(primeiroUpload.toString())
+                .jsonPath("$[1].transactions[0].uploadId").isEqualTo(segundoUpload.toString());
+
+        verify(reviewService).reviewQueue(EMAIL, List.of(primeiroUpload, segundoUpload));
+    }
+
+    @Test
+    @DisplayName("GET /review/count aceita o mesmo recorte de uploads da fila")
+    void reviewCountAcceptsRepeatedUploadId() {
+        UUID primeiroUpload = UUID.randomUUID();
+        UUID segundoUpload = UUID.randomUUID();
+        when(reviewService.pendingCount(EMAIL, List.of(primeiroUpload, segundoUpload))).thenReturn(2L);
+
+        webTestClient.get()
+                .uri(builder -> builder.path("/api/v1/transactions/review/count")
+                        .queryParam("uploadId", primeiroUpload)
+                        .queryParam("uploadId", segundoUpload)
+                        .build())
+                .header(HttpHeaders.AUTHORIZATION, bearerToken())
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.count").isEqualTo(2);
+
+        verify(reviewService).pendingCount(EMAIL, List.of(primeiroUpload, segundoUpload));
     }
 
     @Test

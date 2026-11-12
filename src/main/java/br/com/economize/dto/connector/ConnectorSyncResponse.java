@@ -18,6 +18,9 @@ public record ConnectorSyncResponse(
         int reconciled,
         String format,
         int itemsSynced,
+        // Todos os uploads desta sincronização que receberam lançamento novo.
+        // uploadId continua sendo o principal para clientes publicados.
+        List<UUID> uploadIds,
         // Campo novo e aditivo: o app publicado ignora; o novo mostra quais
         // bancos ficaram de fora por pedirem reconexão. Vazio quando nenhum
         List<OpenFinanceProvider.SkippedConnection> skippedConnections
@@ -27,6 +30,6 @@ public record ConnectorSyncResponse(
         var result = sync.result();
         return new ConnectorSyncResponse(result.uploadId(), result.transactionsImported(), result.suggested(),
                 result.uncategorized(), result.reconciled(), result.format(), sync.itemsSynced(),
-                sync.skippedConnections());
+                result.uploadIds(), sync.skippedConnections());
     }
 }

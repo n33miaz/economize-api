@@ -237,8 +237,10 @@ class PluggyConnectorControllerTest {
     @DisplayName("POST /sync - Mantém os campos do contrato publicado e soma itemsSynced")
     void syncShouldKeepPublishedContractAndAddItemsSynced() {
         UUID uploadId = UUID.randomUUID();
+        UUID segundoUploadId = UUID.randomUUID();
         when(provider.sync(EMAIL, 90)).thenReturn(new OpenFinanceProvider.SyncResult(
-                new BankStatementService.ImportResult(uploadId, 12, 7, 2, 3, false, "PLUGGY"), 2));
+                new BankStatementService.ImportResult(uploadId, 12, 7, 2, 3, false, "PLUGGY",
+                        java.util.List.of(uploadId, segundoUploadId)), 2));
 
         webTestClient.post()
                 .uri("/api/v1/connectors/pluggy/sync")
@@ -247,6 +249,8 @@ class PluggyConnectorControllerTest {
                 .expectStatus().isOk()
                 .expectBody()
                 .jsonPath("$.uploadId").isEqualTo(uploadId.toString())
+                .jsonPath("$.uploadIds[0]").isEqualTo(uploadId.toString())
+                .jsonPath("$.uploadIds[1]").isEqualTo(segundoUploadId.toString())
                 .jsonPath("$.transactionsImported").isEqualTo(12)
                 .jsonPath("$.suggested").isEqualTo(7)
                 .jsonPath("$.uncategorized").isEqualTo(2)

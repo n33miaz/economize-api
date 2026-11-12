@@ -1206,6 +1206,13 @@
           "uploadId": {
             "format": "uuid",
             "type": "string"
+          },
+          "uploadIds": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "type": "array"
           }
         },
         "type": "object"
@@ -9970,7 +9977,7 @@
     },
     "/api/v1/transactions/review": {
       "get": {
-        "description": "Transações aguardando aprovação (sugeridas) ou ajuda (sem categoria), agrupadas por estabelecimento normalizado. uploadId restringe a uma importação.",
+        "description": "Transações aguardando aprovação (sugeridas) ou ajuda (sem categoria), agrupadas por estabelecimento normalizado. uploadId pode se repetir para restringir a várias importações (ex.: ?uploadId=a&uploadId=b); um uploadId continua válido.",
         "operationId": "reviewQueue",
         "parameters": [
           {
@@ -9978,8 +9985,11 @@
             "name": "uploadId",
             "required": false,
             "schema": {
-              "format": "uuid",
-              "type": "string"
+              "items": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "type": "array"
             }
           }
         ],
@@ -10037,7 +10047,7 @@
     },
     "/api/v1/transactions/review/confirm-all": {
       "post": {
-        "description": "Confirma tudo que o motor sugeriu (não toca as sem categoria). uploadId restringe a uma importação.",
+        "description": "Confirma tudo que o motor sugeriu (não toca as sem categoria). uploadId pode se repetir para restringir a importações.",
         "operationId": "confirmAll",
         "parameters": [
           {
@@ -10045,8 +10055,11 @@
             "name": "uploadId",
             "required": false,
             "schema": {
-              "format": "uuid",
-              "type": "string"
+              "items": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "type": "array"
             }
           }
         ],
@@ -10071,8 +10084,22 @@
     },
     "/api/v1/transactions/review/count": {
       "get": {
-        "description": "Só o número. A Home e a Análise mostravam \"N transações esperando você\" baixando a fila inteira agrupada (92 KB para 1.656 pendentes) a cada abertura, quando a única coisa desenhada era a contagem.",
+        "description": "Só o número. A Home e a Análise mostravam \"N transações esperando você\" baixando a fila inteira agrupada (92 KB para 1.656 pendentes) a cada abertura, quando a única coisa desenhada era a contagem. uploadId pode se repetir para contar várias importações.",
         "operationId": "reviewCount",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "uploadId",
+            "required": false,
+            "schema": {
+              "items": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "type": "array"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {

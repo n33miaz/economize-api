@@ -73,6 +73,32 @@ class TransactionReviewServiceTest {
             .systemKey("FOOD").flow(Category.Flow.EXPENSE).archived(false).build();
 
     @Test
+    @DisplayName("Fila de revisÃ£o de dois uploads traz somente os lanÃ§amentos dos dois")
+    void reviewQueueFiltersTwoUploads() {
+        UUID primeiroUpload = UUID.randomUUID();
+        UUID segundoUpload = UUID.randomUUID();
+        BankTransaction doPrimeiro = pendingTx("mercado");
+        doPrimeiro.setUploadId(primeiroUpload);
+        BankTransaction doSegundo = pendingTx("padaria");
+        doSegundo.setUploadId(segundoUpload);
+        BankTransaction deOutroUpload = pendingTx("farmacia");
+        deOutroUpload.setUploadId(UUID.randomUUID());
+
+        when(userRepository.findByEmail(EMAIL)).thenReturn(Optional.of(user));
+        when(bankTransactionRepository.findAllByUserIdAndUploadIdInOrderByDateDesc(
+                user.getId(), List.of(primeiroUpload, segundoUpload)))
+                .thenReturn(List.of(doPrimeiro, doSegundo));
+
+        List<BankTransaction> fila = service.reviewQueue(EMAIL, List.of(primeiroUpload, segundoUpload));
+
+        assertThat(fila).extracting(BankTransaction::getUploadId)
+                .containsExactly(primeiroUpload, segundoUpload)
+                .doesNotContain(deOutroUpload.getUploadId());
+        verify(bankTransactionRepository).findAllByUserIdAndUploadIdInOrderByDateDesc(
+                user.getId(), List.of(primeiroUpload, segundoUpload));
+    }
+
+    @Test
     void applyConfirmsTransactionsAndLearnsExactRule() {
         BankTransaction tx1 = pendingTx("ifood rest");
         BankTransaction tx2 = pendingTx("ifood rest");
@@ -202,7 +228,7 @@ class TransactionReviewServiceTest {
         when(categoryRepository.findAccessible(food.getId(), user.getId())).thenReturn(Optional.of(food));
         when(categoryRuleRepository.findByUserIdAndPattern(user.getId(), "ifood rest")).thenReturn(Optional.empty());
 
-        TransactionReviewService.ReviewOutcome outcome = service.confirmAll(EMAIL, null);
+        TransactionReviewService.ReviewOutcome outcome = service.confirmAll(EMAIL, List.of());
 
         assertThat(outcome.confirmed()).isEqualTo(1);
         assertThat(outcome.rulesSaved()).isEqualTo(1);
@@ -250,7 +276,7 @@ class TransactionReviewServiceTest {
                 .thenReturn(List.of(perna));
         when(categoryRepository.findAccessible(food.getId(), user.getId())).thenReturn(Optional.of(food));
 
-        TransactionReviewService.ReviewOutcome outcome = service.confirmAll(EMAIL, null);
+        TransactionReviewService.ReviewOutcome outcome = service.confirmAll(EMAIL, List.of());
 
         assertThat(outcome.confirmed()).isEqualTo(1);
         assertThat(outcome.rulesSaved()).isZero();

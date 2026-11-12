@@ -125,6 +125,7 @@ public class PluggyConnectorController {
             // contrato do APK publicado: os campos existentes ficam; só se soma
             Map<String, Object> body = new HashMap<>();
             body.put("uploadId", result.uploadId());
+            body.put("uploadIds", result.uploadIds());
             body.put("transactionsImported", result.transactionsImported());
             body.put("suggested", result.suggested());
             body.put("uncategorized", result.uncategorized());
