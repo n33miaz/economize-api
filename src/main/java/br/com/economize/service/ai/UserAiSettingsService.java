@@ -214,8 +214,12 @@ public class UserAiSettingsService {
                     user.getId(), e.getMessage());
             keyStatus = AiSettingsResponse.KEY_UNREADABLE;
         }
+        // mostra o modelo que de fato vai ser usado: um modelo salvo que saiu do
+        // catálogo cai no padrão também aqui, para a tela não prometer o que o
+        // chat não entrega (ver ProviderConfig.modelOrDefault)
+        String model = properties.get(settings.getProvider()).modelOrDefault(settings.getModel());
         return new AiSettingsResponse(AiSettingsResponse.SOURCE_USER, settings.getProvider().name(),
-                settings.getModel(), settings.getApiKeyLast4(), keyStatus,
+                model, settings.getApiKeyLast4(), keyStatus,
                 cipher.isAvailable(), settings.getUpdatedAt());
     }
 

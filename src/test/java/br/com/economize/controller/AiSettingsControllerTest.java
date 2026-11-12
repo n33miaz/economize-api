@@ -75,7 +75,7 @@ class AiSettingsControllerTest {
     @DisplayName("GET /settings - Sem chave própria, descreve a chave do servidor")
     void getShouldDescribeServerFallback() {
         when(service.current(EMAIL)).thenReturn(new AiSettingsResponse(
-                "SERVER", "GEMINI", "gemini-2.0-flash", null, "SERVER_KEY", true, null));
+                "SERVER", "GEMINI", "gemini-flash-latest", null, "SERVER_KEY", true, null));
 
         webTestClient.get()
                 .uri("/api/v1/ai/settings")
@@ -224,7 +224,7 @@ class AiSettingsControllerTest {
     void providersShouldReturnCatalog() {
         when(service.catalog()).thenReturn(new AiProviderCatalogResponse(true, List.of(
                 new AiProviderCatalogResponse.ProviderOption("GEMINI", "Google Gemini",
-                        "gemini-2.0-flash", List.of("gemini-2.0-flash", "gemini-2.5-flash"),
+                        "gemini-flash-latest", List.of("gemini-flash-latest", "gemini-2.5-flash"),
                         "https://aistudio.google.com/apikey"))));
 
         webTestClient.get()
@@ -235,7 +235,7 @@ class AiSettingsControllerTest {
                 .expectBody()
                 .jsonPath("$.byokAvailable").isEqualTo(true)
                 .jsonPath("$.providers[0].id").isEqualTo("GEMINI")
-                .jsonPath("$.providers[0].defaultModel").isEqualTo("gemini-2.0-flash")
+                .jsonPath("$.providers[0].defaultModel").isEqualTo("gemini-flash-latest")
                 .jsonPath("$.providers[0].models[1]").isEqualTo("gemini-2.5-flash")
                 .jsonPath("$.providers[0].apiKeyUrl").isEqualTo("https://aistudio.google.com/apikey");
     }
@@ -261,7 +261,7 @@ class AiSettingsControllerTest {
     @DisplayName("POST /settings/test - Sem corpo testa a chave já cadastrada")
     void testShouldAcceptEmptyBody() {
         when(service.test(eq(EMAIL), any())).thenReturn(new AiKeyTestResponse(
-                true, "GEMINI", "gemini-2.0-flash", null, "Chave aceita pelo provedor.", 250));
+                true, "GEMINI", "gemini-flash-latest", null, "Chave aceita pelo provedor.", 250));
 
         webTestClient.post()
                 .uri("/api/v1/ai/settings/test")

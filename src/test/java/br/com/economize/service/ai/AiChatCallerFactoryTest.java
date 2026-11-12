@@ -68,7 +68,7 @@ class AiChatCallerFactoryTest {
         ChatClient.Builder builder = mock(ChatClient.Builder.class);
         when(builder.build()).thenReturn(serverChatClient);
         return new AiChatCallerFactory(repository, cipher, properties, httpClient, builder,
-                "gemini-2.0-flash", serverApiKey);
+                "gemini-flash-latest", serverApiKey);
     }
 
     @Test
@@ -129,7 +129,7 @@ class AiChatCallerFactoryTest {
 
         assertThat(caller).isPresent();
         assertThat(caller.get().userOwned()).isFalse();
-        assertThat(caller.get().describe()).contains("servidor").contains("gemini-2.0-flash");
+        assertThat(caller.get().describe()).contains("servidor").contains("gemini-flash-latest");
         verifyNoInteractions(httpClient);
     }
 
@@ -193,7 +193,7 @@ class AiChatCallerFactoryTest {
     void shouldUseUserKeyWhenPresent() {
         SecretCipher cipher = new SecretCipher(KEY_1, "k1", "");
         when(repository.findByUserId(user.getId()))
-                .thenReturn(Optional.of(settingsWith(cipher, AiProvider.ANTHROPIC, "claude-sonnet-4-5")));
+                .thenReturn(Optional.of(settingsWith(cipher, AiProvider.ANTHROPIC, "claude-sonnet-5")));
         when(httpClient.complete(any(), anyString(), anyList(), anyString(), any())).thenReturn("resposta");
         AiChatCallerFactory factory = factory(cipher);
 
@@ -204,13 +204,26 @@ class AiChatCallerFactoryTest {
         ArgumentCaptor<AiCallTarget> alvo = ArgumentCaptor.forClass(AiCallTarget.class);
         verify(httpClient).complete(alvo.capture(), anyString(), anyList(), anyString(), any(Duration.class));
         assertThat(alvo.getValue().provider()).isEqualTo(AiProvider.ANTHROPIC);
-        assertThat(alvo.getValue().model()).isEqualTo("claude-sonnet-4-5");
+        assertThat(alvo.getValue().model()).isEqualTo("claude-sonnet-5");
         assertThat(alvo.getValue().apiKey()).isEqualTo(CHAVE_DO_USUARIO);
         // o alvo é montado a partir do catálogo do CONTEXTO: endpoint sobrescrito
         // pelo perfil de teste e teto de tokens vindo do default curado, os dois
         // ao mesmo tempo — é essa combinação que o mecanismo antigo destruía
         assertThat(alvo.getValue().endpoint()).isEqualTo("https://example.test/anthropic/chat/completions");
         assertThat(alvo.getValue().maxTokens()).isEqualTo(4096);
+    }
+
+    @Test
+    @DisplayName("Modelo salvo aposentado (gemini-2.0-flash) sai no padrão do provedor, não em 404")
+    void shouldUseProviderDefaultForRetiredSavedModel() {
+        SecretCipher cipher = new SecretCipher(KEY_1, "k1", "");
+        UserAiSettings stored = settingsWith(cipher, AiProvider.GEMINI, "gemini-2.0-flash");
+        AiChatCallerFactory factory = factory(cipher);
+
+        AiCallTarget alvo = factory.targetFor(user, stored);
+
+        assertThat(alvo.model()).isEqualTo("gemini-flash-latest");
+        assertThat(stored.getModel()).isEqualTo("gemini-2.0-flash");
     }
 
     @Test

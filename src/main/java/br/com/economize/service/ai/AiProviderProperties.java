@@ -329,6 +329,19 @@ public class AiProviderProperties {
         public String defaultModel() {
             return models.get(0);
         }
+
+        /**
+         * O modelo salvo pelo usuário, se o catálogo ainda o oferece; senão, o
+         * padrão do provedor. Existe porque a lista muda (o gemini-2.0-flash
+         * saiu em 12/11/2026, aposentado pelo Google) e quem tinha salvo o modelo
+         * retirado passaria a receber 404 em todo chat. A troca vale só na
+         * LEITURA — ao usar e ao mostrar — e a linha do banco fica como está:
+         * sem migration, e se o modelo voltar à lista por variável de ambiente a
+         * escolha original volta junto.
+         */
+        public String modelOrDefault(String saved) {
+            return saved != null && models.contains(saved.trim()) ? saved.trim() : defaultModel();
+        }
     }
 
     private static Map<AiProvider, ProviderConfig> defaults() {
@@ -336,7 +349,10 @@ public class AiProviderProperties {
         map.put(AiProvider.GEMINI, new ProviderConfig("Google Gemini",
                 "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
                 "https://aistudio.google.com/apikey",
-                List.of("gemini-2.0-flash", "gemini-2.5-flash", "gemini-2.5-pro"),
+                // gemini-2.0-flash saiu em 12/11/2026: o Google o aposentou e
+                // passou a responder 404. O apelido vem PRIMEIRO, como padrão,
+                // porque acompanha o flash vigente e não envelhece com a lista
+                List.of("gemini-flash-latest", "gemini-2.5-flash", "gemini-2.5-pro"),
                 null));
         map.put(AiProvider.OPENAI, new ProviderConfig("OpenAI",
                 "https://api.openai.com/v1/chat/completions",

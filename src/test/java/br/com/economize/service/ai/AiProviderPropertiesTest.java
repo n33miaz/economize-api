@@ -107,7 +107,7 @@ class AiProviderPropertiesTest {
                 .get(AiProvider.GEMINI);
 
         assertThat(gemini.endpoint()).isEqualTo("https://proxy.interno/chat/completions");
-        assertThat(gemini.models()).containsExactly("gemini-2.0-flash", "gemini-2.5-flash", "gemini-2.5-pro");
+        assertThat(gemini.models()).containsExactly("gemini-flash-latest", "gemini-2.5-flash", "gemini-2.5-pro");
         assertThat(gemini.label()).isEqualTo("Google Gemini");
     }
 
