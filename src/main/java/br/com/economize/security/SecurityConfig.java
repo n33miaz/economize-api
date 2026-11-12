@@ -38,7 +38,14 @@ public class SecurityConfig {
                         // redirecionamento acontecer
                         .pathMatchers("/swagger-ui.html", "/swagger-ui/**",
                                 "/v3/api-docs", "/v3/api-docs/**", "/webjars/**").permitAll()
-                        .pathMatchers("/actuator/**").permitAll()
+                        // Do Actuator, só o que precisa responder sem token: a
+                        // saúde (o Render, o app e o "manter acordado" perguntam
+                        // antes de qualquer login) e a identidade da build. As
+                        // métricas da JVM ficavam abertas junto e dizem a quem
+                        // quiser quanta memória falta para o serviço cair —
+                        // essas passam a pedir token, como o resto
+                        .pathMatchers("/actuator/health", "/actuator/health/**",
+                                "/actuator/info").permitAll()
                         // Qualquer outra rota exige token
                         .anyExchange().authenticated())
                 .addFilterAt(jwtFilter, SecurityWebFiltersOrder.AUTHENTICATION)
