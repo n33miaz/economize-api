@@ -1,23 +1,36 @@
 package br.com.economize.service.statement.parser;
 
+import br.com.economize.config.StatementImportProperties;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.pdfbox.Loader;
+import org.apache.pdfbox.io.MemoryUsageSetting;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.text.PDFTextStripper;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.Writer;
 import java.util.List;
 
 @Slf4j
 @Component
 public class PdfParser implements StatementParserStrategy {
 
-    private final TxtParser txtParser;
+    /**
+     * Cache dos fluxos do PDF: até 4 MB no heap, o resto em arquivo temporário,
+     * e no máximo 64 MB no total. Sem teto, um PDF pequeno com fluxos
+     * comprimidos que se expandem muito podia ocupar o heap inteiro (192 MB).
+     */
+    private static final long STREAM_CACHE_MEMORY = 4L * 1024 * 1024;
+    private static final long STREAM_CACHE_TOTAL = 64L * 1024 * 1024;
 
-    public PdfParser(TxtParser txtParser) {
+    private final TxtParser txtParser;
+    private final StatementImportProperties limits;
+
+    public PdfParser(TxtParser txtParser, StatementImportProperties limits) {
         this.txtParser = txtParser;
+        this.limits = limits;
     }
 
     @Override
@@ -27,13 +40,25 @@ public class PdfParser implements StatementParserStrategy {
 
     @Override
     public List<ParsedTransaction> parse(InputStream input) {
-        try (PDDocument document = Loader.loadPDF(input.readAllBytes())) {
+        try (PDDocument document = Loader.loadPDF(input.readAllBytes(), "", null, null,
+                MemoryUsageSetting.setupMixed(STREAM_CACHE_MEMORY, STREAM_CACHE_TOTAL).streamCache)) {
+            // Teto de páginas ANTES de extrair: a extração é a parte cara. Recusa
+            // em vez de ler só o começo — ver StatementImportProperties
+            int pages = document.getNumberOfPages();
+            if (pages > limits.getMaxPdfPages()) {
+                throw new IllegalArgumentException("O PDF tem " + pages + " páginas; o limite é "
+                        + limits.getMaxPdfPages() + ". Exporte um período menor do extrato.");
+            }
             PDFTextStripper stripper = new PDFTextStripper();
             // Ordenar por posição é o que mantém a linha do lançamento inteira:
             // sem isto, num layout de colunas o texto sai na ordem em que foi
             // desenhado, e data, valor e descrição chegam embaralhados
             stripper.setSortByPosition(true);
-            String text = stripper.getText(document);
+            // writeText num escritor com teto, e não getText: o teto de páginas
+            // não basta, porque uma página só pode desenhar texto sem fim
+            BoundedWriter out = new BoundedWriter(limits.getMaxPdfTextChars());
+            stripper.writeText(document, out);
+            String text = out.toString();
 
             // O Mercado Pago não exporta OFX nem CSV — PDF é o único formato que
             // o cliente consegue baixar. O layout dele quebra a descrição em três
@@ -74,8 +99,59 @@ public class PdfParser implements StatementParserStrategy {
                                 + "exporte o extrato do banco em OFX (recomendado) ou CSV");
             }
             return plausible;
+        } catch (TextLimitExceeded e) {
+            throw new IllegalArgumentException("O PDF tem texto demais para um extrato (mais de "
+                    + limits.getMaxPdfTextChars() + " caracteres). Exporte um período menor do extrato.");
         } catch (IOException e) {
             throw new IllegalStateException("Falha ao ler PDF", e);
+        }
+    }
+
+    /**
+     * Junta o texto e para de aceitar ao passar do teto. A falha é unchecked de
+     * propósito: o motor de conteúdo do PDFBox engole algumas IOException de
+     * operador para seguir lendo PDF defeituoso, e o corte aqui não pode ser
+     * engolido.
+     */
+    private static final class BoundedWriter extends Writer {
+        private final StringBuilder text = new StringBuilder();
+        private final int max;
+
+        BoundedWriter(int max) {
+            this.max = max;
+        }
+
+        @Override
+        public void write(char[] cbuf, int off, int len) {
+            if (text.length() + len > max) throw new TextLimitExceeded();
+            text.append(cbuf, off, len);
+        }
+
+        @Override
+        public void write(String str, int off, int len) {
+            if (text.length() + len > max) throw new TextLimitExceeded();
+            text.append(str, off, off + len);
+        }
+
+        @Override
+        public void flush() {
+            // nada a descarregar: o texto fica no StringBuilder
+        }
+
+        @Override
+        public void close() {
+            // idem
+        }
+
+        @Override
+        public String toString() {
+            return text.toString();
+        }
+    }
+
+    private static final class TextLimitExceeded extends RuntimeException {
+        TextLimitExceeded() {
+            super(null, null, false, false);
         }
     }
 
