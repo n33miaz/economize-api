@@ -6,6 +6,7 @@ import br.com.economize.exception.ResourceNotFoundException;
 import br.com.economize.model.User;
 import br.com.economize.model.Wish;
 import br.com.economize.repository.CategoryRepository;
+import br.com.economize.repository.BankTransactionRepository;
 import br.com.economize.repository.UserRepository;
 import br.com.economize.repository.WishRepository;
 import lombok.RequiredArgsConstructor;
@@ -38,6 +39,7 @@ public class WishService {
     private final WishRepository wishRepository;
     private final UserRepository userRepository;
     private final CategoryRepository categoryRepository;
+    private final BankTransactionRepository bankTransactionRepository;
     private final WishProjectionService projectionService;
     // "Hoje" na zona financeira (FinancialClockConfig), não na do servidor
     private final java.time.Clock clock;
@@ -74,7 +76,7 @@ public class WishService {
         if (saved.compareTo(request.targetAmount()) > 0) {
             throw new IllegalArgumentException("Valor já guardado não pode ser maior que o valor do desejo");
         }
-        validateCategory(request.categoryId());
+        validateCategory(request.categoryId(), user.getId());
 
         Wish wish = Wish.builder()
                 .user(user)
@@ -105,7 +107,7 @@ public class WishService {
         if (request.targetAmount() != null) wish.setTargetAmount(request.targetAmount());
         if (request.savedAmount() != null) wish.setSavedAmount(request.savedAmount());
         if (request.categoryId() != null) {
-            validateCategory(request.categoryId());
+            validateCategory(request.categoryId(), user.getId());
             wish.setCategoryId(request.categoryId());
         }
         if (request.targetDate() != null) wish.setTargetDate(request.targetDate());
@@ -138,6 +140,12 @@ public class WishService {
         if (when.isAfter(today)) {
             throw new IllegalArgumentException("Data da compra não pode estar no futuro");
         }
+        if (request.transactionId() != null) {
+            // Id de lançamento também é recurso do dono: aceitar um id alheio
+            // criaria um vínculo que confirma para quem não fez a compra.
+            bankTransactionRepository.findByIdAndUserId(request.transactionId(), user.getId())
+                    .orElseThrow(() -> new ResourceNotFoundException("Lançamento não encontrado"));
+        }
         wish.setStatus(Wish.Status.PURCHASED);
         wish.setPurchasedAt(when);
         wish.setPurchaseTransactionId(request.transactionId());
@@ -158,10 +166,10 @@ public class WishService {
                 .orElseThrow(() -> new ResourceNotFoundException("Desejo não encontrado"));
     }
 
-    private void validateCategory(UUID categoryId) {
+    private void validateCategory(UUID categoryId, UUID userId) {
         if (categoryId == null) return;
-        if (!categoryRepository.existsById(categoryId)) {
-            throw new IllegalArgumentException("Categoria não encontrada");
+        if (categoryRepository.findAccessible(categoryId, userId).isEmpty()) {
+            throw new ResourceNotFoundException("Categoria não encontrada");
         }
     }
 

@@ -135,6 +135,26 @@ class WishDomainRepositoryTest {
         assertThat(moto.getUpdatedAt()).isNotNull();
     }
 
+    @Test
+    @DisplayName("dois aportes atômicos se acumulam, e devolução além do saldo não passa")
+    void ajustaSaldoSemPerderAporteNemFicarNegativo() {
+        Wish meta = desejo(dono, "Moto", "18000", Wish.Status.GOAL);
+        List<Wish.Status> encerrados = List.of(Wish.Status.PURCHASED, Wish.Status.ARCHIVED);
+
+        int primeiro = wishRepository.adjustSavedAmount(meta.getId(), dono.getId(),
+                new BigDecimal("300.00"), new BigDecimal("999999999999999.9999"), encerrados);
+        int segundo = wishRepository.adjustSavedAmount(meta.getId(), dono.getId(),
+                new BigDecimal("200.00"), new BigDecimal("999999999999999.9999"), encerrados);
+        int devolucaoMaior = wishRepository.adjustSavedAmount(meta.getId(), dono.getId(),
+                new BigDecimal("-600.00"), new BigDecimal("999999999999999.9999"), encerrados);
+
+        assertThat(primeiro).isOne();
+        assertThat(segundo).isOne();
+        assertThat(devolucaoMaior).isZero();
+        assertThat(wishRepository.findById(meta.getId()).orElseThrow().getSavedAmount())
+                .isEqualByComparingTo("500.00");
+    }
+
     // -------------------------------------------------------------- renda
 
     @Test

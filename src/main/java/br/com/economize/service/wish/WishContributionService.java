@@ -49,6 +49,8 @@ public class WishContributionService {
      * virar um 400 explicado em vez de um 500 sem explicação.
      */
     static final BigDecimal SALDO_MAXIMO = new BigDecimal("999999999999999.9999");
+    private static final List<Wish.Status> STATUS_ENCERRADOS = List.of(
+            Wish.Status.PURCHASED, Wish.Status.ARCHIVED);
 
     private final WishContributionRepository contributionRepository;
     private final WishRepository wishRepository;
@@ -106,6 +108,13 @@ public class WishContributionService {
                     "Este aporte passa do maior valor que uma meta comporta");
         }
 
+        // O saldo precisa mudar na própria linha: dois aportes simultâneos não
+        // podem sobrescrever um ao outro depois de ler o mesmo valor anterior.
+        if (wishRepository.adjustSavedAmount(wishId, user.getId(), amount, SALDO_MAXIMO,
+                STATUS_ENCERRADOS) != 1) {
+            recusarAjusteQueMudouEnquantoEraProcessado(user.getId(), wishId, amount);
+        }
+
         WishContribution aporte = contributionRepository.save(WishContribution.builder()
                 .wishId(wishId)
                 .userId(user.getId())
@@ -117,12 +126,40 @@ public class WishContributionService {
                 .note(note != null && !note.isBlank() ? note.trim() : null)
                 .build());
 
-        wish.setSavedAmount(novoSaldo);
-        wishRepository.save(wish);
-
         log.info("Aporte em meta: {} origem={} ciclo={}, user={}",
                 amount, aporte.getOrigin(), ciclo, user.getId());
-        return new Result(toItem(aporte), novoSaldo);
+        // O saldo da resposta é RELIDO depois do UPDATE: o calculado lá em cima
+        // partiu do valor lido antes, e com outro aporte no meio ele diria
+        // R$ 100 com R$ 150 gravados. O clearAutomatically do UPDATE faz esta
+        // leitura vir do banco, não da entidade já carregada
+        Wish gravada = requireWish(user.getId(), wishId);
+        BigDecimal saldoGravado = gravada.getSavedAmount() == null
+                ? BigDecimal.ZERO : gravada.getSavedAmount();
+        return new Result(toItem(aporte), saldoGravado);
+    }
+
+    /**
+     * A guarda do UPDATE pode falhar porque outra requisição chegou antes.
+     * Relê o estado para manter as mesmas recusas da validação inicial.
+     */
+    private void recusarAjusteQueMudouEnquantoEraProcessado(UUID userId, UUID wishId,
+                                                              BigDecimal amount) {
+        Wish atual = requireWish(userId, wishId);
+        if (STATUS_ENCERRADOS.contains(atual.getStatus())) {
+            throw new IllegalArgumentException(
+                    "Esta meta já foi encerrada; guardar dinheiro nela não muda mais nada");
+        }
+        BigDecimal saldo = atual.getSavedAmount() == null ? BigDecimal.ZERO : atual.getSavedAmount();
+        BigDecimal novoSaldo = saldo.add(amount);
+        if (novoSaldo.signum() < 0) {
+            throw new IllegalArgumentException(
+                    "Não dá para devolver mais do que está guardado nesta meta");
+        }
+        if (novoSaldo.compareTo(SALDO_MAXIMO) > 0) {
+            throw new IllegalArgumentException(
+                    "Este aporte passa do maior valor que uma meta comporta");
+        }
+        throw new IllegalArgumentException("A meta mudou enquanto o aporte era processado; tente novamente");
     }
 
     /** O extrato da meta — o que explica o saldo dela. */
