@@ -51,6 +51,7 @@ public class StatementHygieneListener {
         // código antigo, ou vindo de fora) cai na varredura total — e também
         // a primeira de cada intervalo, que é a repescagem (ver HygieneCadence)
         boolean total = janela == null || cadence.fullSweepDue(userId);
+        long senha = cadence.begin();
         Mono.fromCallable(() -> total
                         ? hygieneService.runFor(userId)
                         : hygieneService.runFor(userId, janela))
@@ -67,7 +68,7 @@ public class StatementHygieneListener {
                         // no término, e não no valor: a marca depende de a
                         // faxina ter chegado ao fim, não do que ela devolveu
                         () -> {
-                            if (total) cadence.fullSweepDone(userId);
+                            if (total) cadence.fullSweepDone(userId, senha);
                             log.info("Faxina pós-importação concluída ({}), user={}",
                                     total ? "total" : "janela", userId);
                         });

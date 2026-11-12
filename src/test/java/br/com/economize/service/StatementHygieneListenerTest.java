@@ -66,7 +66,7 @@ class StatementHygieneListenerTest {
         java.time.OffsetDateTime primeira = PRIMEIRA;
         java.time.OffsetDateTime ultima = ULTIMA;
         // já houve varredura total hoje: o histórico está assentado
-        cadence.fullSweepDone(userId);
+        cadence.fullSweepDone(userId, cadence.begin());
 
         listener.onStatementImported(new StatementImportedEvent(
                 userId, StatementFormat.PLUGGY, 3, UUID.randomUUID(), primeira, ultima));
@@ -120,7 +120,7 @@ class StatementHygieneListenerTest {
     @DisplayName("faxina em janela que falha devolve a próxima para a varredura total")
     void shouldFallBackToFullSweepAfterAFailure() throws InterruptedException {
         UUID userId = UUID.randomUUID();
-        cadence.fullSweepDone(userId);
+        cadence.fullSweepDone(userId, cadence.begin());
         HygieneWindow janela = new HygieneWindow(PRIMEIRA, ULTIMA);
         when(hygieneService.runFor(userId, janela)).thenThrow(new IllegalStateException("boom"));
         StatementImportedEvent evento = new StatementImportedEvent(
@@ -137,12 +137,26 @@ class StatementHygieneListenerTest {
     @DisplayName("sincronização que só carimbou conta em linha antiga também passa pela faxina")
     void shouldRunWhenOnlyOldRowsWereTouched() {
         UUID userId = UUID.randomUUID();
-        cadence.fullSweepDone(userId);
+        cadence.fullSweepDone(userId, cadence.begin());
 
         // zero linhas novas, mas com datas: houve linha antiga alterada
         listener.onStatementImported(new StatementImportedEvent(
                 userId, StatementFormat.PLUGGY, 0, UUID.randomUUID(), PRIMEIRA, ULTIMA));
 
         verify(hygieneService, timeout(2000)).runFor(userId, new HygieneWindow(PRIMEIRA, ULTIMA));
+    }
+
+    @Test
+    @DisplayName("total que rodou enquanto outra faxina falhava não dá o histórico por limpo")
+    void shouldNotMarkWhenAFailureHappenedDuringTheFullSweep() {
+        UUID userId = UUID.randomUUID();
+        // a total começa a ler...
+        long senha = cadence.begin();
+        // ...a faxina em janela de outra importação falha no meio...
+        cadence.failed(userId);
+        // ...e a total termina sem ter visto o que a outra gravou
+        cadence.fullSweepDone(userId, senha);
+
+        org.assertj.core.api.Assertions.assertThat(cadence.fullSweepDue(userId)).isTrue();
     }
 }

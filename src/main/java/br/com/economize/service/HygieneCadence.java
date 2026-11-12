@@ -7,6 +7,7 @@ import org.springframework.stereotype.Component;
 
 import java.time.Duration;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Diz quando a faxina pós-importação ainda deve varrer o HISTÓRICO INTEIRO.
@@ -31,6 +32,9 @@ public class HygieneCadence {
     /** Presença da chave = houve varredura total bem-sucedida dentro do intervalo. */
     private final Cache<UUID, Boolean> sweptRecently;
 
+    /** Quantas faxinas falharam desde que o serviço subiu. */
+    private final AtomicLong failures = new AtomicLong();
+
     public HygieneCadence(
             @Value("${economize.hygiene.full-sweep-interval:PT24H}") Duration interval) {
         this.sweptRecently = Caffeine.newBuilder()
@@ -44,12 +48,33 @@ public class HygieneCadence {
         return sweptRecently.getIfPresent(userId) == null;
     }
 
-    public void fullSweepDone(UUID userId) {
+    /**
+     * Senha para {@link #fullSweepDone(UUID, long)}, tirada ANTES de a
+     * varredura total começar a ler.
+     */
+    public long begin() {
+        return failures.get();
+    }
+
+    /**
+     * Marca o histórico como assentado — a não ser que alguma faxina tenha
+     * falhado enquanto esta total rodava. O caso: duas importações do mesmo
+     * usuário quase juntas; a total lê o histórico, a outra grava linhas e a
+     * faxina em janela dela falha. A total não viu essas linhas, então não
+     * pode dar o histórico por limpo. O contador é global, não por usuário:
+     * a falha de um cancela a marca de quem estava rodando ao mesmo tempo, e
+     * o preço disso é só uma varredura total a mais.
+     */
+    public void fullSweepDone(UUID userId, long token) {
+        if (failures.get() != token) return;
         sweptRecently.put(userId, Boolean.TRUE);
+        // a falha pode ter chegado entre a conferência e a gravação
+        if (failures.get() != token) sweptRecently.invalidate(userId);
     }
 
     /** Qualquer faxina que falha deixa o histórico em dúvida: a próxima é total. */
     public void failed(UUID userId) {
+        failures.incrementAndGet();
         sweptRecently.invalidate(userId);
     }
 }
