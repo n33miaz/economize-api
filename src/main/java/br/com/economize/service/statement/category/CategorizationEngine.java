@@ -10,12 +10,9 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
-import java.time.OffsetDateTime;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -98,10 +95,13 @@ public class CategorizationEngine {
 
         Match match = bestRuleMatch(ctx, normalized);
         if (match != null) {
-            match.rule.setHits(match.rule.getHits() + 1);
-            match.rule.setLastHitAt(OffsetDateTime.now());
-            ctx.dirtyRules.add(match.rule);
-            return new Result(match.rule.getCategory(), match.by, match.confidence, normalized);
+            // O acerto NÃO é contado aqui. O motor decide sobre o lote inteiro,
+            // antes de qualquer gravação, e a regra é um objeto só para todas
+            // as linhas: somar nela aqui gravava, junto com a primeira fonte
+            // que desse certo, acertos de linhas de OUTRA fonte que ainda
+            // podia falhar — e a nova tentativa somava de novo. Quem grava a
+            // linha é quem conta o acerto dela (ver StatementImportWriter)
+            return new Result(match.rule.getCategory(), match.by, match.confidence, normalized, match.rule);
         }
 
         // Keywords rodam na descrição crua: elas foram calibradas com os jargões
@@ -157,8 +157,20 @@ public class CategorizationEngine {
         return best;
     }
 
+    /**
+     * @param matchedRule a regra que decidiu, ou nulo quando a resposta veio de
+     *                    keyword, fallback ou de lugar nenhum. É por ela que
+     *                    quem GRAVA a linha conta o acerto da regra
+     */
     public record Result(Category category, BankTransaction.CategorizedBy by,
-                         BigDecimal confidence, String normalizedDescription) {
+                         BigDecimal confidence, String normalizedDescription,
+                         CategoryRule matchedRule) {
+
+        /** Resposta que não veio de regra: não há acerto a contar. */
+        public Result(Category category, BankTransaction.CategorizedBy by,
+                      BigDecimal confidence, String normalizedDescription) {
+            this(category, by, confidence, normalizedDescription, null);
+        }
 
         public boolean resolved() {
             return category != null;
@@ -173,9 +185,6 @@ public class CategorizationEngine {
     public static class Context {
         private final List<CategoryRule> rules;
         private final Map<String, Category> seedsByKey;
-        // regras que pontuaram nesta importação — o chamador persiste os hits em lote
-        private final Set<CategoryRule> dirtyRules = new HashSet<>();
-
         Context(List<CategoryRule> rules, Map<String, Category> seedsByKey) {
             this.rules = rules;
             this.seedsByKey = new HashMap<>(seedsByKey);

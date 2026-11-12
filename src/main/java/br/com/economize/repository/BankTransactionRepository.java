@@ -291,7 +291,8 @@ public interface BankTransactionRepository extends JpaRepository<BankTransaction
     // o extrato e carregava TODOS os lançamentos do usuário para responder
     // duas perguntas por conta; as duas consultas abaixo respondem as mesmas
     // perguntas no banco, pelo índice (account_id, date) da V16, sem
-    // materializar lançamento nenhum.
+    // materializar lançamento nenhum — e cada uma responde por TODAS as
+    // contas de uma vez: o custo da conferência não cresce com o número delas.
     //
     // As cláusulas são as do filtro em memória que elas substituem, linha por
     // linha — inclusive o que parece esquecimento. NÃO "alinhe" com a regra
@@ -320,21 +321,33 @@ public interface BankTransactionRepository extends JpaRepository<BankTransaction
                                              @Param("floor") BigDecimal floor);
 
     /**
-     * Soma do que entrou na conta DEPOIS de {@code after}, sem as ignoradas.
+     * Soma, POR CONTA, do que entrou depois da última leitura de saldo da
+     * própria conta, sem as ignoradas. Cada linha devolvida é
+     * {@code [accountId (UUID), soma (BigDecimal)]}.
+     *
+     * <p>O corte é de cada conta ({@code reportedBalanceAt} dela), e por isso
+     * a data não vem por parâmetro: vem do join. Era uma consulta por conta —
+     * 200 contas ligadas, 200 idas ao banco a cada abertura do extrato.
      *
      * <p>Só a ignorada sai: é a única linha que não é dinheiro de verdade (a
-     * duplicata de outra fonte). Valor bruto, "depois" estrito. Devolve nulo
-     * quando não há linha nenhuma — quem chama trata como zero.
+     * duplicata de outra fonte). Valor bruto, "depois" estrito. Conta sem
+     * data de leitura nunca aparece (comparar com nulo não casa), e conta sem
+     * linha depois do corte também não — quem chama trata a ausência como
+     * zero. O dono é filtro dos DOIS lados: lançamento e conta.
+     *
+     * <p>Nunca chame com a lista vazia: {@code in ()} não é SQL válido.
      */
     @Query("""
-            select sum(t.amount) from BankTransaction t
-            where t.user.id = :userId and t.accountId = :accountId
-              and t.date > :after
+            select t.accountId, sum(t.amount) from BankTransaction t, ConnectorAccount a
+            where a.id = t.accountId
+              and t.user.id = :userId and a.user.id = :userId
+              and t.accountId in :accountIds
+              and t.date > a.reportedBalanceAt
               and t.ignored = false
+            group by t.accountId
             """)
-    BigDecimal sumByAccountAfter(@Param("userId") UUID userId,
-                                 @Param("accountId") UUID accountId,
-                                 @Param("after") OffsetDateTime after);
+    List<Object[]> sumByAccountAfterOwnReading(@Param("userId") UUID userId,
+                                               @Param("accountIds") Collection<UUID> accountIds);
 
     /**
      * Marca a COMPRA de um estorno inteiro (V29): ela só recebe a marca — quem

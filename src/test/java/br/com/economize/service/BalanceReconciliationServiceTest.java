@@ -513,6 +513,81 @@ class BalanceReconciliationServiceTest {
         assertThat(lancamentosCarregados).isZero();
     }
 
+    @Test
+    @DisplayName("O corte é o de CADA conta: três contas, três datas de leitura, a soma certa em cada uma")
+    void corteDeCadaContaNumaConsultaSo() {
+        // As leituras são recentes (nada de SALDO_VELHO) e diferentes entre si
+        ConnectorAccount cedo = conta("A lida cedo", new BigDecimal("900.00"), AGORA.minusHours(10));
+        ConnectorAccount tarde = conta("B lida tarde", new BigDecimal("500.00"), AGORA.minusHours(2));
+        ConnectorAccount parada = conta("C sem novidade", new BigDecimal("70.00"), AGORA.minusHours(5));
+        ConnectorAccount semData = conta("D sem data", new BigDecimal("40.00"), null);
+
+        // A MESMA hora nas duas contas, entre os dois cortes: depois da leitura
+        // de A, antes da de B. Um corte único (qualquer que fosse) erraria uma
+        tx(cedo, "-100.00", AGORA.minusHours(6));
+        tx(tarde, "-100.00", AGORA.minusHours(6));
+        tx(cedo, "-20.00", AGORA.minusHours(1));
+        tx(tarde, "-7.00", AGORA.minusHours(1));
+        // antes do corte de A, e EXATAMENTE no corte de B: "depois" é estrito
+        tx(cedo, "-999.00", AGORA.minusHours(11));
+        tx(tarde, "-999.00", AGORA.minusHours(2));
+        // ignorada não é dinheiro: fora da soma mesmo depois da leitura
+        BankTransaction duplicata = tx(cedo, "-55.00", AGORA.minusHours(3));
+        duplicata.setIgnored(true);
+        bankTransactionRepository.save(duplicata);
+        // nada depois da leitura de C; D nem tem leitura para servir de corte
+        tx(parada, "-300.00", AGORA.minusHours(8));
+        tx(semData, "-60.00", AGORA.minusHours(1));
+        // lançamento de OUTRA pessoa carimbado com a conta do dono: não soma
+        tx(estranho, cedo.getId(), "-5000.00", AGORA.minusHours(1));
+
+        Report relatorio = conferir();
+
+        assertThat(relatorio.findings())
+                .extracting(Finding::accountName, Finding::kind,
+                        // a coluna tem 4 casas; o que importa aqui é o valor
+                        f -> f.movementAfter().setScale(2, java.math.RoundingMode.UNNECESSARY).toPlainString())
+                .containsExactly(
+                        tuple("A lida cedo", Kind.MOVIMENTO_APOS_LEITURA, "-120.00"),
+                        tuple("B lida tarde", Kind.MOVIMENTO_APOS_LEITURA, "-7.00"));
+    }
+
+    @Test
+    @DisplayName("O número de consultas não cresce com o número de contas")
+    void consultasNaoCrescemComAsContas() {
+        // Era uma soma POR CONTA ligada: 3 contas, 3 consultas a mais; 200
+        // contas, 200. O total agora é o mesmo com 3 ou com 40
+        for (int i = 0; i < 3; i++) contaComMovimentoDepois("Conta " + i);
+        long comTres = consultasDeUmaConferencia();
+
+        for (int i = 3; i < 40; i++) contaComMovimentoDepois("Conta " + i);
+        long comQuarenta = consultasDeUmaConferencia();
+
+        assertThat(comQuarenta).isEqualTo(comTres);
+        // usuário + contas + soma depois da leitura. "Teve movimento?" nem é
+        // perguntado aqui: nenhuma conta está zerada
+        assertThat(comTres).isEqualTo(3);
+        // ...e as 40 foram de fato examinadas, não puladas
+        assertThat(service.checkFor(EMAIL, AGORA).findings())
+                .extracting(Finding::kind)
+                .hasSize(40)
+                .containsOnly(Kind.MOVIMENTO_APOS_LEITURA);
+    }
+
+    private void contaComMovimentoDepois(String nome) {
+        ConnectorAccount conta = conta(nome, new BigDecimal("100.00"), AGORA.minusHours(6));
+        tx(conta, "-10.00", AGORA.minusHours(1));
+    }
+
+    private long consultasDeUmaConferencia() {
+        em.flush();
+        em.clear();
+        Statistics estatisticas = entityManagerFactory.unwrap(SessionFactory.class).getStatistics();
+        estatisticas.clear();
+        service.checkFor(EMAIL, AGORA);
+        return estatisticas.getPrepareStatementCount();
+    }
+
     // ------------------------------------------------------------------ apoio
 
     /**
