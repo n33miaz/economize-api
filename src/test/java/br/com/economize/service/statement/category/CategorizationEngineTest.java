@@ -50,9 +50,11 @@ class CategorizationEngineTest {
         assertThat(result.by()).isEqualTo(BankTransaction.CategorizedBy.USER_RULE);
         assertThat(result.confidence()).isEqualByComparingTo("1.00");
         assertThat(result.normalizedDescription()).isEqualTo("ifood rest");
-        assertThat(rule.getHits()).isEqualTo(1);
-        assertThat(rule.getLastHitAt()).isNotNull();
-        assertThat(ctx.getDirtyRules()).containsExactly(rule);
+        // o motor diz QUAL regra decidiu e não soma nela: o acerto é contado
+        // por quem grava a linha, junto com a linha
+        assertThat(result.matchedRule()).isSameAs(rule);
+        assertThat(rule.getHits()).isZero();
+        assertThat(rule.getLastHitAt()).isNull();
     }
 
     @Test
@@ -81,7 +83,7 @@ class CategorizationEngineTest {
         assertThat(result.category()).isSameAs(specific);
         assertThat(result.by()).isEqualTo(BankTransaction.CategorizedBy.LEARNED_RULE);
         assertThat(result.confidence()).isEqualByComparingTo("0.85");
-        assertThat(ctx.getDirtyRules()).containsExactly(longRule);
+        assertThat(result.matchedRule()).isSameAs(longRule);
     }
 
     @Test
@@ -96,7 +98,7 @@ class CategorizationEngineTest {
 
         assertThat(result.category()).isSameAs(food);
         assertThat(result.by()).isEqualTo(BankTransaction.CategorizedBy.KEYWORD);
-        assertThat(ctx.getDirtyRules()).isEmpty();
+        assertThat(result.matchedRule()).isNull();
     }
 
     @Test
@@ -212,8 +214,7 @@ class CategorizationEngineTest {
         // sempre; com o curto-circuito ela nem é consultada
         assertThat(result.category()).isSameAs(transfer);
         assertThat(result.by()).isEqualTo(BankTransaction.CategorizedBy.FALLBACK);
-        assertThat(contaminada.getHits()).isZero();
-        assertThat(ctx.getDirtyRules()).isEmpty();
+        assertThat(result.matchedRule()).isNull();
     }
 
     @Test
