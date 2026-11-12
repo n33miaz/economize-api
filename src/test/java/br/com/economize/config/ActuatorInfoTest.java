@@ -50,4 +50,26 @@ class ActuatorInfoTest {
                 // versão, que é o caso normal de um SNAPSHOT em produção
                 .jsonPath("$.build.time").exists();
     }
+
+    @Test
+    @DisplayName("Sem token a saúde responde, mas sem o detalhe dos componentes")
+    void saudeSemTokenNaoDetalha() {
+        // Só o corpo: no ambiente de teste algum indicador pode estar DOWN
+        // (503), e o que se prova aqui é que a resposta não abre os componentes
+        client.get().uri("/actuator/health")
+                .exchange()
+                .expectStatus().value(status ->
+                        org.assertj.core.api.Assertions.assertThat(status).isIn(200, 503))
+                .expectBody()
+                .jsonPath("$.status").exists()
+                .jsonPath("$.components").doesNotExist();
+    }
+
+    @Test
+    @DisplayName("As métricas da JVM pedem token")
+    void metricasPedemToken() {
+        client.get().uri("/actuator/metrics").exchange().expectStatus().isUnauthorized();
+        client.get().uri("/actuator/metrics/jvm.memory.used").exchange()
+                .expectStatus().isUnauthorized();
+    }
 }
