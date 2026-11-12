@@ -105,17 +105,22 @@ public class DuplicateTransactionService {
      *
      * <p><b>Do que a igualdade com a varredura total depende</b>, dito às
      * claras porque o pareamento é guloso (cada linha da conexão fica com a
-     * primeira linha de arquivo que serve, e a ordem importa): o histórico
-     * FORA do recorte já passou por uma varredura. Passado por ela, não sobra
-     * lá par antigo com antigo por fazer — uma linha da conexão que ficou sem
-     * par não tinha linha de arquivo compatível, e a lista de candidatas só
-     * encolhe. Então todo par novo tem ao menos uma ponta importada, as duas
-     * pontas estão no recorte, e quem disputa uma linha importada também
-     * está. A ordem de leitura (data decrescente) é a mesma da total.
+     * primeira linha de arquivo que serve, e a ordem importa): no histórico
+     * que já estava gravado <b>não há par antigo com antigo por fazer</b> —
+     * a última varredura total não achou mais nada. Valendo isso, todo par
+     * novo tem ao menos uma ponta importada, as duas pontas estão no recorte,
+     * e quem disputa uma linha importada também está. A ordem de leitura
+     * (data decrescente) é a mesma da total.
      *
-     * <p>Quando isso não vale — a faxina anterior falhou, ou a pessoa desfez
-     * uma marca antiga pela tela — o que ficou para trás fora do recorte não é
-     * repescado pela importação seguinte, só pela faxina pedida à mão.
+     * <p>Uma varredura só não garante essa condição: o lado da conexão nunca
+     * é marcado e volta a ser candidato na passada seguinte (é o caso que
+     * {@link #falamDoMesmo} descreve). E ela deixa de valer quando a faxina
+     * anterior falhou, quando a pessoa desfez uma marca antiga pela tela ou
+     * quando uma linha antiga ganhou conta de origem fora de uma importação.
+     * Nesses casos o que ficou para trás fora do recorte não é repescado pela
+     * importação seguinte — só pela faxina pedida à mão — e, no caso raro de
+     * um par pendente encostado no recorte, uma linha importada pode casar
+     * com uma ponta que a total daria a outra.
      *
      * @param janela o que a importação trouxe; nulo = histórico inteiro
      */

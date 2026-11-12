@@ -77,14 +77,22 @@ import java.util.UUID;
  * </table>
  *
  * <p><b>Por que o estorno ficou de fora</b>, apesar de a regra dele ter
- * distância máxima (45 dias quando o crédito nomeia a compra, 3 por valor): o
- * que decide um par ali depende do que os OUTROS pares da mesma passada
- * consumiram — "a compra mais recente que ainda cabe", o que cada compra já
- * recebeu de abate, e um crédito que não acha a compra citada cai no
- * pareamento por valor. Um crédito dentro do recorte cuja compra citada está
- * fora dele casaria, por valor, com OUTRA compra — par que a varredura total
- * não faz. Dá para enquadrar com margem de 45 dias, mas não para provar que o
- * resultado é o mesmo, e errar ali é abater dinheiro da compra errada.
+ * distância máxima (45 dias quando o crédito nomeia a compra, 3 por valor) e
+ * de o teto do abate estar gravado na própria compra. O recorte só é igual à
+ * varredura total quando o histórico antigo está assentado, e o do estorno
+ * nunca está:
+ * <ul>
+ *   <li>o crédito neutro de cartão espera a compra por tempo indeterminado e
+ *       é reexaminado a cada passada;</li>
+ *   <li>o crédito pulado porque a compra citada mais próxima é menor do que
+ *       ele pode casar numa passada SEGUINTE, depois que outra consumiu
+ *       aquela compra;</li>
+ *   <li>o que uma compra já recebeu de abate vale para todos os créditos da
+ *       mesma passada, então tirar um crédito antigo do recorte muda o que
+ *       sobra para um importado.</li>
+ * </ul>
+ * Dá para enquadrar com margem de 45 dias, mas não para provar que o
+ * resultado é o mesmo — e errar ali é abater dinheiro da compra errada.
  */
 @Slf4j
 @Service
