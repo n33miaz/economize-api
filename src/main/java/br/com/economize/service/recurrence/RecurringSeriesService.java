@@ -39,6 +39,8 @@ public class RecurringSeriesService {
     private final RecurringSeriesLinkRepository linkRepository;
     private final CategoryRepository categoryRepository;
     private final UserRepository userRepository;
+    // "Hoje" na zona financeira (FinancialClockConfig), não na do servidor
+    private final java.time.Clock clock;
 
     /**
      * Séries com o próximo vencimento estimado. Sem filtro, INTERNAL fica de
@@ -86,7 +88,7 @@ public class RecurringSeriesService {
         Short anchorDay = request.anchorDay() != null ? request.anchorDay().shortValue() : null;
         requireAnchorConsistency(cadence, anchorDay);
 
-        LocalDate startsAt = request.startsAt() != null ? request.startsAt() : LocalDate.now();
+        LocalDate startsAt = request.startsAt() != null ? request.startsAt() : LocalDate.now(clock);
         if (request.endsAt() != null && request.endsAt().isBefore(startsAt)) {
             throw new IllegalArgumentException("endsAt não pode ser anterior a startsAt");
         }

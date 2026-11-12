@@ -12,6 +12,8 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.time.ZoneId;
+import java.time.Clock;
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.time.YearMonth;
@@ -214,6 +216,29 @@ class InstallmentProjectionServiceTest {
     }
 
     // ------------------------------------------------------------------ apoio
+
+
+    // 23h30 do dia 31 em São Paulo já é 1º de abril no servidor (02h30 UTC)
+    private static final Clock NOITE_DE_31_DE_MARCO = Clock.fixed(
+            OffsetDateTime.parse("2026-03-31T23:30:00-03:00").toInstant(), ZoneId.of("America/Sao_Paulo"));
+    private static final Clock MADRUGADA_DE_1_DE_ABRIL = Clock.fixed(
+            OffsetDateTime.parse("2026-04-01T00:30:00-03:00").toInstant(), ZoneId.of("America/Sao_Paulo"));
+
+    @Test
+    @DisplayName("FUSO: a parcela de março ainda está aberta às 23h30 de 31/03 no Brasil; à 0h30 já venceu")
+    void oMesDeHojeSegueAZonaFinanceira() {
+        daExtrato(parcela("2026-02-09", "-199.96", "Mercadolivre*Bwgshop - Parcela 2/3"));
+
+        assertThat(new InstallmentProjectionService(bankTransactionRepository, userRepository,
+                NOITE_DE_31_DE_MARCO).overviewFor(EMAIL).series())
+                .singleElement().satisfies(serie -> {
+                    assertThat(serie.lastMonth()).isEqualTo("2026-03");
+                    assertThat(serie.finished()).isFalse();
+                });
+        assertThat(new InstallmentProjectionService(bankTransactionRepository, userRepository,
+                MADRUGADA_DE_1_DE_ABRIL).overviewFor(EMAIL).series())
+                .singleElement().satisfies(serie -> assertThat(serie.finished()).isTrue());
+    }
 
     private void daExtrato(BankTransaction... transacoes) {
         when(bankTransactionRepository.findAllByUserIdOrderByDateDesc(user.getId()))

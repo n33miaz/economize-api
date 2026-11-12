@@ -18,6 +18,9 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.DataIntegrityViolationException;
 
+import org.mockito.Spy;
+import java.time.ZoneId;
+import java.time.Clock;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalTime;
@@ -39,6 +42,12 @@ class RecurringSeriesServiceTest {
 
     private static final String EMAIL = "ana@economize.dev";
 
+    // 23h30 do dia 31 em São Paulo já é 1º de abril no servidor (02h30 UTC)
+    private static final Clock NOITE_DE_31_DE_MARCO = Clock.fixed(
+            OffsetDateTime.parse("2026-03-31T23:30:00-03:00").toInstant(), ZoneId.of("America/Sao_Paulo"));
+    private static final Clock MADRUGADA_DE_1_DE_ABRIL = Clock.fixed(
+            OffsetDateTime.parse("2026-04-01T00:30:00-03:00").toInstant(), ZoneId.of("America/Sao_Paulo"));
+
     @Mock
     private RecurringSeriesRepository seriesRepository;
 
@@ -50,6 +59,9 @@ class RecurringSeriesServiceTest {
 
     @Mock
     private UserRepository userRepository;
+
+    @Spy
+    private Clock clock = NOITE_DE_31_DE_MARCO;
 
     @InjectMocks
     private RecurringSeriesService service;
@@ -371,7 +383,8 @@ class RecurringSeriesServiceTest {
         assertThat(response.anchorDay()).isEqualTo(5);
         // defaults: FIXED, começa hoje, sem fim, ativa, zero ocorrências
         assertThat(response.amountType()).isEqualTo(RecurringSeries.AmountType.FIXED);
-        assertThat(response.startsAt()).isEqualTo(LocalDate.now());
+        // 23h30 no Brasil: o servidor em UTC já diria 1º de abril
+        assertThat(response.startsAt()).isEqualTo(LocalDate.of(2026, 3, 31));
         assertThat(response.endsAt()).isNull();
         assertThat(response.active()).isTrue();
         assertThat(response.occurrences()).isZero();
@@ -714,5 +727,20 @@ class RecurringSeriesServiceTest {
 
     private OffsetDateTime day(int year, int month, int dayOfMonth) {
         return OffsetDateTime.of(LocalDate.of(year, month, dayOfMonth), LocalTime.NOON, ZoneOffset.UTC);
+    }
+
+    @Test
+    void startsAtDefaultTurnsWithTheFinancialZone() {
+        when(userRepository.findByEmail(EMAIL)).thenReturn(Optional.of(user));
+        when(seriesRepository.findByUserIdAndMerchantKeyAndFlow(
+                user.getId(), "aluguel", RecurringSeries.Flow.EXPENSE)).thenReturn(Optional.empty());
+
+        RecurringSeriesResponse response = new RecurringSeriesService(seriesRepository, linkRepository,
+                categoryRepository, userRepository, MADRUGADA_DE_1_DE_ABRIL)
+                .create(EMAIL, new CreateRecurringSeriesRequest(
+                        "Aluguel", "expense", "monthly", 5, new BigDecimal("1500.00"),
+                        null, null, null, null, null));
+
+        assertThat(response.startsAt()).isEqualTo(LocalDate.of(2026, 4, 1));
     }
 }

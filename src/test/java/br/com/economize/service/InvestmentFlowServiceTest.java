@@ -188,6 +188,25 @@ class InvestmentFlowServiceTest {
         assertThat(InvestmentFlowService.ehMovimentoDeInvestimento("   ")).isFalse();
     }
 
+    @Test
+    @DisplayName("Par de estorno já fechado não é remarcado nem entra no relatório da varredura")
+    void parDeEstornoJaForaDasSomas() {
+        BankTransaction aplicacao = tx("-539.70", "Aplicação Cdb Porq Obj Banco Inter Sa");
+        aplicacao.setRefunded(true);
+        BankTransaction devolucao = tx("539.70", "Estorno Aplicação");
+        devolucao.setRefunded(true);
+        when(bankTransactionRepository.findAllByUserIdOrderByDateDesc(user.getId()))
+                .thenReturn(List.of(aplicacao, devolucao));
+
+        InvestmentFlowService.Outcome resultado = service.sweep(EMAIL, false);
+
+        // já estavam fora das somas pela varredura de estorno: contá-las aqui
+        // inflava "aplicado" e "resgatado" com dinheiro que nunca saiu
+        assertThat(resultado.marked()).isZero();
+        assertThat(resultado.applied()).isEqualByComparingTo("0");
+        assertThat(resultado.redeemed()).isEqualByComparingTo("0");
+    }
+
     private BankTransaction tx(String valor, String descricao) {
         return BankTransaction.builder()
                 .id(UUID.randomUUID())

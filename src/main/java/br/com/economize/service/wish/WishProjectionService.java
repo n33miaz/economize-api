@@ -14,7 +14,6 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.YearMonth;
-import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.List;
@@ -69,6 +68,8 @@ public class WishProjectionService {
     private final IncomeSourceRepository incomeSourceRepository;
     private final WorkProfileRepository workProfileRepository;
     private final AnalyticsService analyticsService;
+    // "Hoje" na zona financeira (FinancialClockConfig), não na do servidor
+    private final java.time.Clock clock;
 
     public WishBaseline baselineFor(UUID userId) {
         return baselineFor(userId, today());
@@ -289,8 +290,8 @@ public class WishProjectionService {
         return value == null ? null : value.setScale(2, RoundingMode.HALF_UP);
     }
 
-    /** UTC: é o fuso em que os parsers gravam as datas do extrato. */
-    private static LocalDate today() {
-        return LocalDate.now(ZoneOffset.UTC);
+    /** O dia de quem usa (zona financeira); as datas do extrato seguem em UTC. */
+    private LocalDate today() {
+        return LocalDate.now(clock);
     }
 }

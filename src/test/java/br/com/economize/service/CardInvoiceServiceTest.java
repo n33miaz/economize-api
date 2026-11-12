@@ -15,6 +15,8 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.time.ZoneId;
+import java.time.Clock;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalTime;
@@ -71,7 +73,9 @@ class CardInvoiceServiceTest {
     void setUp() {
         user = User.builder().id(UUID.randomUUID()).email(EMAIL).name("Teste").password("x").build();
         service = new CardInvoiceService(accountService, bankTransactionRepository, userRepository,
-                reserveService, cardBillRepository);
+                reserveService, cardBillRepository,
+                // UTC como os dados destes testes, que nascem de now(UTC)
+                Clock.systemUTC());
         // sem fatura do provedor é o caso comum: o cartão pode não ter conector,
         // ou o emissor pode não publicar fatura fechada
         lenient().when(cardBillRepository.findByAccountIdOrderByClosingDateDesc(any()))
@@ -529,6 +533,40 @@ class CardInvoiceServiceTest {
     }
 
     // ------------------------------------------------- apoio
+
+
+    // 23h30 do dia 31 em São Paulo já é 1º de abril no servidor (02h30 UTC)
+    private static final Clock NOITE_DE_31_DE_MARCO = Clock.fixed(
+            OffsetDateTime.parse("2026-03-31T23:30:00-03:00").toInstant(), ZoneId.of("America/Sao_Paulo"));
+    private static final Clock MADRUGADA_DE_1_DE_ABRIL = Clock.fixed(
+            OffsetDateTime.parse("2026-04-01T00:30:00-03:00").toInstant(), ZoneId.of("America/Sao_Paulo"));
+
+    @Test
+    @DisplayName("FUSO: às 23h30 de 31/03 no Brasil o ciclo aberto ainda é março; à 0h30, abril")
+    void todayFollowsTheFinancialZone() {
+        ConnectorAccount cartao = card(null, null);
+        owned(cartao);
+
+        // a janela consultada vai do ciclo anterior ao fim do ciclo de hoje
+        assertThat(windowAskedAt(NOITE_DE_31_DE_MARCO, cartao))
+                .containsExactly(OffsetDateTime.parse("2026-02-01T00:00:00Z"),
+                        OffsetDateTime.parse("2026-04-01T00:00:00Z"));
+        assertThat(windowAskedAt(MADRUGADA_DE_1_DE_ABRIL, cartao))
+                .containsExactly(OffsetDateTime.parse("2026-03-01T00:00:00Z"),
+                        OffsetDateTime.parse("2026-05-01T00:00:00Z"));
+    }
+
+    private List<OffsetDateTime> windowAskedAt(Clock clock, ConnectorAccount cartao) {
+        org.mockito.Mockito.clearInvocations(bankTransactionRepository);
+        new CardInvoiceService(accountService, bankTransactionRepository, userRepository,
+                reserveService, cardBillRepository, clock).invoices(EMAIL, cartao.getId(), 1);
+        org.mockito.ArgumentCaptor<OffsetDateTime> de = org.mockito.ArgumentCaptor.forClass(OffsetDateTime.class);
+        org.mockito.ArgumentCaptor<OffsetDateTime> ate = org.mockito.ArgumentCaptor.forClass(OffsetDateTime.class);
+        org.mockito.Mockito.verify(bankTransactionRepository)
+                .findAllByUserIdAndAccountIdAndDateGreaterThanEqualAndDateLessThanOrderByDateDesc(
+                        eq(user.getId()), eq(cartao.getId()), de.capture(), ate.capture());
+        return List.of(de.getValue(), ate.getValue());
+    }
 
     private ConnectorAccount card(Integer closingDay, Integer dueDay) {
         return ConnectorAccount.builder()
