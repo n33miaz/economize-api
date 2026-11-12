@@ -15,6 +15,7 @@ import br.com.economize.service.statement.category.CategorizationEngine;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -333,23 +334,34 @@ public class TransactionReviewService {
         CategoryRule rule = categoryRuleRepository.findByUserIdAndPattern(user.getId(), pattern)
                 .orElse(null);
         if (rule == null) {
-            // EXACT de propósito: o padrão é a chave normalizada inteira, então não
-            // há risco de uma regra aprendida "vazar" para estabelecimentos parecidos
-            categoryRuleRepository.save(CategoryRule.builder()
-                    .user(user)
-                    .category(category)
-                    .pattern(pattern)
-                    .matchType(CategoryRule.MatchType.EXACT)
-                    .origin(CategoryRule.Origin.LEARNED)
-                    .hits(1)
-                    .lastHitAt(OffsetDateTime.now())
-                    .build());
-            return;
+            try {
+                // EXACT de propósito: o padrão é a chave normalizada inteira, então não
+                // há risco de uma regra aprendida "vazar" para estabelecimentos parecidos.
+                // saveAndFlush: a violação do unique (user_id, pattern) tem que estourar
+                // AQUI, dentro do catch, e não no commit
+                categoryRuleRepository.saveAndFlush(CategoryRule.builder()
+                        .user(user)
+                        .category(category)
+                        .pattern(pattern)
+                        .matchType(CategoryRule.MatchType.EXACT)
+                        .origin(CategoryRule.Origin.LEARNED)
+                        .hits(1)
+                        .lastHitAt(OffsetDateTime.now())
+                        .build());
+                return;
+            } catch (DataIntegrityViolationException race) {
+                // outra revisão do mesmo padrão inseriu entre a leitura acima e este
+                // insert: a regra dela vale, e esta decisão vira um reforço. Só funciona
+                // porque o serviço não tem transação própria — no Postgres, a violação
+                // abortaria uma transação envolvente e o UPDATE abaixo morreria junto
+                rule = categoryRuleRepository.findByUserIdAndPattern(user.getId(), pattern)
+                        .orElseThrow(() -> race);
+            }
         }
-        rule.setCategory(category);
-        rule.setHits(rule.getHits() + 1);
-        rule.setLastHitAt(OffsetDateTime.now());
-        categoryRuleRepository.save(rule);
+        // UPDATE atômico, não save da entidade: a importação soma acertos direto
+        // no banco (addHits), e salvar a cópia lida acima gravaria o total velho
+        // + 1 por cima do que a sincronização somou nesse meio-tempo
+        categoryRuleRepository.reinforce(rule.getId(), category, OffsetDateTime.now());
     }
 
     /**
