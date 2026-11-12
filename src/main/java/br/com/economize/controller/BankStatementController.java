@@ -2,11 +2,13 @@ package br.com.economize.controller;
 
 import br.com.economize.dto.statement.BankTransactionResponse;
 import br.com.economize.dto.statement.ImportSourceResponse;
+import br.com.economize.exception.PayloadTooLargeException;
 import br.com.economize.service.BankStatementService;
 import br.com.economize.service.statement.parser.StatementFormat;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
+import org.springframework.core.io.buffer.DataBufferLimitException;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.codec.multipart.FilePart;
@@ -40,6 +42,12 @@ public class BankStatementController {
             @RequestParam(required = false) UUID accountId) {
 
         return filePartMono
+                // O multipart grava a parte em disco e corta ao passar de
+                // spring.webflux.multipart.max-disk-usage-per-part, antes de
+                // qualquer byte ir para o heap ou para o parser. Sem esta
+                // conversão o corte sairia como 500 (ou 400 de "corpo malformado").
+                .onErrorMap(BankStatementController::isSizeLimit, ex -> new PayloadTooLargeException(
+                        "O arquivo passa do limite de tamanho aceito. Exporte um período menor do extrato."))
                 .flatMap(filePart -> {
                     try {
                         StatementFormat.fromFilename(filePart.filename());
@@ -103,5 +111,14 @@ public class BankStatementController {
                         .map(BankTransactionResponse::from)
                         .toList())
                 .subscribeOn(Schedulers.boundedElastic());
+    }
+
+    // O limite pode chegar cru ou embrulhado (ServerWebInputException) conforme
+    // a camada que o detectou; olha a cadeia inteira
+    private static boolean isSizeLimit(Throwable ex) {
+        for (Throwable t = ex; t != null; t = t.getCause()) {
+            if (t instanceof DataBufferLimitException) return true;
+        }
+        return false;
     }
 }

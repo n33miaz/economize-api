@@ -120,7 +120,8 @@ class BankStatementRuleHitsTest {
         ObjectProvider<AiCategorySuggester> aiSuggester = mock(ObjectProvider.class);
         service = new BankStatementService(bankTransactionRepository, statementUploadRepository,
                 userRepository, parserFactory, engine, categoryRepository,
-                importWriter, accountService, eventPublisher, aiSuggester);
+                importWriter, accountService, eventPublisher, aiSuggester,
+                new br.com.economize.config.StatementImportProperties());
 
         lenient().when(ruleRepository.findAllWithCategoryByUserId(user.getId())).thenReturn(List.of(regra));
         lenient().when(categoryRepository.findAllByUserIsNull()).thenReturn(List.of());

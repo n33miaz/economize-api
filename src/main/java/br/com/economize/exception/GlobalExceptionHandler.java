@@ -64,6 +64,20 @@ public class GlobalExceptionHandler {
                 return problemDetail;
         }
 
+        // Arquivo acima do teto do upload. Sem este handler o excesso cairia no
+        // genérico como 500 — e o app mandaria tentar de novo o mesmo arquivo
+        @ExceptionHandler(PayloadTooLargeException.class)
+        public ProblemDetail handlePayloadTooLargeException(PayloadTooLargeException ex) {
+                log.warn("Arquivo recusado por tamanho: {}", ex.getMessage());
+                ProblemDetail problemDetail = ProblemDetail.forStatusAndDetail(HttpStatus.PAYLOAD_TOO_LARGE,
+                                ex.getMessage());
+                problemDetail.setTitle("Arquivo Muito Grande");
+                problemDetail.setType(Objects
+                                .requireNonNull(URI.create("https://economize.app/erros/arquivo-muito-grande")));
+                problemDetail.setProperty("timestamp", Instant.now());
+                return problemDetail;
+        }
+
         // Falha de @Valid no WebFlux — sem este handler cairia no genérico como 500
         @ExceptionHandler(WebExchangeBindException.class)
         public ProblemDetail handleValidationException(WebExchangeBindException ex) {
