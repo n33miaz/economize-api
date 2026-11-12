@@ -185,7 +185,7 @@ class ConnectorControllerTest {
         when(provider.listItems(EMAIL)).thenReturn(List.of(ConnectionResponse.of(
                 UUID.randomUUID(), ITEM_ID, 612L, "Nubank",
                 OffsetDateTime.parse("2026-08-15T12:00:00Z"),
-                OffsetDateTime.parse("2026-08-15T13:00:00Z"))));
+                OffsetDateTime.parse("2026-08-15T13:00:00Z"), "NEEDS_USER_ACTION", true)));
 
         webTestClient.get()
                 .uri("/api/v1/connectors/items")
@@ -195,7 +195,9 @@ class ConnectorControllerTest {
                 .expectBody()
                 .jsonPath("$[0].itemId").isEqualTo(ITEM_ID)
                 .jsonPath("$[0].institution").isEqualTo("Nubank")
-                .jsonPath("$[0].lastSyncedAt").isNotEmpty();
+                .jsonPath("$[0].lastSyncedAt").isNotEmpty()
+                .jsonPath("$[0].status").isEqualTo("NEEDS_USER_ACTION")
+                .jsonPath("$[0].needsAttention").isEqualTo(true);
     }
 
     @Test
