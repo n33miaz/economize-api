@@ -7,7 +7,12 @@ import java.time.OffsetDateTime;
 import java.util.UUID;
 
 @Entity
-@Table(name = "category_rules")
+// O unique espelha o da V6 (o banco de produção já o tem): declarado aqui para
+// o schema dos testes, gerado pelas entidades, ter a mesma garantia que o
+// reforço da regra aprendida usa para resolver duas inserções simultâneas
+@Table(name = "category_rules", uniqueConstraints = {
+        @UniqueConstraint(name = "uq_rules_user_pattern", columnNames = {"user_id", "pattern"})
+})
 @Getter
 @Setter
 @NoArgsConstructor
