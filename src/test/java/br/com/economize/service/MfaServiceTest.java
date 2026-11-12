@@ -4,6 +4,7 @@ import br.com.economize.dto.auth.MfaRecoveryCodesResponse;
 import br.com.economize.dto.auth.MfaSetupResponse;
 import br.com.economize.dto.auth.MfaStatusResponse;
 import br.com.economize.model.User;
+import br.com.economize.model.MfaRecoveryCode;
 import br.com.economize.repository.MfaRecoveryCodeRepository;
 import br.com.economize.repository.TrustedDeviceRepository;
 import br.com.economize.repository.UserMfaRepository;
@@ -21,6 +22,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 
 import java.time.Clock;
 import java.time.Instant;
+import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.List;
@@ -188,6 +190,22 @@ class MfaServiceTest {
         assertThat(service.status(ana.getEmail()).recoveryCodesRemaining()).isEqualTo(9);
         // uso único: o papel que vazou já não abre nada
         assertThat(service.verify(ana, codes.get(0))).isFalse();
+    }
+
+    @Test
+    @DisplayName("duas tentativas de consumir o mesmo código deixam só a primeira riscar a linha")
+    void consumesRecoveryCodeOnlyOnceInDatabase() {
+        MfaRecoveryCode code = recoveryCodeRepository.save(MfaRecoveryCode.builder()
+                .user(ana).codeHash(encoder.encode("ABCDEFGHJK")).build());
+        entityManager.flush();
+
+        int primeira = recoveryCodeRepository.consumeIfUnused(code.getId(), OffsetDateTime.now(relogio));
+        int segunda = recoveryCodeRepository.consumeIfUnused(code.getId(), OffsetDateTime.now(relogio));
+
+        assertThat(primeira).isOne();
+        assertThat(segunda).isZero();
+        entityManager.clear();
+        assertThat(recoveryCodeRepository.findById(code.getId()).orElseThrow().getUsedAt()).isNotNull();
     }
 
     @Test

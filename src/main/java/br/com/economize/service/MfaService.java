@@ -256,8 +256,11 @@ public class MfaService {
         if (normalized.length() != RECOVERY_CODE_CHARS) return false;
         for (MfaRecoveryCode candidate : recoveryCodeRepository.findAllByUserIdAndUsedAtIsNull(user.getId())) {
             if (passwordEncoder.matches(normalized, candidate.getCodeHash())) {
-                candidate.setUsedAt(OffsetDateTime.now(clock));
-                recoveryCodeRepository.save(candidate);
+                // bcrypt só identifica o hash; o UPDATE condicional decide o
+                // uso único quando duas abas chegam ao mesmo tempo.
+                if (recoveryCodeRepository.consumeIfUnused(candidate.getId(), OffsetDateTime.now(clock)) != 1) {
+                    continue;
+                }
                 log.info("Entrada por código de recuperação para user={} — restam {}",
                         user.getId(),
                         recoveryCodeRepository.countByUserIdAndUsedAtIsNull(user.getId()));
