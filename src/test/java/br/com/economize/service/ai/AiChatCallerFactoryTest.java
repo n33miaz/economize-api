@@ -235,6 +235,17 @@ class AiChatCallerFactoryTest {
         assertThat(stored.getModel()).isEqualTo("gemini-2.0-flash");
     }
 
+    @Test
+    @DisplayName("Modelo fora do catálogo mas não aposentado (claude-sonnet-4-5) segue sendo usado")
+    void shouldKeepSavedModelThatIsOnlyOffTheList() {
+        SecretCipher cipher = new SecretCipher(KEY_1, "k1", "");
+        AiChatCallerFactory factory = factory(cipher);
+
+        AiCallTarget alvo = factory.targetFor(user, settingsWith(cipher, AiProvider.ANTHROPIC, "claude-sonnet-4-5"));
+
+        assertThat(alvo.model()).isEqualTo("claude-sonnet-4-5");
+    }
+
     /**
      * Monta a exceção pelo MESMO {@code ResponseErrorHandler} que o Spring AI
      * pluga no RestClient em produção: se o formato da mensagem mudar numa

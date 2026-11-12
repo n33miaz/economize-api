@@ -141,11 +141,11 @@ public class AiChatCallerFactory {
                             + "Cadastre a chave novamente nas opções de IA.");
         }
         AiProviderProperties.ProviderConfig config = properties.get(settings.getProvider());
-        // modelo que saiu do catálogo (aposentado pelo provedor) cai no padrão
+        // modelo APOSENTADO pelo provedor (lista retired-models) cai no padrão
         // em vez de render 404 em todo chat — ver ProviderConfig.modelOrDefault
         String model = config.modelOrDefault(settings.getModel());
         if (!model.equals(settings.getModel())) {
-            log.warn("Modelo de IA salvo fora do catálogo: provedor={} salvo={} usando={}",
+            log.warn("Modelo de IA salvo está aposentado: provedor={} salvo={} usando={}",
                     settings.getProvider(), settings.getModel(), model);
         }
         return new AiCallTarget(settings.getProvider(), model,
