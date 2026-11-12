@@ -1004,6 +1004,47 @@
         },
         "type": "object"
       },
+      "ConnectionInfoResponse": {
+        "properties": {
+          "cfConnectingIp": {
+            "type": "string"
+          },
+          "forwarded": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "forwardedFor": {
+            "items": {
+              "$ref": "#/components/schemas/Hop"
+            },
+            "type": "array"
+          },
+          "realIp": {
+            "type": "string"
+          },
+          "remoteAddress": {
+            "type": "string"
+          },
+          "remoteAddressKind": {
+            "enum": [
+              "INTERNAL",
+              "CLOUDFLARE",
+              "PUBLIC",
+              "UNREADABLE"
+            ],
+            "type": "string"
+          },
+          "resolvedClientIp": {
+            "type": "string"
+          },
+          "trueClientIp": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "ConnectionResponse": {
         "properties": {
           "connectorId": {
@@ -1923,6 +1964,23 @@
             "type": "number"
           },
           "timestamp": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "Hop": {
+        "properties": {
+          "address": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "INTERNAL",
+              "CLOUDFLARE",
+              "PUBLIC",
+              "UNREADABLE"
+            ],
             "type": "string"
           }
         },
@@ -10133,6 +10191,28 @@
           }
         },
         "summary": "Alterar senha do usuário autenticado",
+        "tags": [
+          "Usuário"
+        ]
+      }
+    },
+    "/api/v1/users/me/connection": {
+      "get": {
+        "description": "Diagnóstico, só leitura: saltos do X-Forwarded-For na ordem e classificados (interno, Cloudflare, público), CF-Connecting-IP, True-Client-IP, X-Real-IP, Forwarded, o endereço do soquete e o IP que o resolvedor escolheu. Serve para conferir o IP enxergado depois de mudança de hospedagem.",
+        "operationId": "connection",
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectionInfoResponse"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "summary": "Como a API enxergou a conexão desta requisição",
         "tags": [
           "Usuário"
         ]

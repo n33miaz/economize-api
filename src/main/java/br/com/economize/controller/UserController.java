@@ -1,6 +1,8 @@
 package br.com.economize.controller;
 
+import br.com.economize.config.ClientIpResolver;
 import br.com.economize.dto.user.ChangePasswordRequest;
+import br.com.economize.dto.user.ConnectionInfoResponse;
 import br.com.economize.dto.user.UpdateUserRequest;
 import br.com.economize.dto.user.UserMeResponse;
 import br.com.economize.dto.user.UserStatsResponse;
@@ -14,12 +16,18 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.server.reactive.ServerHttpRequest;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.util.Arrays;
+import java.util.List;
 import java.util.UUID;
 
 @RestController
@@ -56,6 +64,40 @@ public class UserController {
                     transactionRepository.countByUserId(userId),
                     reportRepository.countByUserId(userId));
         }).subscribeOn(Schedulers.boundedElastic());
+    }
+
+    // Diagnóstico: conferir o IP enxergado depois de qualquer mudança de
+    // hospedagem. O limite de login é por IP, e quem decide qual salto é o
+    // cliente é o ClientIpResolver; esta rota mostra a cadeia real que chegou
+    // e o que ele escolheu, para não adivinhar. Só cabeçalhos de
+    // encaminhamento são lidos: nenhum outro (Authorization, Cookie) sai daqui
+    @Operation(summary = "Como a API enxergou a conexão desta requisição",
+            description = "Diagnóstico, só leitura: saltos do X-Forwarded-For na ordem e classificados "
+                    + "(interno, Cloudflare, público), CF-Connecting-IP, "
+                    + "True-Client-IP, X-Real-IP, Forwarded, o endereço do soquete e o IP que o resolvedor "
+                    + "escolheu. Serve para conferir o IP enxergado depois de mudança de hospedagem.")
+    @GetMapping("/me/connection")
+    public Mono<ConnectionInfoResponse> connection(ServerHttpRequest request) {
+        HttpHeaders headers = request.getHeaders();
+        // mesma junção do resolvedor: várias linhas do cabeçalho formam uma cadeia só
+        // a classificação vem do próprio resolvedor, para o diagnóstico nunca discordar dele
+        List<ConnectionInfoResponse.Hop> hops = Arrays
+                .stream(String.join(",", headers.getOrEmpty("X-Forwarded-For")).split(","))
+                .map(String::trim)
+                .filter(hop -> !hop.isEmpty())
+                .map(hop -> new ConnectionInfoResponse.Hop(hop, ClientIpResolver.classify(hop)))
+                .toList();
+        InetSocketAddress remote = request.getRemoteAddress();
+        InetAddress socket = remote == null ? null : remote.getAddress();
+        return Mono.just(new ConnectionInfoResponse(
+                hops,
+                headers.getFirst("CF-Connecting-IP"),
+                headers.getFirst("True-Client-IP"),
+                headers.getFirst("X-Real-IP"),
+                headers.getOrEmpty("Forwarded"),
+                socket == null ? null : socket.getHostAddress(),
+                socket == null ? null : ClientIpResolver.classify(socket),
+                ClientIpResolver.resolve(request)));
     }
 
     @Operation(summary = "Atualizar nome do usuário")
