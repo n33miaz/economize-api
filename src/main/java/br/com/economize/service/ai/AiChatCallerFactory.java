@@ -195,6 +195,18 @@ public class AiChatCallerFactory {
                 // do provedor, não erro nosso — sem isto escapava como 500
                 // genérico. Vem DEPOIS de ResourceAccessException, que também é
                 // RestClientException e tem a mensagem própria de rede
+                // Tempo esgotado no MEIO da leitura do corpo chega embrulhado como
+                // erro de conversão (HttpMessageNotReadableException com um
+                // SocketTimeoutException dentro), não como ResourceAccessException.
+                // Era o caso de produção em 13/11: dizer "formato inesperado"
+                // mandava procurar o problema no lugar errado
+                if (org.springframework.core.NestedExceptionUtils.getMostSpecificCause(e)
+                        instanceof java.net.SocketTimeoutException) {
+                    log.warn("Provedor de IA do servidor demorou além do teto de leitura ({})",
+                            e.getClass().getSimpleName());
+                    throw new AiProviderException(AiProviderException.Reason.NETWORK,
+                            "O provedor de IA demorou demais para responder. Tente de novo.");
+                }
                 log.warn("Provedor de IA do servidor respondeu fora do contrato ({})",
                         e.getClass().getSimpleName());
                 throw new AiProviderException(AiProviderException.Reason.PROVIDER,

@@ -56,4 +56,24 @@ class AiServerModelPropertyTest {
 
         assertThat(env.resolvePlaceholders(rawValue())).isEqualTo("gemini-3.1-flash-lite");
     }
+
+    @Test
+    @DisplayName("O raciocínio do servidor é 'low' por padrão e muda pelo painel")
+    void reasoningEffortDefaultsToLow() throws Exception {
+        Properties props = new Properties();
+        try (InputStream in = Files.newInputStream(Path.of("src/main/resources/application.properties"))) {
+            props.load(new InputStreamReader(in, StandardCharsets.UTF_8));
+        }
+        String raw = props.getProperty("spring.ai.openai.chat.options.reasoning-effort");
+
+        StandardEnvironment semPainel = new StandardEnvironment();
+        semPainel.getPropertySources().remove(StandardEnvironment.SYSTEM_ENVIRONMENT_PROPERTY_SOURCE_NAME);
+        semPainel.getPropertySources().remove(StandardEnvironment.SYSTEM_PROPERTIES_PROPERTY_SOURCE_NAME);
+        assertThat(semPainel.resolvePlaceholders(raw)).isEqualTo("low");
+
+        StandardEnvironment comPainel = new StandardEnvironment();
+        comPainel.getPropertySources().addFirst(new MapPropertySource("painel",
+                Map.of("AI_SERVER_REASONING_EFFORT", "medium")));
+        assertThat(comPainel.resolvePlaceholders(raw)).isEqualTo("medium");
+    }
 }

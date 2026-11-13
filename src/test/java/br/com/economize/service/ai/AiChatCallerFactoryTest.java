@@ -287,6 +287,17 @@ class AiChatCallerFactoryTest {
     }
 
     @Test
+    @DisplayName("Tempo esgotado no meio da leitura vira NETWORK, não 'formato inesperado'")
+    void serverReadTimeoutShouldBeNetwork() {
+        AiProviderException erro = serverFailure(
+                new org.springframework.http.converter.HttpMessageNotReadableException("I/O error",
+                        new java.net.SocketTimeoutException("Read timed out"),
+                        mock(org.springframework.http.HttpInputMessage.class)));
+        assertThat(erro.getReason()).isEqualTo(AiProviderException.Reason.NETWORK);
+        assertThat(erro.getMessage()).contains("demorou");
+    }
+
+    @Test
     @DisplayName("Resposta fora do contrato (HTML de proxy, JSON quebrado) vira PROVIDER, não 500")
     void serverUnparseableReplyShouldBeClassified() {
         AiProviderException html = serverFailure(new org.springframework.web.client.UnknownContentTypeException(
