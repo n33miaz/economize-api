@@ -108,7 +108,7 @@ class AccountPrivacyIntegrationTest {
         assertThat(lancamentos).startsWith("﻿").contains(";").contains("PADARIA-DO-TITULAR")
                 .doesNotContain("SEGREDO-DE-OUTRA-PESSOA");
         // valor numérico sai com ponto decimal e sem apóstrofo de fórmula
-        assertThat(lancamentos).contains(";-12.5000;");
+        assertThat(lancamentos).contains("-12.5000;").doesNotContain("'-12.5");
         assertThat(files.get("perfil.csv")).contains(me.getEmail()).doesNotContain(other.getEmail());
         assertThat(files.get("seguranca_2fa.csv")).contains("enabled").doesNotContain("secret_cipher");
         assertThat(files.get("chaves_integracao.csv")).contains("Atalho").doesNotContain("key_hash");
