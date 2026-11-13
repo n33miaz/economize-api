@@ -5,6 +5,8 @@ import br.com.economize.repository.UserRepository;
 import br.com.economize.service.RefundReconciliationService;
 import br.com.economize.service.StatementImportWriter;
 import br.com.economize.service.WatchmanService;
+import br.com.economize.service.privacy.AccountDataEraser;
+import br.com.economize.service.privacy.SchemaTables;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Tag;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -72,7 +74,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 @DataJpaTest
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
 @Transactional(propagation = Propagation.NOT_SUPPORTED)
-@Import({StatementImportWriter.class, RefundReconciliationService.class, WatchmanService.class})
+@Import({StatementImportWriter.class, RefundReconciliationService.class, WatchmanService.class,
+        AccountDataEraser.class, SchemaTables.class})
 public abstract class PostgresIntegrationBase {
 
     /** Teto de espera de qualquer passo concorrente: trava errada falha, não pendura a JVM. */
