@@ -20,6 +20,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -1083,6 +1084,46 @@ class PluggySyncServiceTest {
         assertThat(recusado.getUpdateRequestedAt()).isNotNull();
         verify(pluggyClient, never()).accounts(anyString(), anyString());
         verify(bankStatementService, never()).importFromConnector(any(), any(StatementFormat.class), anyList(), anyMap());
+    }
+
+    @Test
+    @DisplayName("UPDATED velho nao apaga reconexao pendente nem pede outra coleta")
+    void oldProviderSnapshotKeepsNeedsUserAction() {
+        PluggyItem pendente = item("item-pendente", "Banco Pendente");
+        pendente.setStatus("NEEDS_USER_ACTION");
+        pendente.setUpdateRequestedAt(OffsetDateTime.now().minusHours(7));
+        pendente.setProviderUpdatedAt(OffsetDateTime.now().minusDays(2));
+        stubAuth(List.of(pendente));
+        when(pluggyClient.item("api-key", "item-pendente")).thenReturn(Map.of(
+                "status", "UPDATED", "lastUpdatedAt", OffsetDateTime.now().minusDays(2).toString()));
+
+        assertThatThrownBy(() -> service.sync(EMAIL, 90))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Banco Pendente");
+
+        assertThat(pendente.getStatus()).isEqualTo("NEEDS_USER_ACTION");
+        verify(pluggyClient, never()).requestUpdate("api-key", "item-pendente");
+        verify(pluggyClient, never()).accounts("api-key", "item-pendente");
+    }
+
+    @Test
+    @DisplayName("coleta posterior ao pedido recusado libera a conexao para leitura")
+    void newProviderCollectionClearsNeedsUserAction() {
+        PluggyItem reconectado = item("item-reconectado", "Banco Reconectado");
+        OffsetDateTime pedido = OffsetDateTime.now().minusMinutes(2);
+        reconectado.setStatus("NEEDS_USER_ACTION");
+        reconectado.setUpdateRequestedAt(pedido);
+        stubAuth(List.of(reconectado));
+        when(pluggyClient.item("api-key", "item-reconectado")).thenReturn(Map.of(
+                "status", "UPDATED", "lastUpdatedAt", OffsetDateTime.now().minusMinutes(1).toString()));
+        stubBankAccount("item-reconectado", "acc-reconectado");
+        stubImport();
+
+        PluggySyncService.SyncResult sync = service.sync(EMAIL, 90);
+
+        assertThat(reconectado.getStatus()).isEqualTo("UPDATED");
+        assertThat(sync.itemsSynced()).isEqualTo(1);
+        verify(pluggyClient, never()).requestUpdate("api-key", "item-reconectado");
     }
 
     @Test
