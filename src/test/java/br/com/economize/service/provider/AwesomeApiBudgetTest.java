@@ -92,6 +92,28 @@ class AwesomeApiBudgetTest {
     }
 
     @Test
+    @DisplayName("Gravação nunca diminui o contador do banco: vale o maior entre o gravado e o local")
+    void writeMustNotLowerPersistedUsage() {
+        // a instância velha, que seguiu contando depois do boot da nova, já
+        // gravou 10 ao desligar; a nova só viu 3
+        String key = "data:budget:awesome:2026-11-12";
+        when(repository.findById(key)).thenReturn(Optional.of(new MarketSnapshot(key,
+                "{\"used\":10,\"historicalUsed\":1}", OffsetDateTime.ofInstant(NOW, ZoneOffset.UTC), "budget")));
+        when(repository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
+        BudgetUsageStore usage = new BudgetUsageStore(repository, new ObjectMapper(), new MutableClock(NOW),
+                Duration.ofHours(1));
+
+        usage.write("awesome", new BudgetUsageStore.Usage(java.time.LocalDate.of(2026, 11, 12),
+                java.util.Map.of("used", 3, "historicalUsed", 2)));
+
+        ArgumentCaptor<MarketSnapshot> saved = ArgumentCaptor.forClass(MarketSnapshot.class);
+        verify(repository).save(saved.capture());
+        String json = saved.getValue().getPayload();
+        assertTrue(json.contains("\"used\":10"), "o 10 do banco não pode virar 3: " + json);
+        assertTrue(json.contains("\"historicalUsed\":2"), "o local maior também vence: " + json);
+    }
+
+    @Test
     @DisplayName("Rajada de chamadas vira UMA gravação, com o valor do fim da rajada")
     void burstShouldCoalesceIntoOneWrite() {
         when(repository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));

@@ -15,6 +15,7 @@ import java.time.Duration;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -136,13 +137,22 @@ public class BudgetUsageStore {
                 });
     }
 
-    /** Grava agora, de forma síncrona — é o caminho do desligamento. */
+    /**
+     * Grava agora, de forma síncrona — é o caminho do desligamento. Cada
+     * contador vai pelo MAIOR entre o do banco e o local: numa publicação a
+     * instância nova lê o uso no boot enquanto a velha ainda conta, a velha
+     * grava ao desligar, e a nova, gravando por cima o número dela (menor),
+     * apagaria o que a velha gastou depois do boot da nova. Contador de uso só
+     * cresce dentro do dia, então o máximo nunca está errado para mais.
+     */
     public void write(String provider, Usage usage) {
         if (repository == null || usage == null) {
             return;
         }
         try {
-            String json = mapper.writeValueAsString(usage.counters());
+            Map<String, Integer> merged = new HashMap<>(load(provider, usage.day()));
+            usage.counters().forEach((name, value) -> merged.merge(name, value, Math::max));
+            String json = mapper.writeValueAsString(merged);
             repository.save(new MarketSnapshot(key(provider, usage.day()), json,
                     OffsetDateTime.now(clock.withZone(ZoneOffset.UTC)), SOURCE));
         } catch (Exception e) {
