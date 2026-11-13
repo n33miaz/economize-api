@@ -20,18 +20,21 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
+import org.springframework.web.reactive.function.client.WebClientException;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
-import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
+import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.UUID;
 
@@ -70,20 +73,27 @@ public class InvestmentService {
     private final InvestmentMovementService movementService;
     // presente só com economize.pluggy.enabled=true
     private final ObjectProvider<PluggyClient> pluggyClient;
+    private final ExchangeRateLookup exchangeRates;
     private final int maxManualPositions;
+    // "Hoje" na zona financeira (FinancialClockConfig), não na do servidor
+    private final java.time.Clock clock;
 
     public InvestmentService(InvestmentPositionRepository positionRepository,
                              PluggyItemRepository pluggyItemRepository,
                              UserRepository userRepository,
                              InvestmentMovementService movementService,
                              ObjectProvider<PluggyClient> pluggyClient,
-                             @Value("${economize.investments.max-manual-positions:200}") int maxManualPositions) {
+                             ExchangeRateLookup exchangeRates,
+                             @Value("${economize.investments.max-manual-positions:200}") int maxManualPositions,
+                             java.time.Clock clock) {
         this.positionRepository = positionRepository;
         this.pluggyItemRepository = pluggyItemRepository;
         this.userRepository = userRepository;
         this.movementService = movementService;
         this.pluggyClient = pluggyClient;
+        this.exchangeRates = exchangeRates;
         this.maxManualPositions = maxManualPositions;
+        this.clock = clock;
     }
 
     // ------------------------------------------------------------------ sync
@@ -107,21 +117,31 @@ public class InvestmentService {
                     "Nenhuma conexão Pluggy registrada — conecte uma instituição pelo app antes de sincronizar");
         }
 
-        String apiKey = client.authenticate();
         int created = 0, updated = 0, itemsRead = 0, skippedItems = 0, skippedPositions = 0;
-        WebClientResponseException lastFailure = null;
+        WebClientException lastFailure = null;
+        String apiKey;
+        try {
+            apiKey = client.authenticate();
+        } catch (WebClientException e) {
+            // Sem autenticação não há item consultável; contar todos como
+            // pulados preserva o contrato parcial em vez de abortar o sync.
+            log.warn("Pluggy indisponível ao autenticar investimentos; {} conexão(ões) pulada(s)", items.size());
+            return new InvestmentResponses.SyncResult(0, 0, 0, 0, items.size(), 0);
+        }
 
         for (PluggyItem item : items) {
             List<Map<String, Object>> raw;
             try {
                 raw = client.investments(apiKey, item.getItemId());
-            } catch (WebClientResponseException e) {
+            } catch (WebClientException e) {
                 // uma conexão quebrada (credencial expirada, MFA pendente) não
                 // pode impedir as outras de sincronizar; nada dela é apagado
                 skippedItems++;
                 lastFailure = e;
-                log.warn("Pluggy recusou a leitura de investimentos de uma conexão (conector=\"{}\", status={}); "
-                        + "as demais seguem", item.getConnectorName(), e.getStatusCode().value());
+                String detail = e instanceof WebClientResponseException response
+                        ? "status=" + response.getStatusCode().value() : "falha de conexão";
+                log.warn("Pluggy não leu investimentos de uma conexão (conector=\"{}\", {}); as demais seguem",
+                        item.getConnectorName(), detail);
                 continue;
             }
             itemsRead++;
@@ -142,8 +162,8 @@ public class InvestmentService {
 
         if (itemsRead == 0 && lastFailure != null) {
             // TODAS as conexões falharam: aí não é "uma conexão ruim", é o
-            // provedor fora ou credencial da aplicação errada — o 502 do handler
-            // é a resposta honesta, com o motivo em log
+            // provedor fora ou credencial da aplicação errada — o handler responde
+            // 502 (o provedor respondeu erro) ou 503 (nem respondeu), motivo em log
             throw lastFailure;
         }
         log.info("Sync de investimentos: {} criadas, {} atualizadas em {} conexão(ões) para user={}",
@@ -192,7 +212,7 @@ public class InvestmentService {
      * "Banco Inter" é onde ele vê o CDB, mesmo que o emissor seja outro banco.
      * O emissor entra só como rede, quando o conector não tem nome.
      */
-    private static void apply(InvestmentPosition p, PluggyItem item, PluggyInvestmentMapper.Mapped m) {
+    private void apply(InvestmentPosition p, PluggyItem item, PluggyInvestmentMapper.Mapped m) {
         p.setPluggyItemId(item.getId());
         String institution = item.getConnectorName() != null ? item.getConnectorName() : m.issuer();
         p.setInstitution(truncate(institution, INSTITUTION_MAX));
@@ -209,14 +229,14 @@ public class InvestmentService {
         p.setCurrentValue(m.currentValue());
         p.setMaturityDate(m.maturityDate());
         // sem data no provedor, a posição é "de hoje": foi lida agora
-        p.setPositionDate(m.positionDate() != null ? m.positionDate() : LocalDate.now(ZoneOffset.UTC));
+        p.setPositionDate(m.positionDate() != null ? m.positionDate() : LocalDate.now(clock));
     }
 
     // -------------------------------------------------------------- posições
 
     public List<InvestmentResponses.PositionItem> list(String email) {
         User user = requireUser(email);
-        LocalDate today = LocalDate.now(ZoneOffset.UTC);
+        LocalDate today = LocalDate.now(clock);
         return positionRepository.findAllByUserIdOrderByNameAsc(user.getId()).stream()
                 .map(p -> InvestmentResponses.PositionItem.from(p, isStale(p, today)))
                 .toList();
@@ -298,8 +318,20 @@ public class InvestmentService {
     // ---------------------------------------------------------------- resumo
 
     public InvestmentResponses.Summary summary(String email) {
+        return summary(email, true);
+    }
+
+    /**
+     * Contexto da IA precisa do patrimônio atual, não dos movimentos. Reutiliza
+     * exatamente a conta do painel sem ler transações antigas só para descartá-las.
+     */
+    public InvestmentResponses.Summary summaryForAssistant(String email) {
+        return summary(email, false);
+    }
+
+    private InvestmentResponses.Summary summary(String email, boolean includeMovements) {
         User user = requireUser(email);
-        LocalDate today = LocalDate.now(ZoneOffset.UTC);
+        LocalDate today = LocalDate.now(clock);
         List<InvestmentPosition> positions = positionRepository.findAllByUserIdOrderByNameAsc(user.getId());
 
         BigDecimal totalInvested = BigDecimal.ZERO;
@@ -315,6 +347,12 @@ public class InvestmentService {
         LinkedHashMap<String, BigDecimal> byInstitution = new LinkedHashMap<>();
         LinkedHashMap<String, BigDecimal> byIndexer = new LinkedHashMap<>();
         TreeSet<Source> sources = new TreeSet<>();
+        List<InvestmentResponses.UnconvertedPosition> unconverted = new ArrayList<>();
+        // câmbio por moeda, consultado no máximo UMA vez por resumo e só se
+        // alguma posição precisar: carteira toda em reais não paga a consulta
+        Map<String, Optional<ExchangeRateLookup.Rate>> rates = new HashMap<>();
+        // as cotações que de fato converteram alguma coisa, em ordem estável
+        TreeMap<String, ExchangeRateLookup.Rate> usedRates = new TreeMap<>();
 
         for (InvestmentPosition p : positions) {
             sources.add(p.getSource());
@@ -322,24 +360,60 @@ public class InvestmentService {
             if (p.getUpdatedAt() != null && (updatedAt == null || p.getUpdatedAt().isAfter(updatedAt))) {
                 updatedAt = p.getUpdatedAt();
             }
-            if (p.getInvestedAmount() != null) totalInvested = totalInvested.add(p.getInvestedAmount());
-            if (p.getCurrentValue() == null) {
-                if (p.getCode() != null) needsQuote.add(p.getCode());
-                continue;
+            if (p.getCurrentValue() == null && p.getCode() != null) needsQuote.add(p.getCode());
+
+            // Os valores da posição estão na moeda DELA (o provedor devolve a
+            // conta da corretora americana em dólar; a manual em USD é digitada
+            // em dólar). Somá-los direto contava US$ 120 como R$ 120 no
+            // patrimônio e no lucro. Aqui todo valor vira real antes de entrar
+            // em QUALQUER total — aplicado, atual, lucro e as três fatias —
+            // para os números continuarem fechando entre si.
+            BigDecimal rate = BigDecimal.ONE;
+            if (isForeign(p)) {
+                String currency = p.getCurrency().trim().toUpperCase(Locale.ROOT);
+                ExchangeRateLookup.Rate found = rates.computeIfAbsent(currency, exchangeRates::rate)
+                        .orElse(null);
+                if (found == null) {
+                    // Sem cotação não existe valor em reais, e inventar um
+                    // (ou usar 1) é o defeito original. A posição sai de TODOS
+                    // os totais e vai declarada, na moeda de origem, para o
+                    // app dizer que o patrimônio está incompleto.
+                    // Um aviso só por posição: a que nem valor atual tem já
+                    // está em needsQuote (é por lá que o app busca a cotação
+                    // do papel e completa o total) e não se repete aqui
+                    boolean jaAvisada = p.getCurrentValue() == null && p.getCode() != null;
+                    if (!jaAvisada) {
+                        unconverted.add(new InvestmentResponses.UnconvertedPosition(p.getId(), p.getName(),
+                                p.getCode(), p.getCurrency(), p.getInvestedAmount(), p.getCurrentValue()));
+                    }
+                    continue;
+                }
+                rate = found.value();
+                if (p.getInvestedAmount() != null || p.getCurrentValue() != null) {
+                    usedRates.put(currency, found);
+                }
             }
+            BigDecimal invested = toBrl(p.getInvestedAmount(), rate);
+            BigDecimal current = toBrl(p.getCurrentValue(), rate);
+
+            if (invested != null) totalInvested = totalInvested.add(invested);
+            if (current == null) continue;
             priced++;
-            currentValue = currentValue.add(p.getCurrentValue());
-            byType.merge(p.getType().name(), p.getCurrentValue(), BigDecimal::add);
+            currentValue = currentValue.add(current);
+            byType.merge(p.getType().name(), current, BigDecimal::add);
             byInstitution.merge(p.getInstitution() != null ? p.getInstitution() : "Não informada",
-                    p.getCurrentValue(), BigDecimal::add);
+                    current, BigDecimal::add);
             byIndexer.merge(p.getIndexer() != null ? p.getIndexer().name() : Indexer.NONE.name(),
-                    p.getCurrentValue(), BigDecimal::add);
-            if (p.getInvestedAmount() != null) {
+                    current, BigDecimal::add);
+            if (invested != null) {
                 // lucro só onde os DOIS lados são conhecidos: somar o aplicado
-                // da ETF sem cotação faria o total parecer um prejuízo
+                // da ETF sem cotação faria o total parecer um prejuízo.
+                // Na estrangeira os dois lados usam o câmbio de HOJE: o lucro
+                // é o do papel, sem a variação do dólar desde a compra — o
+                // câmbio do dia da aplicação não é guardado em lugar nenhum
                 pairs++;
-                pricedInvested = pricedInvested.add(p.getInvestedAmount());
-                profit = profit.add(p.getCurrentValue().subtract(p.getInvestedAmount()));
+                pricedInvested = pricedInvested.add(invested);
+                profit = profit.add(current.subtract(invested));
             }
         }
 
@@ -347,8 +421,16 @@ public class InvestmentService {
                 ? profit.multiply(BigDecimal.valueOf(100)).divide(pricedInvested, 2, RoundingMode.HALF_UP)
                 : null;
 
-        InvestmentResponses.Movements movements = movementService.movements(user, 12);
-        InvestmentResponses.MovementTotals totals = movements.totals();
+        InvestmentResponses.MovementTotals12m movements12m;
+        if (includeMovements) {
+            InvestmentResponses.Movements movements = movementService.movements(user, 12);
+            InvestmentResponses.MovementTotals totals = movements.totals();
+            movements12m = new InvestmentResponses.MovementTotals12m(totals.applied(), totals.redeemed(),
+                    totals.yield(), movements.netInvested());
+        } else {
+            movements12m = new InvestmentResponses.MovementTotals12m(BigDecimal.ZERO, BigDecimal.ZERO,
+                    BigDecimal.ZERO, BigDecimal.ZERO);
+        }
 
         return new InvestmentResponses.Summary(
                 totalInvested,
@@ -364,9 +446,30 @@ public class InvestmentService {
                 updatedAt,
                 stale,
                 sources.stream().map(Enum::name).toList(),
-                new InvestmentResponses.MovementTotals12m(totals.applied(), totals.redeemed(), totals.yield(),
-                        movements.netInvested()),
-                new ArrayList<>(needsQuote));
+                movements12m,
+                new ArrayList<>(needsQuote),
+                unconverted,
+                usedRates.entrySet().stream()
+                        .map(e -> new InvestmentResponses.ExchangeRateUsed(e.getKey(), e.getValue().value(),
+                                e.getValue().asOf(), e.getValue().stale()))
+                        .toList());
+    }
+
+    /** Moeda ausente é real: é o default do modelo e o que toda linha antiga tem. */
+    private static boolean isForeign(InvestmentPosition p) {
+        String currency = p.getCurrency();
+        return currency != null && !currency.isBlank() && !"BRL".equalsIgnoreCase(currency.trim());
+    }
+
+    /**
+     * Valor em reais. O real passa INTACTO (sem multiplicar nem arredondar,
+     * para a carteira em reais sair exatamente como saía); o convertido fica
+     * com centavos, como a cotação em reais do {@code ForeignQuoteService}.
+     */
+    private static BigDecimal toBrl(BigDecimal amount, BigDecimal rate) {
+        if (amount == null) return null;
+        if (BigDecimal.ONE.equals(rate)) return amount;
+        return amount.multiply(rate).setScale(2, RoundingMode.HALF_UP);
     }
 
     private interface SliceFactory<T> {

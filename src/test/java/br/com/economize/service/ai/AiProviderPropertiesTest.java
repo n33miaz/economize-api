@@ -107,7 +107,8 @@ class AiProviderPropertiesTest {
                 .get(AiProvider.GEMINI);
 
         assertThat(gemini.endpoint()).isEqualTo("https://proxy.interno/chat/completions");
-        assertThat(gemini.models()).containsExactly("gemini-2.0-flash", "gemini-2.5-flash", "gemini-2.5-pro");
+        assertThat(gemini.models()).containsExactly("gemini-3.5-flash", "gemini-3.1-flash-lite",
+                "gemini-flash-latest", "gemini-pro-latest");
         assertThat(gemini.label()).isEqualTo("Google Gemini");
     }
 
@@ -192,6 +193,43 @@ class AiProviderPropertiesTest {
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("economize.ai.providers.openai.models")
                 .hasMessageContaining("extra-models");
+    }
+
+    @Test
+    @DisplayName("Aposentado cai no padrão; fora da lista mas não aposentado segue sendo usado")
+    void onlyRetiredModelsFallBackToDefault() {
+        AiProviderProperties properties = new AiProviderProperties();
+        AiProviderProperties.ProviderConfig gemini = properties.get(AiProvider.GEMINI);
+        AiProviderProperties.ProviderConfig anthropic = properties.get(AiProvider.ANTHROPIC);
+
+        assertThat(gemini.retiredModels()).containsExactly("gemini-2.0-flash");
+        assertThat(gemini.modelOrDefault("gemini-2.0-flash")).isEqualTo("gemini-3.5-flash");
+        assertThat(gemini.modelOrDefault("gemini-2.5-pro")).isEqualTo("gemini-2.5-pro");
+        // tirado da lista só para novas escolhas, não aposentado: quem o salvou
+        // continua nele, sem rebaixamento silencioso para o haiku
+        assertThat(anthropic.models()).doesNotContain("claude-sonnet-4-5");
+        assertThat(anthropic.modelOrDefault("claude-sonnet-4-5")).isEqualTo("claude-sonnet-4-5");
+    }
+
+    @Test
+    @DisplayName("retired-models acrescenta aos aposentados sem tocar no resto do provedor")
+    void retiredModelsAppends() {
+        AiProviderProperties.ProviderConfig anthropic = bound(
+                "economize.ai.providers.anthropic.retired-models", "claude-opus-4-1").get(AiProvider.ANTHROPIC);
+
+        assertThat(anthropic.retiredModels()).containsExactly("claude-opus-4-1");
+        assertThat(anthropic.modelOrDefault("claude-opus-4-1")).isEqualTo("claude-haiku-4-5");
+        assertThat(anthropic.maxTokens()).isEqualTo(4096);
+        assertThat(bound("economize.ai.providers.gemini.retired-models", "gemini-1.5-flash")
+                .get(AiProvider.GEMINI).retiredModels()).containsExactly("gemini-2.0-flash", "gemini-1.5-flash");
+    }
+
+    @Test
+    @DisplayName("Aposentar o próprio modelo padrão é erro de boot")
+    void retiringTheDefaultModelFails() {
+        assertThatThrownBy(() -> bound("economize.ai.providers.gemini.retired-models", "gemini-3.5-flash"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("economize.ai.providers.gemini.retired-models");
     }
 
     @Test

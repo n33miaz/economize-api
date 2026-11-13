@@ -1,5 +1,7 @@
 package br.com.economize.service;
 
+import br.com.economize.config.StatementImportProperties;
+import br.com.economize.exception.PayloadTooLargeException;
 import br.com.economize.model.BankTransaction;
 import br.com.economize.model.StatementUpload;
 import br.com.economize.model.User;
@@ -27,6 +29,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.core.io.buffer.DataBuffer;
 import org.springframework.core.io.buffer.DefaultDataBufferFactory;
+import org.springframework.util.unit.DataSize;
 import org.springframework.http.codec.multipart.FilePart;
 import reactor.core.publisher.Flux;
 
@@ -34,7 +37,6 @@ import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -96,6 +98,8 @@ class BankStatementImportPathsTest {
     private StatementParserStrategy parser;
 
     private BankStatementService service;
+    // tetos minúsculos nos testes de limite; os demais usam os padrões
+    private final StatementImportProperties limits = new StatementImportProperties();
     private User user;
 
     @BeforeEach
@@ -105,10 +109,10 @@ class BankStatementImportPathsTest {
         ObjectProvider<AiCategorySuggester> aiSuggester = mock(ObjectProvider.class);
         service = new BankStatementService(bankTransactionRepository, statementUploadRepository,
                 userRepository, parserFactory, categorizationEngine, categoryRepository,
-                importWriter, accountService, eventPublisher, aiSuggester);
+                importWriter, accountService, eventPublisher, aiSuggester,
+                limits);
 
         lenient().when(categorizationEngine.contextFor(user.getId())).thenReturn(context);
-        lenient().when(context.getDirtyRules()).thenReturn(new HashSet<>());
         lenient().when(categorizationEngine.categorize(eq(context), anyString(), anyString(), anyBoolean()))
                 .thenAnswer(inv -> new CategorizationEngine.Result(
                         null, null, null, DescriptionNormalizer.normalize(inv.getArgument(1))));
@@ -220,6 +224,73 @@ class BankStatementImportPathsTest {
         verify(parserFactory).resolve(StatementFormat.OFX);
         assertThat(resultado.format()).isEqualTo("OFX");
         assertThat(resultado.duplicated()).isFalse();
+    }
+
+    // ------------------------------------------------------- tetos do arquivo
+
+    /**
+     * O mesmo arquivo em vários pedaços, como chega da rede: o teto tem de
+     * valer para a SOMA, e o corte acontece no meio da junção.
+     */
+    private FilePart arquivoEmPedacos(String nome, int tamanho, int pedaco) {
+        FilePart part = mock(FilePart.class);
+        DefaultDataBufferFactory factory = new DefaultDataBufferFactory();
+        List<DataBuffer> buffers = new ArrayList<>();
+        for (int i = 0; i < tamanho; i += pedaco) {
+            buffers.add(factory.wrap(new byte[Math.min(pedaco, tamanho - i)]));
+        }
+        lenient().when(part.filename()).thenReturn(nome);
+        lenient().when(part.content()).thenReturn(Flux.fromIterable(buffers));
+        return part;
+    }
+
+    @Test
+    @DisplayName("Arquivo acima do teto é recusado com 413 ao juntar os bytes, sem chamar o parser")
+    void acimaDoTetoNaoChegaAoParser() {
+        limits.setMaxUploadSize(DataSize.ofBytes(1024));
+        when(userRepository.findByEmail(EMAIL)).thenReturn(Optional.of(user));
+
+        assertThatThrownBy(() -> service.processFile(EMAIL, arquivoEmPedacos("grande.ofx", 1025, 100)).block())
+                .isInstanceOf(PayloadTooLargeException.class)
+                .hasMessageContaining("passa do limite de");
+
+        verify(parserFactory, never()).resolve(any());
+        verify(statementUploadRepository, never()).findByUserIdAndFileHash(any(), anyString());
+    }
+
+    @Test
+    @DisplayName("Arquivo exatamente no teto passa")
+    void exatamenteNoTetoPassa() {
+        limits.setMaxUploadSize(DataSize.ofBytes(1024));
+        when(statementUploadRepository.findByUserIdAndFileHash(eq(user.getId()), anyString()))
+                .thenReturn(Optional.empty());
+        when(parserFactory.resolve(any(StatementFormat.class))).thenReturn(parser);
+        when(parser.parse(any())).thenReturn(List.of(tx("ext-1", "-45.90", "MERCADO")));
+        when(userRepository.findByEmail(EMAIL)).thenReturn(Optional.of(user));
+
+        BankStatementService.ImportResult resultado =
+                service.processFile(EMAIL, arquivoEmPedacos("limite.ofx", 1024, 100)).block();
+
+        assertThat(resultado.transactionsImported()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("Mais lançamentos que o teto recusa o arquivo inteiro, sem gravar nada")
+    void acimaDoTetoDeLinhasNaoGrava() {
+        limits.setMaxRows(2);
+        when(statementUploadRepository.findByUserIdAndFileHash(eq(user.getId()), anyString()))
+                .thenReturn(Optional.empty());
+        when(parserFactory.resolve(any(StatementFormat.class))).thenReturn(parser);
+        when(parser.parse(any())).thenReturn(List.of(
+                tx("a", "-1.00", "UM"), tx("b", "-2.00", "DOIS"), tx("c", "-3.00", "TRES")));
+
+        assertThatThrownBy(() -> importar("muitas.csv", new byte[] { 1 }))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("mais de 2 lançamentos");
+
+        // recusar e não cortar: um corte gravaria o hash e o reenvio do arquivo
+        // inteiro responderia "já importado"
+        verify(importWriter, never()).write(any(), anyList(), anyCollection());
     }
 
     // ------------------------------------------------------- via conector
@@ -335,6 +406,8 @@ class BankStatementImportPathsTest {
         // a resposta soma as conexões e aponta o upload que mais trouxe novidade
         assertThat(resultado.transactionsImported()).isEqualTo(3);
         assertThat(resultado.uploadId()).isEqualTo(gravadas.get(0).upload().getId());
+        assertThat(resultado.uploadIds()).containsExactly(
+                gravadas.get(0).upload().getId(), gravadas.get(1).upload().getId());
         assertThat(resultado.format()).isEqualTo("PLUGGY");
     }
 
@@ -358,6 +431,28 @@ class BankStatementImportPathsTest {
         assertThat(evento.getUserId()).isEqualTo(user.getId());
         assertThat(evento.getTransactionsImported()).isEqualTo(3);
         assertThat(evento.getUploadId()).isEqualTo(resultado.uploadId());
+    }
+
+    @Test
+    @DisplayName("O evento diz de que dia a que dia a importação mexeu, somando as conexões")
+    void eventoCarregaOIntervaloDeTodasAsFontes() {
+        // A faxina lê só esta janela. O upload principal é o do Nubank (duas
+        // linhas); o dia mais antigo está no Inter — se as datas saíssem só
+        // do upload principal, a linha do Inter ficaria sem faxina
+        OffsetDateTime maio2 = OffsetDateTime.of(2026, 5, 2, 8, 0, 0, 0, ZoneOffset.UTC);
+        OffsetDateTime maio20 = OffsetDateTime.of(2026, 5, 20, 21, 30, 0, 0, ZoneOffset.UTC);
+        service.importFromConnector(
+                user, StatementFormat.PLUGGY,
+                List.of(tx("PLUGGY-i1", "-45.90", "MERCADO", CONTA_INTER).toBuilder().date(maio2).build(),
+                        tx("PLUGGY-n1", "-30.00", "IFOOD", CONTA_NUBANK),
+                        tx("PLUGGY-n2", "-12.00", "PADARIA", CONTA_NUBANK).toBuilder().date(maio20).build()),
+                DUAS_CONEXOES);
+
+        ArgumentCaptor<DomainEvent> eventos = ArgumentCaptor.forClass(DomainEvent.class);
+        verify(eventPublisher, times(1)).publish(eventos.capture());
+        StatementImportedEvent evento = (StatementImportedEvent) eventos.getValue();
+        assertThat(evento.getEarliestDate()).isEqualTo(maio2);
+        assertThat(evento.getLatestDate()).isEqualTo(maio20);
     }
 
     @Test

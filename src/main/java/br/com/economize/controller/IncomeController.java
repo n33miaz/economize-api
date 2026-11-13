@@ -70,7 +70,7 @@ public class IncomeController {
     public Mono<WishResponses.IncomeSourceItem> accept(
             @AuthenticationPrincipal String email,
             @PathVariable UUID seriesId,
-            @RequestBody(required = false) WishRequests.CreateIncomeSource request) {
+            @Valid @RequestBody(required = false) WishRequests.AcceptIncomeSuggestion request) {
         return Mono.fromCallable(() -> incomeSourceService.acceptSuggestion(email, seriesId, request))
                 .subscribeOn(Schedulers.boundedElastic());
     }

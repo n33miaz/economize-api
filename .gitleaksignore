@@ -1,0 +1,11 @@
+# Achados do gitleaks conferidos e aceitos, um por linha, pela impressao digital
+# que o proprio gitleaks imprime (commit:arquivo:regra:linha).
+#
+# Este arquivo existe porque o gitleaks varre o HISTORICO e nos nao reescrevemos
+# commit: corrigir o arquivo nao apaga o achado antigo. So entra aqui o que foi
+# lido e nao e segredo -- segredo de verdade se revoga, nao se ignora.
+
+# Falso positivo (generic-api-key): literal de teste com cara de JWT, inventado,
+# usado para provar que o filtro de limite NAO guarda o token. O teste hoje monta
+# o valor em tempo de execucao; a linha antiga segue no historico.
+7b5667d24d93445cc12342cecfd4ca4973e58813:src/test/java/br/com/economize/config/RateLimitFilterTest.java:generic-api-key:206

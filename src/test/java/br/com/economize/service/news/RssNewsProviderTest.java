@@ -204,4 +204,24 @@ class RssNewsProviderTest {
                 })
                 .verifyComplete();
     }
+
+    @Test
+    @DisplayName("Links de esquema não web do feed não chegam ao aplicativo")
+    void shouldDiscardUnsafeArticleAndImageUrls() {
+        String rss = """
+                <rss version="2.0"><channel><title>Teste</title><item>
+                <title>Link hostil</title><description>Teste</description>
+                <link>javascript:alert(1)</link><enclosure url="intent://abrir/#Intent;scheme=app;end"/>
+                </item></channel></rss>
+                """;
+        RssNewsProvider provider = provider(request -> ok(rss));
+
+        StepVerifier.create(provider.fetch(null, null))
+                .assertNext(result -> {
+                    NewsArticle article = result.articles().get(0);
+                    assertNull(article.getUrl());
+                    assertNull(article.getUrlToImage());
+                })
+                .verifyComplete();
+    }
 }

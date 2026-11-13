@@ -1,12 +1,13 @@
 package br.com.economize.service.ai;
 
+import br.com.economize.dto.investment.InvestmentResponses;
 import br.com.economize.model.BankTransaction;
 import br.com.economize.model.Category;
-import br.com.economize.model.Transaction;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -60,6 +61,10 @@ public record AssistantContext(
         int totalInWindow,
         int excludedFromTotals,
         List<String> wallet,
+        List<String> walletPositions,
+        List<String> unconvertedWallet,
+        BigDecimal walletTotalInvested,
+        BigDecimal walletCurrentValue,
         int walletTotal
 ) {
 
@@ -69,7 +74,7 @@ public record AssistantContext(
 
     /** Uma linha citável: data, descrição, valor e categoria. */
     public record TransactionLine(LocalDate date, String description, BigDecimal amount,
-                                  String category) {
+                                  String category, String refundNote) {
     }
 
     /**
@@ -84,7 +89,7 @@ public record AssistantContext(
     public static final int MAX_LINES = 80;
 
     /** Mesma razão do teto de linhas; este existia e não era aplicado. */
-    public static final int MAX_WALLET_LINES = 40;
+    public static final int MAX_WALLET_LINES = 20;
 
     /**
      * Monta o contexto a partir do que JÁ passou pelo filtro das telas.
@@ -99,14 +104,23 @@ public record AssistantContext(
     public static AssistantContext of(LocalDate start, LocalDate end,
                                       List<BankTransaction> inWindow, int excluded,
                                       Map<UUID, Category> categoriesById,
-                                      List<Transaction> walletTxs) {
+                                      InvestmentResponses.Summary investmentSummary) {
+        return of(start, end, inWindow, excluded, categoriesById, investmentSummary, List.of());
+    }
+
+    public static AssistantContext of(LocalDate start, LocalDate end,
+                                      List<BankTransaction> inWindow, int excluded,
+                                      Map<UUID, Category> categoriesById,
+                                      InvestmentResponses.Summary investmentSummary,
+                                      List<InvestmentResponses.PositionItem> positions) {
         BigDecimal income = BigDecimal.ZERO;
         BigDecimal expense = BigDecimal.ZERO;
         Map<String, BigDecimal> porCategoria = new LinkedHashMap<>();
         Map<String, Long> contagem = new LinkedHashMap<>();
 
         for (BankTransaction tx : inWindow) {
-            BigDecimal valor = tx.getAmount();
+            // Líquido: a compra com estorno parcial vale o que sobrou dela
+            BigDecimal valor = tx.getNetAmount();
             if (valor.signum() >= 0) {
                 income = income.add(valor);
                 continue;
@@ -125,24 +139,96 @@ public record AssistantContext(
 
         List<TransactionLine> linhas = inWindow.stream()
                 .limit(MAX_LINES)
-                .map(tx -> new TransactionLine(tx.getDate().toLocalDate(), tx.displayDescription(),
-                        tx.getAmount(), nomeDaCategoria(tx, categoriesById)))
+                // O valor da linha é o LÍQUIDO, o mesmo que entrou no total; com
+                // estorno parcial, o bruto e o estornado vão ao lado, senão a IA
+                // somaria as linhas e contradiria o total que recebeu
+                .map(tx -> new TransactionLine(tx.getDate().toLocalDate(), sanitizeText(tx.displayDescription()),
+                        tx.getNetAmount(), nomeDaCategoria(tx, categoriesById), notaDeEstorno(tx)))
                 .toList();
 
-        List<String> carteira = walletTxs.stream()
+        // A carteira não pode vir dos lançamentos antigos: compra e venda têm
+        // o mesmo formato ali e uma venda acabava parecendo posição atual. O
+        // resumo é a fonte da tela e já exclui moeda estrangeira sem câmbio.
+        List<String> carteira = investmentSummary.byType().stream()
+                .map(slice -> String.format("%s: R$ %s", sanitizeText(slice.label()), slice.currentValue()))
+                .toList();
+        List<InvestmentResponses.PositionItem> posicoesDaCarteira = positions != null ? positions : List.of();
+        List<String> posicoes = posicoesDaCarteira.stream()
+                .map(position -> new WalletPosition(position, currentValueInBrl(position, investmentSummary)))
+                .filter(position -> position.currentValueInBrl() != null)
+                .sorted(Comparator.comparing(WalletPosition::currentValueInBrl).reversed())
                 .limit(MAX_WALLET_LINES)
-                .map(tx -> String.format("%s: %s cotas (preço médio R$ %s)",
-                        tx.getAssetCode(), tx.getQuantity(), tx.getPriceAtTransaction()))
+                .map(AssistantContext::renderWalletPosition)
+                .toList();
+        List<String> semCambio = investmentSummary.unconverted().stream()
+                .limit(MAX_WALLET_LINES)
+                .map(position -> String.format("%s: %s %s (fora do total em R$ sem câmbio)",
+                        sanitizeText(position.name()), position.currentValue(), sanitizeText(position.currency())))
                 .toList();
 
         return new AssistantContext(start, end, income, expense, categorias, linhas,
-                inWindow.size(), excluded, carteira, walletTxs.size());
+                inWindow.size(), excluded, carteira, posicoes, semCambio, investmentSummary.totalInvested(),
+                investmentSummary.currentValue(), investmentSummary.positionsCount());
+    }
+
+    private record WalletPosition(InvestmentResponses.PositionItem position, BigDecimal currentValueInBrl) {
+    }
+
+    private static BigDecimal currentValueInBrl(InvestmentResponses.PositionItem position,
+                                                InvestmentResponses.Summary summary) {
+        if (position.currentValue() == null) return null;
+        String currency = position.currency();
+        if (currency == null || currency.isBlank() || "BRL".equalsIgnoreCase(currency.trim())) {
+            return position.currentValue();
+        }
+        return summary.exchangeRates().stream()
+                .filter(rate -> currency.trim().equalsIgnoreCase(rate.currency()))
+                .findFirst()
+                .map(rate -> position.currentValue().multiply(rate.rate())
+                        .setScale(2, java.math.RoundingMode.HALF_UP))
+                .orElse(null);
+    }
+
+    private static String renderWalletPosition(WalletPosition walletPosition) {
+        InvestmentResponses.PositionItem position = walletPosition.position();
+        String quantity = position.quantity() == null ? "" : ", quantidade: " + position.quantity();
+        String institution = position.institution() == null || position.institution().isBlank() ? ""
+                : ", institui\u00e7\u00e3o: " + sanitizeText(position.institution());
+        return String.format("%s%s%s%s: R$ %s", sanitizeText(position.name()), optionalCode(position.code()),
+                quantity, institution, walletPosition.currentValueInBrl());
+    }
+
+    private static String optionalCode(String code) {
+        String sanitized = sanitizeText(code);
+        return sanitized.isEmpty() ? "" : " (" + sanitized + ")";
+    }
+
+    private static String notaDeEstorno(BankTransaction tx) {
+        BigDecimal estornado = tx.getRefundedAmount();
+        if (estornado == null || estornado.signum() == 0) return null;
+        return String.format(" (bruto R$ %s, estornado R$ %s)", tx.getAmount(), estornado);
+    }
+
+    /**
+     * Descrições vêm de instituições externas e entram como dado no prompt.
+     * Tirar controles evita que uma linha forje a estrutura visual do contexto;
+     * o teto também impede que um único lançamento ocupe o orçamento todo.
+     */
+    static String sanitizeText(String text) {
+        if (text == null) return "";
+        String sanitized = text
+                .replaceAll("(?i)<<<DADOS DO USUARIO>>>|<<<FIM DOS DADOS>>>", " ")
+                .replaceAll("[\\p{Cntrl}]+", " ")
+                .replaceAll("[<>]{3,}", " ")
+                .replaceAll("\\s+", " ")
+                .trim();
+        return sanitized.length() <= 300 ? sanitized : sanitized.substring(0, 300);
     }
 
     private static String nomeDaCategoria(BankTransaction tx, Map<UUID, Category> porId) {
         if (tx.getCategoryId() == null) return "Sem categoria";
         Category categoria = porId.get(tx.getCategoryId());
-        return categoria != null ? categoria.getName() : "Sem categoria";
+        return categoria != null ? sanitizeText(categoria.getName()) : "Sem categoria";
     }
 
     /**
@@ -187,8 +273,9 @@ public record AssistantContext(
             sb.append("Nenhum lançamento neste período.\n");
         } else {
             for (TransactionLine linha : lines) {
-                sb.append(String.format("- %s | %s | R$ %s | %s%n",
-                        linha.date(), linha.description(), linha.amount(), linha.category()));
+                sb.append(String.format("- %s | %s | R$ %s%s | %s%n",
+                        linha.date(), linha.description(), linha.amount(),
+                        linha.refundNote() != null ? linha.refundNote() : "", linha.category()));
             }
             if (totalInWindow > lines.size()) {
                 sb.append("(").append(totalInWindow - lines.size())
@@ -198,12 +285,23 @@ public record AssistantContext(
         }
 
         sb.append("\n--- CARTEIRA DE INVESTIMENTOS ---\n");
-        if (wallet.isEmpty()) {
+        if (wallet.isEmpty() && unconvertedWallet.isEmpty() && walletTotal == 0) {
             sb.append("O usuário não possui investimentos cadastrados no app.\n");
         } else {
+            sb.append("Total aplicado conhecido em R$: R$ ").append(walletTotalInvested).append("\n");
+            sb.append("Valor atual conhecido em R$: R$ ").append(walletCurrentValue).append("\n");
             wallet.forEach(linha -> sb.append("- ").append(linha).append("\n"));
-            if (walletTotal > wallet.size()) {
-                sb.append("(").append(walletTotal - wallet.size())
+            if (!walletPositions.isEmpty()) {
+                sb.append("Maiores posições individuais:\n");
+                walletPositions.forEach(linha -> sb.append("- ").append(linha).append("\n"));
+            }
+            unconvertedWallet.forEach(linha -> sb.append("- ").append(linha).append("\n"));
+            if (wallet.isEmpty() && walletPositions.isEmpty() && unconvertedWallet.isEmpty()) {
+                sb.append("Há posições cadastradas, mas sem valor atual disponível em R$; não invente conversão.\n");
+            }
+            int listed = walletPositions.size() + unconvertedWallet.size();
+            if (walletTotal > listed) {
+                sb.append("(").append(walletTotal - listed)
                         .append(" posição(ões) a mais não listadas.)\n");
             }
         }

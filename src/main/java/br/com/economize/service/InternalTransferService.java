@@ -66,6 +66,25 @@ public class InternalTransferService {
      * decisão manual nunca é desfeita por esta varredura.
      */
     public Outcome reconcileByOwnName(String email) {
+        return reconcileByOwnName(email, null);
+    }
+
+    /**
+     * A mesma varredura, só sobre o que uma importação trouxe.
+     *
+     * <p><b>Margem zero</b>, e o resultado para as linhas importadas é o da
+     * varredura total: a regra olha UMA linha de cada vez (a descrição dela e
+     * o nome do titular) e nunca compara duas linhas entre si. O que a linha
+     * de ontem diz não muda o que se decide sobre a de hoje.
+     *
+     * <p>O que deixa de acontecer aqui é a repescagem do histórico: se o
+     * titular corrigir o nome no cadastro, as linhas antigas só são
+     * reexaminadas pela faxina pedida à mão — a importação seguinte não as
+     * revisita mais.
+     *
+     * @param janela o que a importação trouxe; nulo = histórico inteiro
+     */
+    public Outcome reconcileByOwnName(String email, HygieneWindow janela) {
         User user = requireUser(email);
         List<String> tokens = CounterpartyMatcher.nameTokens(user.getName());
         if (tokens.size() < 2) {
@@ -75,7 +94,11 @@ public class InternalTransferService {
             return new Outcome(0, 0, false);
         }
 
-        List<BankTransaction> all = bankTransactionRepository.findAllByUserIdOrderByDateDesc(user.getId());
+        List<BankTransaction> all = janela == null
+                ? bankTransactionRepository.findAllByUserIdOrderByDateDesc(user.getId())
+                : bankTransactionRepository
+                        .findAllByUserIdAndDateGreaterThanEqualAndDateLessThanOrderByDateDesc(
+                                user.getId(), janela.from(0), janela.until(0));
         Set<UUID> toMark = new LinkedHashSet<>();
         for (BankTransaction tx : all) {
             if (tx.isInternalTransfer()) continue;

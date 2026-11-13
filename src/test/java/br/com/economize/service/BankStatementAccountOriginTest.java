@@ -30,7 +30,6 @@ import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -108,10 +107,10 @@ class BankStatementAccountOriginTest {
         ObjectProvider<AiCategorySuggester> aiSuggester = mock(ObjectProvider.class);
         service = new BankStatementService(bankTransactionRepository, statementUploadRepository,
                 userRepository, parserFactory, categorizationEngine, categoryRepository,
-                importWriter, accountService, eventPublisher, aiSuggester);
+                importWriter, accountService, eventPublisher, aiSuggester,
+                new br.com.economize.config.StatementImportProperties());
 
         lenient().when(categorizationEngine.contextFor(user.getId())).thenReturn(context);
-        lenient().when(context.getDirtyRules()).thenReturn(new HashSet<>());
         lenient().when(categorizationEngine.categorize(eq(context), anyString(), anyString(), anyBoolean()))
                 .thenAnswer(inv -> new CategorizationEngine.Result(
                         null, null, null, DescriptionNormalizer.normalize(inv.getArgument(1))));
@@ -242,6 +241,26 @@ class BankStatementAccountOriginTest {
         assertThat(saved()).singleElement()
                 .extracting(BankTransaction::importSource)
                 .isEqualTo(BankTransaction.ImportSource.CONNECTION);
+    }
+
+    @Test
+    @DisplayName("estorno de cartão que o conector mandou neutro é GRAVADO neutro")
+    void connectorRefundShouldPersistOutOfTheSums() {
+        emptyWindow();
+        UUID cartao = UUID.randomUUID();
+
+        service.importFromConnector(user, "Meu Pluggy", StatementFormat.PLUGGY, List.of(
+                ParsedTransaction.builder()
+                        .externalId("PLUGGY-c1").type("CREDIT").amount(new BigDecimal("18.50"))
+                        .description("Estorno parcial").date(day(2026, 8, 11)).accountId(cartao)
+                        .refunded(true).build()));
+
+        // toda soma de receita (mensal, por categoria, diária) filtra
+        // refunded = false: gravada assim, a linha nunca conta como receita,
+        // ache a conciliação a compra dela ou não
+        assertThat(saved()).singleElement().extracting(BankTransaction::isRefunded).isEqualTo(true);
+        // sem vínculo: é isso que diz à conciliação que a compra ainda não foi achada
+        assertThat(saved()).singleElement().extracting(BankTransaction::getRefundOfId).isNull();
     }
 
     @Test

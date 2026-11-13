@@ -17,8 +17,13 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 
+import org.mockito.Spy;
+import java.time.OffsetDateTime;
+import java.time.ZoneId;
+import java.time.Clock;
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.YearMonth;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -48,8 +53,16 @@ class WishProjectionServiceTest {
     @Mock
     private AnalyticsService analyticsService;
 
+    // UTC como os dados destes testes; a virada do fuso tem teste próprio
+    @Spy
+    private Clock clock = Clock.systemUTC();
+
     @InjectMocks
     private WishProjectionService service;
+
+    // 23h30 do dia 31 em São Paulo já é 1º de abril no servidor (02h30 UTC)
+    private static final Clock NOITE_DE_31_DE_MARCO = Clock.fixed(
+            OffsetDateTime.parse("2026-03-31T23:30:00-03:00").toInstant(), ZoneId.of("America/Sao_Paulo"));
 
     @BeforeEach
     void setUp() {
@@ -240,6 +253,143 @@ class WishProjectionServiceTest {
     }
 
     @Test
+    void expoeASobraDoUltimoCicloFechadoSemConfundirComAMediana() {
+        givenCycles(net(5000, 4700), net(5000, 4200), net(5000, 4200));
+
+        WishBaseline baseline = service.baselineFor(USER, TODAY);
+
+        // Em 15/08, julho já fechou; a referência de 800 é a mediana dos
+        // ciclos, mas só os 300 efetivamente apurados em julho podem ser medidos.
+        assertThat(baseline.lastClosedCycle().cycleMonth()).isEqualTo("2026-07");
+        assertThat(baseline.lastClosedCycle().start()).isEqualTo(LocalDate.of(2026, 7, 1));
+        assertThat(baseline.lastClosedCycle().end()).isEqualTo(LocalDate.of(2026, 7, 31));
+        assertThat(baseline.lastClosedCycle().leftover()).isEqualByComparingTo("300.00");
+        assertThat(baseline.monthlyLeftover()).isEqualByComparingTo("800.00");
+    }
+
+    @Test
+    void cicloFechadoMaisRecenteSemExtratoEPuladoEOAnteriorComDadosEOferecido() {
+        // julho sem nada importado; junho com dados. Oferecer julho seria uma
+        // sobra 0 que nunca aconteceu
+        givenCycles(net(0, 0), net(5000, 4500), net(5000, 4200),
+                net(0, 0), net(0, 0), net(0, 0));
+
+        WishBaseline baseline = service.baselineFor(USER, TODAY);
+
+        assertThat(baseline.lastClosedCycle().cycleMonth()).isEqualTo("2026-06");
+        assertThat(baseline.lastClosedCycle().start()).isEqualTo(LocalDate.of(2026, 6, 1));
+        assertThat(baseline.lastClosedCycle().end()).isEqualTo(LocalDate.of(2026, 6, 30));
+        assertThat(baseline.lastClosedCycle().leftover()).isEqualByComparingTo("500.00");
+        // o mesmo filtro da mediana: os dois ciclos com dados, nenhum vazio
+        assertThat(baseline.cyclesConsidered()).isEqualTo(2);
+    }
+
+    @Test
+    void semNenhumCicloComDadosNaoHaSobraMedidaNemZero() {
+        WishBaseline baseline = service.baselineFor(USER, TODAY);
+
+        assertThat(baseline.lastClosedCycle()).isNull();
+    }
+
+    @Test
+    void ancoraDia5RecortaOCicloFechadoEOFechamento() {
+        givenAnchoredSalary((short) 5);
+        givenCycles(net(5000, 4400));
+
+        WishBaseline baseline = service.baselineFor(USER, TODAY);
+
+        // em 15/08 o último fechado é 05/07 → 04/08, identificado pelo mês de início
+        assertThat(baseline.lastClosedCycle().cycleMonth()).isEqualTo("2026-07");
+        assertThat(baseline.lastClosedCycle().start()).isEqualTo(LocalDate.of(2026, 7, 5));
+        assertThat(baseline.lastClosedCycle().end()).isEqualTo(LocalDate.of(2026, 8, 4));
+        assertThat(baseline.lastClosedCycle().leftover()).isEqualByComparingTo("600.00");
+
+        // a fronteira: o ciclo de julho só fecha quando 04/08 termina
+        assertThat(service.isCycleClosed(USER, YearMonth.of(2026, 7), LocalDate.of(2026, 8, 4))).isFalse();
+        assertThat(service.isCycleClosed(USER, YearMonth.of(2026, 7), LocalDate.of(2026, 8, 5))).isTrue();
+        assertThat(service.isCycleClosed(USER, YearMonth.of(2026, 8), TODAY)).isFalse();
+    }
+
+    @Test
+    void ancoraDia31EmFevereiroFechaNoDia30DeMarco() {
+        givenAnchoredSalary((short) 31);
+        givenCycles(net(5000, 4000));
+        LocalDate hoje = LocalDate.of(2027, 4, 10);
+
+        WishBaseline baseline = service.baselineFor(USER, hoje);
+
+        // 31/02 não existe: o ciclo de fevereiro vai de 28/02 a 30/03
+        assertThat(baseline.lastClosedCycle().cycleMonth()).isEqualTo("2027-02");
+        assertThat(baseline.lastClosedCycle().start()).isEqualTo(LocalDate.of(2027, 2, 28));
+        assertThat(baseline.lastClosedCycle().end()).isEqualTo(LocalDate.of(2027, 3, 30));
+
+        assertThat(service.isCycleClosed(USER, YearMonth.of(2027, 2), LocalDate.of(2027, 3, 30))).isFalse();
+        assertThat(service.isCycleClosed(USER, YearMonth.of(2027, 2), LocalDate.of(2027, 3, 31))).isTrue();
+        // janeiro: 31/01 a 27/02, porque o próximo começa no último dia de fevereiro
+        assertThat(service.isCycleClosed(USER, YearMonth.of(2027, 1), LocalDate.of(2027, 2, 27))).isFalse();
+        assertThat(service.isCycleClosed(USER, YearMonth.of(2027, 1), LocalDate.of(2027, 2, 28))).isTrue();
+    }
+
+    @Test
+    void oCicloOferecidoNaListagemEAceitoNoAporte() {
+        // Sem mock entre os dois: a chave que o GET devolve precisa passar na
+        // trava do POST do MESMO serviço, em qualquer âncora e no dia seguinte
+        // ao fechamento
+        for (Short ancora : new Short[]{null, 1, 5, 28, 31}) {
+            for (LocalDate hoje : List.of(TODAY, LocalDate.of(2027, 3, 1),
+                    LocalDate.of(2027, 3, 31), LocalDate.of(2028, 2, 29))) {
+                when(incomeSourceRepository.findAllByUserIdAndActiveTrue(USER))
+                        .thenReturn(List.of(source(IncomeSource.Kind.SALARY, "5000", ancora)));
+                givenCycles(net(5000, 4000));
+
+                WishBaseline.ClosedCycle ciclo = service.baselineFor(USER, hoje).lastClosedCycle();
+
+                assertThat(ciclo).as("âncora %s em %s", ancora, hoje).isNotNull();
+                assertThat(ciclo.end()).isBefore(hoje);
+                assertThat(service.isCycleClosed(USER, YearMonth.parse(ciclo.cycleMonth()), hoje))
+                        .as("âncora %s em %s", ancora, hoje).isTrue();
+            }
+        }
+    }
+
+    @Test
+    void doisSalariosEscolhemAMesmaAncoraNaListagemENoAporte() {
+        IncomeSource antigo = source(IncomeSource.Kind.SALARY, "3000", (short) 20);
+        antigo.setCreatedAt(OffsetDateTime.parse("2026-01-01T00:00:00Z"));
+        IncomeSource novo = source(IncomeSource.Kind.SALARY, "2000", (short) 5);
+        novo.setCreatedAt(OffsetDateTime.parse("2026-05-01T00:00:00Z"));
+
+        // a ordem em que o banco devolve não pode mudar a âncora
+        assertThat(WishProjectionService.salaryAnchorDay(List.of(novo, antigo))).isEqualTo((short) 20);
+        assertThat(WishProjectionService.salaryAnchorDay(List.of(antigo, novo))).isEqualTo((short) 20);
+
+        when(incomeSourceRepository.findAllByUserIdAndActiveTrue(USER)).thenReturn(List.of(novo, antigo));
+        givenCycles(net(5000, 4000));
+        WishBaseline.ClosedCycle ciclo = service.baselineFor(USER, TODAY).lastClosedCycle();
+        // âncora 20 em 15/08: o último fechado é 20/06 → 19/07
+        assertThat(ciclo.start()).isEqualTo(LocalDate.of(2026, 6, 20));
+        assertThat(service.isCycleClosed(USER, YearMonth.parse(ciclo.cycleMonth()), TODAY)).isTrue();
+    }
+
+    @Test
+    void salariosSemDataDeCriacaoDesempatamPeloId() {
+        IncomeSource a = source(IncomeSource.Kind.SALARY, "1000", (short) 5);
+        a.setId(UUID.fromString("00000000-0000-0000-0000-000000000001"));
+        IncomeSource b = source(IncomeSource.Kind.SALARY, "1000", (short) 20);
+        b.setId(UUID.fromString("00000000-0000-0000-0000-000000000002"));
+
+        assertThat(WishProjectionService.salaryAnchorDay(List.of(b, a))).isEqualTo((short) 5);
+        assertThat(WishProjectionService.salaryAnchorDay(List.of(a, b))).isEqualTo((short) 5);
+    }
+
+    @Test
+    void cicloCorrenteOuFuturoAindaNaoEstaFechado() {
+        assertThat(service.isCycleClosed(USER, YearMonth.of(2026, 8), TODAY)).isFalse();
+        assertThat(service.isCycleClosed(USER, YearMonth.of(2026, 9), TODAY)).isFalse();
+        assertThat(service.isCycleClosed(USER, YearMonth.of(2026, 7), TODAY)).isTrue();
+    }
+
+    @Test
     void semNenhumCicloComDadosAvisaQueFaltaHistorico() {
         givenSalary("5000");
         givenWorkProfile(5, "8");
@@ -249,6 +399,18 @@ class WishProjectionServiceTest {
         assertThat(baseline.gaps()).contains(WishBaseline.GAP_HISTORY);
         assertThat(baseline.monthlyLeftover()).isNull();
         assertThat(service.project(wish("18000"), baseline, TODAY).monthsToAfford()).isNull();
+    }
+
+    @Test
+    void prazoGiganteComSobraDeCentavosFicaForaDeAlcance() {
+        // A divisão dá 10^17 ciclos. Converter antes de comparar com o teto
+        // truncava para int e podia exibir um prazo curto, fisicamente impossível.
+        givenCycles(new AnalyticsService.CycleNet(new BigDecimal("5000"), new BigDecimal("4999.99")));
+
+        WishProjection projection = service.project(wish("1000000000000000"), service.baselineFor(USER, TODAY), TODAY);
+
+        assertThat(projection.monthsToAfford()).isNull();
+        assertThat(projection.estimatedDate()).isNull();
     }
 
     @Test
@@ -422,6 +584,11 @@ class WishProjectionServiceTest {
                 .thenReturn(List.of(source(IncomeSource.Kind.SALARY, amount, null)));
     }
 
+    private void givenAnchoredSalary(short anchorDay) {
+        when(incomeSourceRepository.findAllByUserIdAndActiveTrue(USER))
+                .thenReturn(List.of(source(IncomeSource.Kind.SALARY, "5000", anchorDay)));
+    }
+
     private void givenWorkProfile(int days, String hours) {
         when(workProfileRepository.findById(USER)).thenReturn(Optional.of(WorkProfile.builder()
                 .userId(USER)
@@ -460,5 +627,20 @@ class WishProjectionServiceTest {
                 .savedAmount(BigDecimal.ZERO)
                 .status(Wish.Status.WISH)
                 .build();
+    }
+
+    @Test
+    void osCiclosFechadosSaemDoHojeDaZonaFinanceira() {
+        new WishProjectionService(incomeSourceRepository, workProfileRepository, analyticsService,
+                NOITE_DE_31_DE_MARCO).baselineFor(USER);
+
+        // às 23h30 de 31/03 março ainda não fechou: o último ciclo completo é fevereiro
+        org.mockito.ArgumentCaptor<br.com.economize.dto.analytics.AnalysisWindow> janelas =
+                org.mockito.ArgumentCaptor.forClass(br.com.economize.dto.analytics.AnalysisWindow.class);
+        org.mockito.Mockito.verify(analyticsService, org.mockito.Mockito.atLeastOnce())
+                .netFor(eq(USER), janelas.capture());
+        org.assertj.core.api.Assertions.assertThat(janelas.getAllValues())
+                .extracting(br.com.economize.dto.analytics.AnalysisWindow::monthLabel)
+                .contains("2026-02").doesNotContain("2026-03");
     }
 }

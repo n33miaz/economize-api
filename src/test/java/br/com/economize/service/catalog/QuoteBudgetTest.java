@@ -1,19 +1,72 @@
 package br.com.economize.service.catalog;
 
 import br.com.economize.config.MarketCatalogProperties;
+import br.com.economize.model.MarketSnapshot;
+import br.com.economize.repository.MarketSnapshotRepository;
 import br.com.economize.service.catalog.QuoteBudget.Purpose;
+import br.com.economize.service.provider.BudgetUsageStore;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.when;
 
+@ExtendWith(MockitoExtension.class)
 class QuoteBudgetTest {
+
+    @Mock
+    private MarketSnapshotRepository repository;
+
+    @Test
+    @DisplayName("O uso do dia sobrevive ao reinício: o processo novo continua de onde o outro parou")
+    void usageShouldSurviveRestart() {
+        // o repositório dublado guarda as linhas num mapa — é o "banco" que
+        // sobrevive entre os dois processos simulados
+        Map<String, MarketSnapshot> rows = new HashMap<>();
+        when(repository.save(any())).thenAnswer(invocation -> {
+            MarketSnapshot row = invocation.getArgument(0);
+            rows.put(row.getKey(), row);
+            return row;
+        });
+        when(repository.findById(anyString()))
+                .thenAnswer(invocation -> Optional.ofNullable(rows.get(invocation.<String>getArgument(0))));
+        MutableClock clock = new MutableClock(Instant.parse("2026-11-12T15:00:00Z"));
+        BudgetUsageStore usage = new BudgetUsageStore(repository, new ObjectMapper(), clock, Duration.ofHours(1));
+
+        QuoteBudget before = new QuoteBudget(properties(10, 4), clock, usage);
+        before.restore();
+        assertEquals(3, before.tryAcquire(3, Purpose.ON_DEMAND));
+        assertEquals(2, before.tryAcquire(2, Purpose.HOME));
+        before.flush(); // o SIGTERM do Render
+
+        QuoteBudget after = new QuoteBudget(properties(10, 4), clock, usage);
+        after.restore();
+
+        assertEquals(5, after.remaining(Purpose.HOME), "10 - 5 já gastos antes do reinício");
+        assertEquals(1, after.remaining(Purpose.ON_DEMAND), "4 - 3 da demanda aberta");
+        assertEquals("data:budget:brapi:2026-11-12", rows.keySet().iterator().next());
+
+        // o dia seguinte não herda nada: a chave é outra
+        clock.advance(Duration.ofDays(1));
+        QuoteBudget nextDay = new QuoteBudget(properties(10, 4), clock, usage);
+        nextDay.restore();
+        assertEquals(10, nextDay.remaining(Purpose.HOME));
+    }
 
     @Test
     @DisplayName("Deve liberar até o teto e zerar depois de esgotado")

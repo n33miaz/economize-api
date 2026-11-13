@@ -1,11 +1,35 @@
 {
   "components": {
     "schemas": {
+      "AcceptIncomeSuggestion": {
+        "properties": {
+          "anchorDay": {
+            "format": "int32",
+            "maximum": 31,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "expectedAmount": {
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 120,
+            "minLength": 0,
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "AccountMergeSuggestion": {
         "properties": {
           "digits": {
+            "default": "",
             "description": "Últimos dígitos em comum nos dois rótulos",
-            "example": 2750,
+            "example": "2750",
             "type": "string"
           },
           "sourceId": {
@@ -19,6 +43,7 @@
             "type": "string"
           },
           "sourceTransactions": {
+            "default": "",
             "description": "Quantos lançamentos vão se mudar de origem",
             "format": "int64",
             "type": "integer"
@@ -146,19 +171,23 @@
         "type": "object"
       },
       "AiKeyTestRequest": {
+        "default": null,
         "description": "Chave a testar; corpo ausente testa a chave já cadastrada",
         "properties": {
           "apiKey": {
+            "default": "",
             "description": "Chave a testar. Não é gravada por esta rota.",
             "example": "sk-...",
             "type": "string"
           },
           "model": {
+            "default": "",
             "description": "Em branco usa o modelo padrão do provedor",
             "example": "gpt-4o-mini",
             "type": "string"
           },
           "provider": {
+            "default": "",
             "description": "Obrigatório quando apiKey vem preenchida",
             "example": "OPENAI",
             "type": "string"
@@ -167,34 +196,41 @@
         "type": "object"
       },
       "AiKeyTestResponse": {
+        "default": null,
         "description": "Resultado do teste; ok=false não é erro de HTTP",
         "properties": {
           "latencyMs": {
+            "default": "",
             "description": "Tempo da ida e volta ao provedor, em milissegundos",
             "example": 812,
             "format": "int64",
             "type": "integer"
           },
           "message": {
+            "default": "",
             "description": "Texto pronto para exibir. Escrito por nós — nunca o corpo do provedor.",
             "type": "string"
           },
           "model": {
+            "default": "",
             "description": "Modelo testado",
             "example": "gpt-4o-mini",
             "type": "string"
           },
           "ok": {
+            "default": false,
             "description": "O provedor aceitou a chave e respondeu?",
             "example": true,
             "type": "boolean"
           },
           "provider": {
+            "default": "",
             "description": "Provedor testado",
             "example": "OPENAI",
             "type": "string"
           },
           "reason": {
+            "default": "",
             "description": "Nulo quando ok. AUTH: chave recusada. MODEL: modelo inexistente ou sem acesso. RATE_LIMIT: cota estourada. NETWORK: não deu para falar com o provedor. PROVIDER: outra falha do lado de lá.",
             "enum": [
               "AUTH",
@@ -209,9 +245,11 @@
         "type": "object"
       },
       "AiProviderCatalogResponse": {
+        "default": null,
         "description": "Catálogo de provedores e modelos aceitos",
         "properties": {
           "byokAvailable": {
+            "default": false,
             "description": "Falso quando o servidor está sem chave-mestra: cadastrar chave própria responderia 503 e o app deve esconder a opção",
             "type": "boolean"
           },
@@ -225,19 +263,23 @@
         "type": "object"
       },
       "AiSettingsResponse": {
+        "default": null,
         "description": "Configuração de IA em vigor. Nunca inclui a chave do usuário.",
         "properties": {
           "byokAvailable": {
+            "default": false,
             "description": "Esta instalação aceita chave própria? Falso quando o servidor está sem chave-mestra de criptografia — o app deve esconder a opção.",
             "example": true,
             "type": "boolean"
           },
           "keyLast4": {
+            "default": "",
             "description": "Últimos 4 caracteres da chave do usuário; nulo quando a origem é SERVER",
             "example": "9f2a",
             "type": "string"
           },
           "keyStatus": {
+            "default": "",
             "description": "OK: chave própria legível. UNREADABLE: cadastrada mas ilegível com a chave-mestra atual — precisa recadastrar. SERVER_KEY: a conta não tem chave própria.",
             "enum": [
               "OK",
@@ -248,16 +290,19 @@
             "type": "string"
           },
           "model": {
+            "default": "",
             "description": "Modelo em vigor",
-            "example": "gemini-2.0-flash",
+            "example": "gemini-3.5-flash",
             "type": "string"
           },
           "provider": {
+            "default": "",
             "description": "Provedor em vigor",
             "example": "GEMINI",
             "type": "string"
           },
           "source": {
+            "default": "",
             "description": "USER quando a conta tem chave própria; SERVER quando usa a chave do servidor",
             "enum": [
               "USER",
@@ -267,6 +312,7 @@
             "type": "string"
           },
           "updatedAt": {
+            "default": "",
             "description": "Quando a configuração própria foi salva pela última vez; nulo quando não há",
             "format": "date-time",
             "type": "string"
@@ -295,10 +341,19 @@
             "type": "string"
           },
           "notes": {
-            "items": {
-              "example": "Mercado com mais moedas"
+            "contains": {
+              "default": ""
             },
-            "type": "array"
+            "description": "O que há de novo na versão publicada, uma frase por item; vazia quando não há notas. No máximo 10 itens de até 200 caracteres.",
+            "items": {
+              "default": "",
+              "example": "Mercado com mais moedas",
+              "type": "string"
+            },
+            "type": "array",
+            "unevaluatedItems": {
+              "default": ""
+            }
           },
           "schemaVersion": {
             "type": "string"
@@ -347,17 +402,21 @@
       "AuthRequest": {
         "properties": {
           "deviceLabel": {
+            "default": "",
             "description": "Como este aparelho aparece na lista de conhecidos",
             "type": "string"
           },
           "deviceToken": {
+            "default": "",
             "description": "Segredo do aparelho, se ele ja foi lembrado",
             "type": "string"
           },
           "email": {
+            "minLength": 1,
             "type": "string"
           },
           "password": {
+            "minLength": 1,
             "type": "string"
           }
         },
@@ -506,6 +565,9 @@
           },
           "hoursPerMonth": {
             "type": "number"
+          },
+          "lastClosedCycle": {
+            "$ref": "#/components/schemas/ClosedCycle"
           },
           "monthlyExpense": {
             "type": "number"
@@ -660,6 +722,10 @@
             "format": "double",
             "type": "number"
           },
+          "providerTimestamp": {
+            "type": "string",
+            "writeOnly": true
+          },
           "quoteStatus": {
             "type": "string"
           },
@@ -677,10 +743,6 @@
               "type": "number"
             },
             "type": "array"
-          },
-          "timestamp": {
-            "type": "string",
-            "writeOnly": true
           },
           "type": {
             "type": "string"
@@ -815,6 +877,7 @@
       "ChangePasswordRequest": {
         "properties": {
           "currentPassword": {
+            "minLength": 1,
             "type": "string"
           },
           "newPassword": {
@@ -853,6 +916,7 @@
       "ChatRequest": {
         "properties": {
           "history": {
+            "default": "",
             "description": "Falas anteriores da mesma conversa, da mais antiga para a mais recente",
             "items": {
               "$ref": "#/components/schemas/ChatTurn"
@@ -862,6 +926,7 @@
             "type": "array"
           },
           "message": {
+            "default": "",
             "description": "Pergunta do usuário",
             "example": "Quanto gastei com mercado neste mês?",
             "maxLength": 2000,
@@ -882,11 +947,13 @@
             "type": "string"
           },
           "role": {
+            "default": "",
             "description": "Quem falou",
             "enum": [
               "user",
               "assistant"
             ],
+            "minLength": 1,
             "pattern": "user|assistant",
             "type": "string"
           }
@@ -906,6 +973,25 @@
           "receiptTotal": {
             "minimum": 0.0,
             "type": "number"
+          }
+        },
+        "type": "object"
+      },
+      "ClosedCycle": {
+        "properties": {
+          "cycleMonth": {
+            "type": "string"
+          },
+          "end": {
+            "format": "date",
+            "type": "string"
+          },
+          "leftover": {
+            "type": "number"
+          },
+          "start": {
+            "format": "date",
+            "type": "string"
           }
         },
         "type": "object"
@@ -1004,6 +1090,54 @@
         },
         "type": "object"
       },
+      "ConnectionInfoResponse": {
+        "properties": {
+          "cfConnectingIp": {
+            "type": "string"
+          },
+          "forwarded": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "forwardedFor": {
+            "items": {
+              "$ref": "#/components/schemas/Hop"
+            },
+            "type": "array"
+          },
+          "realIp": {
+            "type": "string"
+          },
+          "remoteAddress": {
+            "default": "",
+            "description": "Endereço remoto visto pela aplicação. Pode NÃO ser o soquete: com cabeçalhos encaminhados em modo nativo ele vem reescrito para o primeiro valor do X-Forwarded-For.",
+            "type": "string"
+          },
+          "remoteAddressKind": {
+            "enum": [
+              "INTERNAL",
+              "CLOUDFLARE",
+              "PUBLIC",
+              "UNREADABLE"
+            ],
+            "type": "string"
+          },
+          "remoteAddressRewritten": {
+            "default": false,
+            "description": "Verdadeiro quando o remoteAddress é igual ao primeiro salto do X-Forwarded-For, sinal de que foi reescrito a partir do cabeçalho.",
+            "type": "boolean"
+          },
+          "resolvedClientIp": {
+            "type": "string"
+          },
+          "trueClientIp": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "ConnectionResponse": {
         "properties": {
           "connectorId": {
@@ -1029,6 +1163,12 @@
           },
           "lastSyncedAt": {
             "format": "date-time",
+            "type": "string"
+          },
+          "needsAttention": {
+            "type": "boolean"
+          },
+          "status": {
             "type": "string"
           }
         },
@@ -1068,6 +1208,12 @@
             "format": "int32",
             "type": "integer"
           },
+          "skippedConnections": {
+            "items": {
+              "$ref": "#/components/schemas/SkippedConnection"
+            },
+            "type": "array"
+          },
           "suggested": {
             "format": "int32",
             "type": "integer"
@@ -1083,6 +1229,13 @@
           "uploadId": {
             "format": "uuid",
             "type": "string"
+          },
+          "uploadIds": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "type": "array"
           }
         },
         "type": "object"
@@ -1111,6 +1264,7 @@
       "CreateAccountRequest": {
         "properties": {
           "institution": {
+            "default": "",
             "description": "Instituição",
             "example": "Nubank",
             "maxLength": 160,
@@ -1118,6 +1272,7 @@
             "type": "string"
           },
           "name": {
+            "default": "",
             "description": "Como a conta aparece na tela",
             "example": "Nubank ····0777",
             "maxLength": 120,
@@ -1125,11 +1280,13 @@
             "type": "string"
           },
           "statementClosingDay": {
+            "default": "",
             "description": "Dia do fechamento da fatura (1 a 31), só para cartão",
             "format": "int32",
             "type": "integer"
           },
           "statementDueDay": {
+            "default": "",
             "description": "Dia do vencimento da fatura (1 a 31), só para cartão",
             "format": "int32",
             "type": "integer"
@@ -1214,6 +1371,7 @@
             "type": "number"
           },
           "kind": {
+            "minLength": 1,
             "type": "string"
           },
           "name": {
@@ -1249,6 +1407,7 @@
             "type": "string"
           },
           "kind": {
+            "minLength": 1,
             "type": "string"
           },
           "market": {
@@ -1319,6 +1478,7 @@
             "type": "string"
           },
           "type": {
+            "minLength": 1,
             "type": "string"
           },
           "unitPrice": {
@@ -1344,6 +1504,7 @@
             "type": "integer"
           },
           "cadence": {
+            "minLength": 1,
             "type": "string"
           },
           "categoryId": {
@@ -1364,6 +1525,7 @@
             "type": "number"
           },
           "flow": {
+            "minLength": 1,
             "type": "string"
           },
           "matchHint": {
@@ -1575,11 +1737,13 @@
       "DeclareCreditLimitRequest": {
         "properties": {
           "creditLimit": {
+            "default": "",
             "description": "Limite total do cartão. Nulo apaga o que estava informado.",
             "example": 5000.0,
             "type": "number"
           },
           "sharedWithAccountId": {
+            "default": "",
             "description": "Conta dona do limite, quando ele é compartilhado com outro cartão",
             "format": "uuid",
             "type": "string"
@@ -1626,6 +1790,24 @@
           "seriesUpdated": {
             "format": "int32",
             "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "ExchangeRateUsed": {
+        "properties": {
+          "asOf": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "rate": {
+            "type": "number"
+          },
+          "stale": {
+            "type": "boolean"
           }
         },
         "type": "object"
@@ -1902,6 +2084,7 @@
       "ForgotPasswordRequest": {
         "properties": {
           "email": {
+            "format": "email",
             "maxLength": 150,
             "minLength": 0,
             "type": "string"
@@ -1950,6 +2133,23 @@
             "type": "number"
           },
           "timestamp": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "Hop": {
+        "properties": {
+          "address": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "INTERNAL",
+              "CLOUDFLARE",
+              "PUBLIC",
+              "UNREADABLE"
+            ],
             "type": "string"
           }
         },
@@ -2105,6 +2305,10 @@
             "format": "double",
             "type": "number"
           },
+          "providerTimestamp": {
+            "type": "string",
+            "writeOnly": true
+          },
           "sell": {
             "type": "number"
           },
@@ -2116,10 +2320,6 @@
               "type": "number"
             },
             "type": "array"
-          },
-          "timestamp": {
-            "type": "string",
-            "writeOnly": true
           },
           "type": {
             "type": "string"
@@ -2696,6 +2896,7 @@
       "MergeAccountRequest": {
         "properties": {
           "intoAccountId": {
+            "default": "",
             "description": "A conta que FICA e absorve o histórico da outra",
             "format": "uuid",
             "type": "string"
@@ -2709,6 +2910,7 @@
       "MfaActivateRequest": {
         "properties": {
           "code": {
+            "minLength": 1,
             "pattern": "\\d{6}",
             "type": "string"
           }
@@ -2721,12 +2923,14 @@
       "MfaChallengeRequest": {
         "properties": {
           "code": {
+            "minLength": 1,
             "type": "string"
           },
           "deviceLabel": {
             "type": "string"
           },
           "mfaToken": {
+            "minLength": 1,
             "type": "string"
           },
           "rememberDevice": {
@@ -2742,6 +2946,7 @@
       "MfaDisableRequest": {
         "properties": {
           "password": {
+            "minLength": 1,
             "type": "string"
           }
         },
@@ -3619,24 +3824,34 @@
       "ProblemDetail": {
         "properties": {
           "detail": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "instance": {
             "format": "uri",
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "properties": {
-            "additionalProperties": {
-              "type": "object"
-            },
-            "type": "object"
+            "additionalProperties": {},
+            "type": [
+              "object",
+              "null"
+            ]
           },
           "status": {
             "format": "int32",
             "type": "integer"
           },
           "title": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "type": {
             "format": "uri",
@@ -3759,29 +3974,35 @@
         "type": "object"
       },
       "ProviderOption": {
+        "default": null,
         "description": "Um provedor e seus modelos",
         "properties": {
           "apiKeyUrl": {
+            "default": "",
             "description": "Página onde o usuário emite a própria chave",
             "example": "https://console.anthropic.com/settings/keys",
             "type": "string"
           },
           "defaultModel": {
+            "default": "",
             "description": "Modelo usado quando o cadastro vem sem model",
             "example": "claude-haiku-4-5",
             "type": "string"
           },
           "id": {
+            "default": "",
             "description": "Valor a mandar em provider no cadastro",
             "example": "ANTHROPIC",
             "type": "string"
           },
           "label": {
+            "default": "",
             "description": "Nome para exibir",
             "example": "Anthropic Claude",
             "type": "string"
           },
           "models": {
+            "default": "",
             "description": "Modelos aceitos; qualquer outro valor responde 400",
             "items": {
               "type": "string"
@@ -3794,6 +4015,7 @@
       "PurchasePreferenceRequest": {
         "properties": {
           "cadence": {
+            "minLength": 1,
             "type": "string"
           },
           "cardAccountId": {
@@ -4007,19 +4229,23 @@
       "RegisterRequest": {
         "properties": {
           "email": {
+            "default": "",
             "example": "alice@exemplo.com",
-            "maxLength": 180,
+            "format": "email",
+            "maxLength": 150,
             "minLength": 0,
             "type": "string"
           },
           "name": {
+            "default": "",
             "description": "Como a pessoa quer ser chamada no app",
             "example": "Alice",
-            "maxLength": 120,
+            "maxLength": 100,
             "minLength": 0,
             "type": "string"
           },
           "password": {
+            "default": "",
             "description": "Mínimo de 8 caracteres — o mesmo piso da troca e da recuperação de senha",
             "maxLength": 100,
             "minLength": 8,
@@ -4150,6 +4376,7 @@
             "type": "string"
           },
           "token": {
+            "minLength": 1,
             "type": "string"
           }
         },
@@ -4176,6 +4403,7 @@
             "items": {
               "$ref": "#/components/schemas/Item"
             },
+            "minItems": 1,
             "type": "array"
           }
         },
@@ -4223,21 +4451,27 @@
         "type": "object"
       },
       "SaveAiSettingsRequest": {
+        "default": null,
         "description": "Provedor, modelo e chave do próprio usuário",
         "properties": {
           "apiKey": {
+            "default": "",
             "description": "A chave do usuário no provedor. Enviada uma única vez: nunca volta em nenhuma resposta.",
             "example": "sk-...",
+            "minLength": 1,
             "type": "string"
           },
           "model": {
+            "default": "",
             "description": "Modelo do provedor. Em branco usa o primeiro da lista daquele provedor.",
             "example": "gpt-4o-mini",
             "type": "string"
           },
           "provider": {
+            "default": "",
             "description": "GEMINI, OPENAI, ANTHROPIC ou OPENROUTER",
             "example": "OPENAI",
+            "minLength": 1,
             "type": "string"
           }
         },
@@ -4338,6 +4572,21 @@
           "openTrips": {
             "format": "int32",
             "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "SkippedConnection": {
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
           }
         },
         "type": "object"
@@ -4510,6 +4759,12 @@
           "currentValue": {
             "type": "number"
           },
+          "exchangeRates": {
+            "items": {
+              "$ref": "#/components/schemas/ExchangeRateUsed"
+            },
+            "type": "array"
+          },
           "movements12m": {
             "$ref": "#/components/schemas/MovementTotals12m"
           },
@@ -4545,6 +4800,12 @@
           },
           "totalInvested": {
             "type": "number"
+          },
+          "unconverted": {
+            "items": {
+              "$ref": "#/components/schemas/UnconvertedPosition"
+            },
+            "type": "array"
           },
           "updatedAt": {
             "format": "date-time",
@@ -4648,6 +4909,7 @@
       "TransactionRequest": {
         "properties": {
           "assetCode": {
+            "default": "",
             "description": "Código do ativo",
             "example": "PETR4",
             "maxLength": 20,
@@ -4655,20 +4917,24 @@
             "type": "string"
           },
           "priceAtTransaction": {
+            "default": "",
             "description": "Preço unitário na data da operação",
             "example": 38.42,
             "minimum": 1e-08,
             "type": "number"
           },
           "quantity": {
+            "default": "",
             "description": "Quantidade de cotas",
             "example": 100,
             "minimum": 1e-08,
             "type": "number"
           },
           "type": {
+            "default": "",
             "description": "BUY para compra, SELL para venda",
             "example": "BUY",
+            "minLength": 1,
             "pattern": "BUY|SELL",
             "type": "string"
           }
@@ -4862,6 +5128,30 @@
             "type": "number"
           },
           "type": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "UnconvertedPosition": {
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "currentValue": {
+            "type": "number"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "investedAmount": {
+            "type": "number"
+          },
+          "name": {
             "type": "string"
           }
         },
@@ -5130,6 +5420,7 @@
             "type": "boolean"
           },
           "shareScope": {
+            "minLength": 1,
             "type": "string"
           },
           "sharedAccountIds": {
@@ -5874,9 +6165,7 @@
             "content": {
               "*/*": {
                 "schema": {
-                  "additionalProperties": {
-                    "type": "object"
-                  },
+                  "additionalProperties": {},
                   "type": "object"
                 }
               }
@@ -5971,9 +6260,31 @@
             "description": "Salvo; a resposta é a mesma do GET"
           },
           "400": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "additionalProperties": {
+                    "default": ""
+                  },
+                  "default": "",
+                  "type": "string"
+                }
+              }
+            },
             "description": "Provedor ou modelo fora do catálogo, ou chave em formato impossível"
           },
           "503": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "additionalProperties": {
+                    "default": ""
+                  },
+                  "default": "",
+                  "type": "string"
+                }
+              }
+            },
             "description": "Instalação sem chave-mestra de criptografia"
           }
         },
@@ -6701,9 +7012,7 @@
             "content": {
               "*/*": {
                 "schema": {
-                  "additionalProperties": {
-                    "type": "object"
-                  },
+                  "additionalProperties": {},
                   "type": "object"
                 }
               }
@@ -6746,9 +7055,7 @@
             "content": {
               "*/*": {
                 "schema": {
-                  "additionalProperties": {
-                    "type": "object"
-                  },
+                  "additionalProperties": {},
                   "type": "object"
                 }
               }
@@ -6835,9 +7142,7 @@
             "content": {
               "*/*": {
                 "schema": {
-                  "additionalProperties": {
-                    "type": "object"
-                  },
+                  "additionalProperties": {},
                   "type": "object"
                 }
               }
@@ -7161,9 +7466,7 @@
             "content": {
               "*/*": {
                 "schema": {
-                  "additionalProperties": {
-                    "type": "object"
-                  },
+                  "additionalProperties": {},
                   "type": "object"
                 }
               }
@@ -7198,9 +7501,7 @@
             "content": {
               "*/*": {
                 "schema": {
-                  "additionalProperties": {
-                    "type": "object"
-                  },
+                  "additionalProperties": {},
                   "type": "object"
                 }
               }
@@ -7773,7 +8074,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/CreateIncomeSource"
+                "$ref": "#/components/schemas/AcceptIncomeSuggestion"
               }
             }
           }
@@ -7840,8 +8141,8 @@
             "name": "limit",
             "required": false,
             "schema": {
-              "format": "int32",
-              "type": "integer"
+              "default": "",
+              "type": "string"
             }
           },
           {
@@ -7851,8 +8152,8 @@
             "name": "offset",
             "required": false,
             "schema": {
-              "format": "int32",
-              "type": "integer"
+              "default": "",
+              "type": "string"
             }
           }
         ],
@@ -7874,7 +8175,11 @@
             "content": {
               "*/*": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemDetail"
+                  "$ref": "#/components/schemas/ProblemDetail",
+                  "additionalProperties": {
+                    "default": ""
+                  },
+                  "default": ""
                 }
               }
             },
@@ -7899,6 +8204,7 @@
             "name": "type",
             "required": false,
             "schema": {
+              "default": "",
               "type": "string"
             }
           },
@@ -7909,6 +8215,7 @@
             "name": "segment",
             "required": false,
             "schema": {
+              "default": "",
               "type": "string"
             }
           },
@@ -7919,6 +8226,7 @@
             "name": "q",
             "required": false,
             "schema": {
+              "default": "",
               "type": "string"
             }
           },
@@ -7929,6 +8237,7 @@
             "name": "sort",
             "required": false,
             "schema": {
+              "default": "",
               "type": "string"
             }
           },
@@ -7939,8 +8248,8 @@
             "name": "limit",
             "required": false,
             "schema": {
-              "format": "int32",
-              "type": "integer"
+              "default": "",
+              "type": "string"
             }
           },
           {
@@ -7950,6 +8259,7 @@
             "name": "favorites",
             "required": false,
             "schema": {
+              "default": "",
               "type": "string"
             }
           },
@@ -7959,6 +8269,7 @@
             "name": "cursor",
             "required": false,
             "schema": {
+              "default": "",
               "type": "string"
             }
           }
@@ -7978,7 +8289,11 @@
             "content": {
               "*/*": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemDetail"
+                  "$ref": "#/components/schemas/ProblemDetail",
+                  "additionalProperties": {
+                    "default": ""
+                  },
+                  "default": ""
                 }
               }
             },
@@ -8018,9 +8333,7 @@
             "content": {
               "*/*": {
                 "schema": {
-                  "additionalProperties": {
-                    "type": "object"
-                  },
+                  "additionalProperties": {},
                   "type": "object"
                 }
               }
@@ -8036,7 +8349,7 @@
     },
     "/api/v1/indicators/historical/{currencyCode}": {
       "get": {
-        "description": "Retorna o histórico de variação de uma moeda nos últimos dias.",
+        "description": "Retorna o histórico de variação de uma moeda nos últimos dias.\n\n`currencyCode`: código de moeda ou cripto da lista suportada (USD, EUR, BTC...), com ou sem o prefixo `currency_`/`crypto_`. `days`: só as janelas que o app usa (hoje, 7). Fora disso responde 400 — cada par novo (código, janela) custaria uma chamada à AwesomeAPI, do mesmo orçamento diário que sustenta a Home.",
         "operationId": "getHistoricalData",
         "parameters": [
           {
@@ -8070,7 +8383,21 @@
                 }
               }
             },
-            "description": "OK"
+            "description": "Série diária, mais recente primeiro"
+          },
+          "400": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail",
+                  "additionalProperties": {
+                    "default": ""
+                  },
+                  "default": ""
+                }
+              }
+            },
+            "description": "Código fora da lista suportada ou janela não aceita"
           }
         },
         "summary": "Dados Históricos",
@@ -8116,6 +8443,7 @@
             "name": "symbol",
             "required": true,
             "schema": {
+              "default": "",
               "type": "string"
             }
           },
@@ -8126,7 +8454,7 @@
             "name": "market",
             "required": false,
             "schema": {
-              "default": "US",
+              "default": "",
               "type": "string"
             }
           }
@@ -8146,7 +8474,11 @@
             "content": {
               "*/*": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemDetail"
+                  "$ref": "#/components/schemas/ProblemDetail",
+                  "additionalProperties": {
+                    "default": ""
+                  },
+                  "default": ""
                 }
               }
             },
@@ -8156,7 +8488,11 @@
             "content": {
               "*/*": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemDetail"
+                  "$ref": "#/components/schemas/ProblemDetail",
+                  "additionalProperties": {
+                    "default": ""
+                  },
+                  "default": ""
                 }
               }
             },
@@ -8171,7 +8507,7 @@
     },
     "/api/v1/indicators/search": {
       "get": {
-        "description": "Busca cotação de um ativo específico (ex: PETR4, AAPL34).\n\nAceita mais de um ticker separado por vírgula, até o teto de 10 por chamada — acima disso responde 400. O teto existe porque o provedor de ações cobra UMA requisição por ticker contra a cota diária: sem ele, uma única chamada com centenas de códigos consumiria a cota do dia inteiro e deixaria todo mundo sem cotação. A chamada de ticker único, que é a do app publicado, não muda em nada.",
+        "description": "Busca cotação de um ativo específico (ex: PETR4, AAPL34).\n\nCada código: letras, dígitos, `^` e ponto, até 12 caracteres (PETR4, MXRF11, AAPL34, ^BVSP); fora disso responde 400.\n\nAceita mais de um ticker separado por vírgula, até o teto de 10 por chamada — acima disso responde 400. O teto existe porque o provedor de ações cobra UMA requisição por ticker contra a cota diária: sem ele, uma única chamada com centenas de códigos consumiria a cota do dia inteiro e deixaria todo mundo sem cotação. A chamada de ticker único, que é a do app publicado, não muda em nada.",
         "operationId": "searchIndicator",
         "parameters": [
           {
@@ -8201,11 +8537,15 @@
             "content": {
               "*/*": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemDetail"
+                  "$ref": "#/components/schemas/ProblemDetail",
+                  "additionalProperties": {
+                    "default": ""
+                  },
+                  "default": ""
                 }
               }
             },
-            "description": "Busca vazia ou acima do teto de tickers"
+            "description": "Busca vazia, código fora do formato ou acima do teto de tickers"
           }
         },
         "summary": "Buscar ativo específico",
@@ -8251,6 +8591,7 @@
             "name": "code",
             "required": true,
             "schema": {
+              "default": "",
               "type": "string"
             }
           }
@@ -8266,11 +8607,29 @@
             },
             "description": "Detalhe do ativo"
           },
+          "400": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail",
+                  "additionalProperties": {
+                    "default": ""
+                  },
+                  "default": ""
+                }
+              }
+            },
+            "description": "Código fora do formato de um papel da B3"
+          },
           "404": {
             "content": {
               "*/*": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProblemDetail"
+                  "$ref": "#/components/schemas/ProblemDetail",
+                  "additionalProperties": {
+                    "default": ""
+                  },
+                  "default": ""
                 }
               }
             },
@@ -8514,8 +8873,8 @@
             "name": "months",
             "required": false,
             "schema": {
-              "format": "int32",
-              "type": "integer"
+              "default": "",
+              "type": "string"
             }
           }
         ],
@@ -8683,7 +9042,7 @@
     },
     "/api/v1/investments/summary": {
       "get": {
-        "description": "Total aplicado, valor atual, lucro e cortes por tipo, instituição e indexador, mais os movimentos dos últimos 12 meses. currentValue soma só as posições que TÊM valor atual; as sem cotação aparecem em needsQuote para o app completar com o indicador ao vivo — a API nunca inventa um zero.",
+        "description": "Total aplicado, valor atual, lucro e cortes por tipo, instituição e indexador, mais os movimentos dos últimos 12 meses. currentValue soma só as posições que TÊM valor atual; as sem cotação aparecem em needsQuote para o app completar com o indicador ao vivo — a API nunca inventa um zero. Todos os totais são em reais: posição em moeda estrangeira entra convertida pela cotação do dia e, sem cotação, fica fora dos totais e vem listada em unconverted, com os valores na moeda de origem (a que nem valor atual tem aparece só em needsQuote). exchangeRates diz o câmbio usado por moeda, a data da cotação (asOf) e stale=true quando ela veio do último snapshot guardado, que pode ter até 7 dias.",
         "operationId": "summary_1",
         "responses": {
           "200": {
@@ -8947,6 +9306,7 @@
             "name": "country",
             "required": false,
             "schema": {
+              "default": "",
               "type": "string"
             }
           },
@@ -8957,6 +9317,7 @@
             "name": "category",
             "required": false,
             "schema": {
+              "default": "",
               "type": "string"
             }
           },
@@ -8967,6 +9328,7 @@
             "name": "sources",
             "required": false,
             "schema": {
+              "default": "",
               "type": "string"
             }
           },
@@ -8977,6 +9339,7 @@
             "name": "region",
             "required": false,
             "schema": {
+              "default": "",
               "type": "string"
             }
           },
@@ -8987,6 +9350,7 @@
             "name": "q",
             "required": false,
             "schema": {
+              "default": "",
               "type": "string"
             }
           },
@@ -8997,6 +9361,7 @@
             "name": "topics",
             "required": false,
             "schema": {
+              "default": "",
               "type": "string"
             }
           },
@@ -9007,8 +9372,8 @@
             "name": "limit",
             "required": false,
             "schema": {
-              "format": "int32",
-              "type": "integer"
+              "default": "",
+              "type": "string"
             }
           }
         ],
@@ -9301,9 +9666,7 @@
             "content": {
               "*/*": {
                 "schema": {
-                  "additionalProperties": {
-                    "type": "object"
-                  },
+                  "additionalProperties": {},
                   "type": "object"
                 }
               }
@@ -10066,7 +10429,7 @@
     },
     "/api/v1/transactions/review": {
       "get": {
-        "description": "Transações aguardando aprovação (sugeridas) ou ajuda (sem categoria), agrupadas por estabelecimento normalizado. uploadId restringe a uma importação.",
+        "description": "Transações aguardando aprovação (sugeridas) ou ajuda (sem categoria), agrupadas por estabelecimento normalizado. uploadId pode se repetir para restringir a várias importações (ex.: ?uploadId=a&uploadId=b); um uploadId continua válido.",
         "operationId": "reviewQueue",
         "parameters": [
           {
@@ -10074,8 +10437,11 @@
             "name": "uploadId",
             "required": false,
             "schema": {
-              "format": "uuid",
-              "type": "string"
+              "items": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "type": "array"
             }
           }
         ],
@@ -10117,9 +10483,7 @@
             "content": {
               "*/*": {
                 "schema": {
-                  "additionalProperties": {
-                    "type": "object"
-                  },
+                  "additionalProperties": {},
                   "type": "object"
                 }
               }
@@ -10135,7 +10499,7 @@
     },
     "/api/v1/transactions/review/confirm-all": {
       "post": {
-        "description": "Confirma tudo que o motor sugeriu (não toca as sem categoria). uploadId restringe a uma importação.",
+        "description": "Confirma tudo que o motor sugeriu (não toca as sem categoria). uploadId pode se repetir para restringir a importações.",
         "operationId": "confirmAll",
         "parameters": [
           {
@@ -10143,8 +10507,11 @@
             "name": "uploadId",
             "required": false,
             "schema": {
-              "format": "uuid",
-              "type": "string"
+              "items": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "type": "array"
             }
           }
         ],
@@ -10153,9 +10520,7 @@
             "content": {
               "*/*": {
                 "schema": {
-                  "additionalProperties": {
-                    "type": "object"
-                  },
+                  "additionalProperties": {},
                   "type": "object"
                 }
               }
@@ -10171,16 +10536,28 @@
     },
     "/api/v1/transactions/review/count": {
       "get": {
-        "description": "Só o número. A Home e a Análise mostravam \"N transações esperando você\" baixando a fila inteira agrupada (92 KB para 1.656 pendentes) a cada abertura, quando a única coisa desenhada era a contagem.",
+        "description": "Só o número. A Home e a Análise mostravam \"N transações esperando você\" baixando a fila inteira agrupada (92 KB para 1.656 pendentes) a cada abertura, quando a única coisa desenhada era a contagem. uploadId pode se repetir para contar várias importações.",
         "operationId": "reviewCount",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "uploadId",
+            "required": false,
+            "schema": {
+              "items": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "type": "array"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
               "*/*": {
                 "schema": {
-                  "additionalProperties": {
-                    "type": "object"
-                  },
+                  "additionalProperties": {},
                   "type": "object"
                 }
               }
@@ -10480,6 +10857,28 @@
           }
         },
         "summary": "Alterar senha do usuário autenticado",
+        "tags": [
+          "Usuário"
+        ]
+      }
+    },
+    "/api/v1/users/me/connection": {
+      "get": {
+        "description": "Diagnóstico, só leitura: saltos do X-Forwarded-For na ordem e classificados (interno, Cloudflare, público), CF-Connecting-IP, True-Client-IP, X-Real-IP, Forwarded, o endereço remoto (que pode vir reescrito a partir do X-Forwarded-For, e não ser o soquete) e o IP que o resolvedor escolheu. Serve para conferir o IP enxergado depois de mudança de hospedagem.",
+        "operationId": "connection",
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectionInfoResponse"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "summary": "Como a API enxergou a conexão desta requisição",
         "tags": [
           "Usuário"
         ]

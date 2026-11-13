@@ -3,12 +3,15 @@ package br.com.economize.service.macro;
 import br.com.economize.config.MarketSourcesProperties;
 import br.com.economize.dto.indicator.TreasuryBond;
 import br.com.economize.service.provider.MarketSnapshotStore;
+import br.com.economize.service.provider.NoLiveDataException;
+import br.com.economize.service.provider.RecentFallbackCache;
 import br.com.economize.service.provider.fallback.FailureSummary;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.cache.annotation.Cacheable;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.core.io.buffer.DataBuffer;
 import org.springframework.core.io.buffer.DataBufferUtils;
 import org.springframework.http.HttpHeaders;
@@ -51,7 +54,9 @@ import java.util.Locale;
  *
  * <p>
  * Cache de 1h e snapshot persistido: se as duas fontes falharem, a lista do
- * dia anterior sai marcada como stale.
+ * dia anterior sai marcada como stale — e essa lista velha (ou a vazia) NÃO
+ * entra no cache: só a lista viva é guardada, para a próxima chamada tentar
+ * a rede de novo em vez de servir o fallback pela hora inteira.
  */
 @Slf4j
 @Service
@@ -75,23 +80,61 @@ public class TreasuryService {
     private final MarketSourcesProperties properties;
     private final MarketSnapshotStore snapshotStore;
     private final Clock clock;
+    /**
+     * O próprio bean, pelo proxy do Spring: o método {@code @Cacheable} só passa
+     * pelo cache quando chamado de fora — chamado em {@code this}, o proxy é
+     * pulado e nada seria cacheado. {@code @Lazy} resolve a auto-referência sem
+     * ciclo no boot. Nos testes de unidade (sem Spring) é o próprio objeto.
+     */
+    private final TreasuryService self;
+    private final RecentFallbackCache recentFallback;
 
     @Autowired
     public TreasuryService(WebClient webClient, MarketSourcesProperties properties,
-            MarketSnapshotStore snapshotStore) {
-        this(webClient, properties, snapshotStore, Clock.systemUTC());
+            MarketSnapshotStore snapshotStore, RecentFallbackCache recentFallback, @Lazy TreasuryService self) {
+        this(webClient, properties, snapshotStore, Clock.systemUTC(), recentFallback, self);
     }
 
     TreasuryService(WebClient webClient, MarketSourcesProperties properties, MarketSnapshotStore snapshotStore,
             Clock clock) {
+        this(webClient, properties, snapshotStore, clock, RecentFallbackCache.disabled(), null);
+    }
+
+    TreasuryService(WebClient webClient, MarketSourcesProperties properties, MarketSnapshotStore snapshotStore,
+            Clock clock, RecentFallbackCache recentFallback, TreasuryService self) {
         this.webClient = webClient;
         this.properties = properties;
         this.snapshotStore = snapshotStore;
         this.clock = clock;
+        this.recentFallback = recentFallback;
+        this.self = self != null ? self : this;
     }
 
-    @Cacheable("treasury")
+    /**
+     * A lista viva (do cache de 1 h) ou, sem ela, o snapshot stale; sem nada,
+     * vazia. O fallback fica só na janela curta de falha
+     * ({@link RecentFallbackCache}): nem guardado pela hora inteira, nem
+     * recalculado (com o CSV de 64 KB de novo) a cada abertura.
+     */
     public Mono<List<TreasuryBond>> getBonds() {
+        return recentFallback.liveOrFallback("treasury", self::liveBonds,
+                e -> snapshotStore.lookupPayload(SNAPSHOT_KEY, TYPE)
+                        .map(snapshot -> {
+                            log.warn("Tesouro: fontes indisponíveis; servindo snapshot de {} ({})",
+                                    snapshot.savedAt(), snapshot.source());
+                            return snapshot.payload().stream().map(TreasuryBond::asStale).toList();
+                        })
+                        .defaultIfEmpty(List.of()));
+    }
+
+    /**
+     * Só a lista VIVA (JSON oficial ou CSV), cacheada por 1h; sem nenhuma das
+     * duas, {@link NoLiveDataException} — erro não entra no cache reativo.
+     * Público só para o proxy de cache; quem quer a lista chama {@link #getBonds}.
+     * {@code sync}: chamadas simultâneas esperam a mesma ida à rede.
+     */
+    @Cacheable(value = "treasury", sync = true)
+    public Mono<List<TreasuryBond>> liveBonds() {
         return official()
                 .onErrorResume(e -> {
                     log.warn("Tesouro Direto (JSON oficial) indisponível: {}", FailureSummary.of(e));
@@ -105,13 +148,7 @@ public class TreasuryService {
                         })
                         .filter(bonds -> !bonds.isEmpty())))
                 .doOnNext(bonds -> snapshotStore.savePayload(SNAPSHOT_KEY, bonds, bonds.get(0).source()))
-                .switchIfEmpty(Mono.defer(() -> snapshotStore.lookupPayload(SNAPSHOT_KEY, TYPE)
-                        .map(snapshot -> {
-                            log.warn("Tesouro: fontes indisponíveis; servindo snapshot de {} ({})",
-                                    snapshot.savedAt(), snapshot.source());
-                            return snapshot.payload().stream().map(TreasuryBond::asStale).toList();
-                        })))
-                .defaultIfEmpty(List.of());
+                .switchIfEmpty(Mono.error(() -> new NoLiveDataException("títulos do Tesouro")));
     }
 
     Mono<List<TreasuryBond>> official() {

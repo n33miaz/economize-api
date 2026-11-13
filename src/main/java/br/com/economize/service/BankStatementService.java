@@ -1,5 +1,7 @@
 package br.com.economize.service;
 
+import br.com.economize.config.StatementImportProperties;
+import br.com.economize.exception.PayloadTooLargeException;
 import br.com.economize.exception.ResourceNotFoundException;
 import br.com.economize.model.BankTransaction;
 import br.com.economize.model.Category;
@@ -25,6 +27,7 @@ import br.com.economize.service.statement.parser.StatementParserStrategy;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.core.io.buffer.DataBufferLimitException;
 import org.springframework.core.io.buffer.DataBufferUtils;
 import org.springframework.http.codec.multipart.FilePart;
 import org.springframework.stereotype.Service;
@@ -100,6 +103,8 @@ public class BankStatementService {
     // mas a indireção segura o acoplamento fraco e mantém de pé os testes que
     // montam este serviço sem o módulo de IA
     private final ObjectProvider<AiCategorySuggester> aiSuggester;
+    // tetos do arquivo (tamanho, linhas): ver StatementImportProperties
+    private final StatementImportProperties limits;
 
     public Mono<ImportResult> processFile(String email, FilePart filePart) {
         return processFile(email, filePart, null);
@@ -121,7 +126,13 @@ public class BankStatementService {
         return Mono.fromCallable(() -> userRepository.findByEmail(email)
                         .orElseThrow(() -> new IllegalArgumentException("Usuário não encontrado")))
                 .subscribeOn(Schedulers.boundedElastic())
-                .flatMap(user -> DataBufferUtils.join(filePart.content())
+                // O join COM teto conta os bytes enquanto junta e, ao passar do
+                // limite, aborta e libera os buffers já recebidos — o arquivo
+                // gigante nunca chega inteiro ao heap. O multipart já corta antes
+                // (spring.webflux.multipart.max-disk-usage-per-part); esta é a
+                // segunda trava, que não depende de configuração externa.
+                .flatMap(user -> DataBufferUtils.join(filePart.content(), maxUploadBytes())
+                        .onErrorMap(DataBufferLimitException.class, ex -> tooLarge())
                         .map(buffer -> {
                             byte[] bytes = new byte[buffer.readableByteCount()];
                             buffer.read(bytes);
@@ -129,6 +140,15 @@ public class BankStatementService {
                             return bytes;
                         })
                         .flatMap(bytes -> processBytes(user, filePart.filename(), bytes, accountId)));
+    }
+
+    private int maxUploadBytes() {
+        // DataBufferUtils.join conta em int; teto acima de 2 GB não faz sentido aqui
+        return (int) Math.min(Integer.MAX_VALUE, limits.getMaxUploadSize().toBytes());
+    }
+
+    private PayloadTooLargeException tooLarge() {
+        return PayloadTooLargeException.forLimit(limits.getMaxUploadSize());
     }
 
     /**
@@ -191,6 +211,14 @@ public class BankStatementService {
         List<ParsedTransaction> parsed = parser.parse(new ByteArrayInputStream(bytes));
         if (parsed.isEmpty()) {
             throw new IllegalArgumentException("Nenhuma transação encontrada no arquivo");
+        }
+        // Teto de lançamentos ANTES da categorização e da gravação, que é onde o
+        // custo por linha se multiplica (regras, IA, banco). Recusa em vez de
+        // cortar: importar só o começo gravaria o hash e o reenvio do arquivo
+        // inteiro passaria a responder "já importado" com dados faltando.
+        if (parsed.size() > limits.getMaxRows()) {
+            throw new IllegalArgumentException("O arquivo tem mais de " + limits.getMaxRows()
+                    + " lançamentos. Exporte um período menor do extrato.");
         }
         if (accountId != null) {
             // a origem viaja com a linha ate a gravacao, do mesmo jeito que no
@@ -303,6 +331,12 @@ public class BankStatementService {
         ReconciliationLedger ledger = new ReconciliationLedger(existing);
         // linhas já gravadas que ganham a origem desta importação (EC-113)
         Map<UUID, UUID> accountBackfill = new java.util.LinkedHashMap<>();
+        // As datas em que esta importação MEXE: o que entra e o que muda de
+        // origem. É o recorte que a faxina vai ler (ver HygieneWindow) — linha
+        // reconhecida e descartada não entra, senão reimportar dois anos de
+        // extrato por causa de uma linha nova devolveria a faxina ao extrato
+        // inteiro
+        List<OffsetDateTime> datasTocadas = new ArrayList<>();
 
         // 1º passe: o que já existe pelo id externo sai da frente, mas consome o
         // crédito da PRÓPRIA linha no ledger — senão uma transação nova de mesmo
@@ -330,6 +364,9 @@ public class BankStatementService {
                 // veio do extrato da conta corrente.
                 if (tx.getAccountId() != null && known.getAccountId() == null && known.getId() != null) {
                     accountBackfill.put(known.getId(), tx.getAccountId());
+                    // ganhar conta de origem muda de que lado a linha fica na
+                    // varredura de duplicatas: ela conta como alterada
+                    datasTocadas.add(known.getDate());
                 }
                 continue;
             }
@@ -373,6 +410,12 @@ public class BankStatementService {
         for (ParsedTransaction tx : parsed) {
             bySource.computeIfAbsent(sourceOf.apply(tx), k -> new ArrayList<>());
         }
+        // Acertos de regra POR FONTE: cada fonte leva para a gravação só os
+        // acertos das linhas dela. Até 12/11/2026 os acertos do lote inteiro
+        // iam com a primeira fonte que gravasse — se a outra falhasse, os
+        // acertos das linhas que não entraram já estavam salvos, e a nova
+        // tentativa os somava de novo (métrica inflada a cada tentativa)
+        Map<UploadSource, Map<UUID, Integer>> hitsBySource = new java.util.HashMap<>();
         for (Candidate candidate : fresh) {
             ParsedTransaction tx = candidate.tx();
             CategorizationEngine.Result result = categorizationEngine.categorize(
@@ -396,13 +439,23 @@ public class BankStatementService {
                     // entre contas do titular (EC-106); daqui para frente
                     // ninguém mais teria como descobrir
                     .internalTransfer(tx.isInternalTransfer())
+                    // devolução dentro de cartão de crédito chega fora das
+                    // somas: crédito em cartão nunca é receita, e só o conector
+                    // sabe que a conta é um cartão
+                    .refunded(tx.isRefunded())
                     // ... e o mesmo vale para a ORIGEM (EC-113): só o conector
                     // sabe de qual conta puxou. Nulo no upload manual de arquivo,
                     // que não tem conta de provedor.
                     .accountId(tx.getAccountId())
                     .build();
             toSave.add(entity);
-            bySource.get(sourceOf.apply(tx)).add(entity);
+            datasTocadas.add(entity.getDate());
+            UploadSource fonte = sourceOf.apply(tx);
+            bySource.get(fonte).add(entity);
+            if (result.matchedRule() != null) {
+                hitsBySource.computeIfAbsent(fonte, k -> new java.util.LinkedHashMap<>())
+                        .merge(result.matchedRule().getId(), 1, Integer::sum);
+            }
         }
 
         applyAiSuggestions(user, toSave);
@@ -423,7 +476,8 @@ public class BankStatementService {
         }
 
         // upload + transações + hits das regras num único commit (EC-075), UM
-        // COMMIT POR FONTE: qualquer falha desfaz o conjunto daquela fonte e ela
+        // COMMIT POR FONTE: qualquer falha desfaz o conjunto daquela fonte —
+        // inclusive os acertos das regras que decidiram as linhas dela — e ela
         // continua reimportável.
         //
         // Falha parcial (uma conexão grava, a outra não): o que gravou FICA
@@ -433,11 +487,6 @@ public class BankStatementService {
         // o buraco. A próxima sincronização reconhece pelo id externo o que já
         // entrou e importa só o que faltou.
         List<StatementUpload> uploads = new ArrayList<>();
-        // os hits das regras são do lote inteiro: vão junto com a primeira
-        // gravação que der certo, e uma vez só. Limitação conhecida: numa falha
-        // parcial, os hits das linhas que não gravaram são contados de novo na
-        // sincronização seguinte — o efeito fica só na métrica de acertos
-        java.util.Collection<br.com.economize.model.CategoryRule> pendingRules = ctx.getDirtyRules();
         RuntimeException failure = null;
         List<String> failedSources = new ArrayList<>();
         for (Map.Entry<UploadSource, List<BankTransaction>> group : bySource.entrySet()) {
@@ -452,8 +501,9 @@ public class BankStatementService {
                                 .transactionsImported(group.getValue().size())
                                 .build(),
                         group.getValue(),
-                        pendingRules);
-                pendingRules = List.of();
+                        hitsBySource.getOrDefault(source, Map.of()).entrySet().stream()
+                                .map(e -> new StatementImportWriter.RuleHits(e.getKey(), e.getValue()))
+                                .toList());
                 uploads.add(upload);
             } catch (RuntimeException e) {
                 failedSources.add(source.name());
@@ -479,20 +529,31 @@ public class BankStatementService {
         log.info("Importadas {} novas transações ({}) em {} upload(s): {} sugeridas, {} sem categoria, "
                         + "{} reconciliadas, user={}",
                 toSave.size(), format, uploads.size(), suggested, uncategorized, reconciled, user.getId());
-        // A resposta tem lugar para UM upload ("revisar esta importação"). Com
-        // várias conexões vai o que mais trouxe novidade — o primeiro, no empate;
-        // os outros continuam alcançáveis pela lista de fontes.
+        // uploadId preserva o contrato publicado e aponta o que mais trouxe
+        // novidade; uploadIds reúne cada fonte com lançamento novo para a
+        // revisão multi-banco.
         StatementUpload principal = uploads.get(0);
         for (StatementUpload upload : uploads) {
             if (upload.getTransactionsImported() > principal.getTransactionsImported()) principal = upload;
         }
         // UM evento por importação, e só quando tudo gravou: quem escuta agenda
-        // a faxina do extrato INTEIRO do usuário, então um evento por banco
-        // dispararia N faxinas concorrentes sobre os mesmos lançamentos. Em
-        // falha parcial não sai nenhum — a próxima sincronização publica.
-        eventPublisher.publish(new StatementImportedEvent(user.getId(), format, toSave.size(), principal.getId()));
+        // a faxina do usuário, então um evento por banco dispararia N faxinas
+        // concorrentes sobre os mesmos lançamentos. Em falha parcial não sai
+        // nenhum — a próxima sincronização publica.
+        //
+        // O evento leva o intervalo de datas do LOTE INTEIRO (todas as fontes):
+        // a faxina lê só essa janela, e o uploadId é só o do upload principal.
+        datasTocadas.removeIf(java.util.Objects::isNull);
+        OffsetDateTime maisAntiga = datasTocadas.isEmpty() ? null : java.util.Collections.min(datasTocadas);
+        OffsetDateTime maisNova = datasTocadas.isEmpty() ? null : java.util.Collections.max(datasTocadas);
+        eventPublisher.publish(new StatementImportedEvent(user.getId(), format, toSave.size(), principal.getId(),
+                maisAntiga, maisNova));
+        List<UUID> uploadIds = uploads.stream()
+                .filter(upload -> upload.getTransactionsImported() > 0)
+                .map(StatementUpload::getId)
+                .toList();
         return new ImportResult(principal.getId(), toSave.size(), suggested, uncategorized, reconciled, false,
-                format.name());
+                format.name(), uploadIds);
     }
 
     /**
@@ -838,6 +899,18 @@ public class BankStatementService {
     }
 
     public record ImportResult(UUID uploadId, int transactionsImported, int suggested,
-                               int uncategorized, int reconciled, boolean duplicated, String format) {
+                               int uncategorized, int reconciled, boolean duplicated, String format,
+                               List<UUID> uploadIds) {
+
+        /** Mantém os chamadores antigos e associa o upload único à nova lista. */
+        public ImportResult(UUID uploadId, int transactionsImported, int suggested,
+                            int uncategorized, int reconciled, boolean duplicated, String format) {
+            this(uploadId, transactionsImported, suggested, uncategorized, reconciled, duplicated, format,
+                    uploadId == null ? List.of() : List.of(uploadId));
+        }
+
+        public ImportResult {
+            uploadIds = List.copyOf(uploadIds);
+        }
     }
 }

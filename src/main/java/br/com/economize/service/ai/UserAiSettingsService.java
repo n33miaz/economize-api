@@ -214,8 +214,12 @@ public class UserAiSettingsService {
                     user.getId(), e.getMessage());
             keyStatus = AiSettingsResponse.KEY_UNREADABLE;
         }
+        // mostra o modelo que de fato vai ser usado: um modelo salvo aposentado
+        // pelo provedor cai no padrão também aqui, para a tela não prometer o que o
+        // chat não entrega (ver ProviderConfig.modelOrDefault)
+        String model = properties.get(settings.getProvider()).modelOrDefault(settings.getModel());
         return new AiSettingsResponse(AiSettingsResponse.SOURCE_USER, settings.getProvider().name(),
-                settings.getModel(), settings.getApiKeyLast4(), keyStatus,
+                model, settings.getApiKeyLast4(), keyStatus,
                 cipher.isAvailable(), settings.getUpdatedAt());
     }
 
@@ -254,6 +258,13 @@ public class UserAiSettingsService {
         // deixar passar viraria um 401 do provedor difícil de explicar
         if (apiKey.chars().anyMatch(Character::isWhitespace)) {
             throw new IllegalArgumentException("A chave não pode conter espaços");
+        }
+        // Chave real de provedor é ASCII. Caractere acentuado ou emoji ocupa até
+        // 4 bytes, e 512 deles geravam um envelope cifrado maior que a coluna
+        // api_key_cipher VARCHAR(1024) (V17) — o banco recusava e o app via 409
+        if (apiKey.chars().anyMatch(c -> c < 0x21 || c > 0x7E)) {
+            throw new IllegalArgumentException(
+                    "A chave só pode ter letras sem acento, números e símbolos comuns");
         }
         return apiKey;
     }

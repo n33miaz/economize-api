@@ -1,6 +1,7 @@
 package br.com.economize.dto.account;
 
 import jakarta.validation.constraints.DecimalMin;
+import jakarta.validation.constraints.Digits;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
 
@@ -16,6 +17,10 @@ import java.util.UUID;
 public record UpsertInvoiceReserveRequest(
         @NotNull(message = "Informe o valor reservado")
         @DecimalMin(value = "0.01", message = "O valor reservado precisa ser maior que zero")
+        // A coluna é NUMERIC(15,2): sem este limite, valor gigante ou com mais
+        // de 2 casas passava pela validação e estourava no banco como 500
+        @Digits(integer = 13, fraction = 2,
+                message = "O valor reservado precisa ter no máximo 13 dígitos inteiros e 2 casas decimais")
         BigDecimal amount,
 
         UUID heldInAccountId,

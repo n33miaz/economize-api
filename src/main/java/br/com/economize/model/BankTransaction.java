@@ -182,11 +182,29 @@ public class BankTransaction {
      * <p>Para uma compra de −604,91 com 18,50 devolvidos, −586,41. Para uma
      * linha sem estorno parcial, o próprio {@code amount}. Toda soma em Java
      * lê daqui; as consultas JPQL fazem a mesma conta inline.
+     *
+     * <p>O líquido nunca troca de sinal: se os estornos parciais passarem do
+     * valor da compra (−100 com dois créditos de 60), ela vale zero, e não
+     * +20 de receita nem R$ 20 de despesa.
      */
     public BigDecimal getNetAmount() {
         if (amount == null) return null;
         if (refundedAmount == null || refundedAmount.signum() == 0) return amount;
-        return amount.add(refundedAmount);
+        BigDecimal net = amount.add(refundedAmount);
+        return net.signum() * amount.signum() < 0 ? BigDecimal.ZERO : net;
+    }
+
+    /**
+     * Se a linha entra numa soma da visão PESSOAL — a regra da Análise.
+     *
+     * <p>Ficam fora a perna entre contas do próprio dono, a linha descartada e
+     * o par de estorno; é a mesma cláusula de {@code sumByCategory}. O Pix do
+     * casal ({@code familyTransfer}) CONTA aqui: para a pessoa ele é receita ou
+     * despesa, e só sai na consolidação da casa. Quem soma lê daqui e de
+     * {@link #getNetAmount()}, em vez de repetir as três marcas.
+     */
+    public boolean countsInTotals() {
+        return !internalTransfer && !ignored && !refunded;
     }
 
     /** Quem decidiu ignorar: a varredura de duplicatas, ou a pessoa. */

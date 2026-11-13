@@ -122,10 +122,27 @@ public class InvestmentFlowService {
      *               mudarem de lado de uma vez.
      */
     public Outcome sweep(String email, boolean dryRun) {
+        return sweep(email, dryRun, null);
+    }
+
+    /**
+     * A mesma varredura, só sobre o que uma importação trouxe.
+     *
+     * <p><b>Margem zero.</b> A decisão inteira mora em
+     * {@link #ehMovimentoDeInvestimento}, que lê a descrição de UMA linha;
+     * nenhuma linha é comparada com outra. Para o que foi importado, o
+     * resultado é o da varredura total.
+     *
+     * @param janela o que a importação trouxe; nulo = histórico inteiro
+     */
+    public Outcome sweep(String email, boolean dryRun, HygieneWindow janela) {
         User user = userRepository.findByEmail(email)
                 .orElseThrow(() -> new ResourceNotFoundException("Usuário não encontrado"));
-        List<BankTransaction> todas = bankTransactionRepository
-                .findAllByUserIdOrderByDateDesc(user.getId());
+        List<BankTransaction> todas = janela == null
+                ? bankTransactionRepository.findAllByUserIdOrderByDateDesc(user.getId())
+                : bankTransactionRepository
+                        .findAllByUserIdAndDateGreaterThanEqualAndDateLessThanOrderByDateDesc(
+                                user.getId(), janela.from(0), janela.until(0));
 
         Set<UUID> marcar = new LinkedHashSet<>();
         List<Move> detalhes = new ArrayList<>();
@@ -133,8 +150,9 @@ public class InvestmentFlowService {
         BigDecimal resgatado = BigDecimal.ZERO;
         for (BankTransaction tx : todas) {
             // Já fora da soma por decisão do usuário ou por outra varredura:
-            // não há o que fazer, e remarcar só inflaria o relatório
-            if (tx.isInternalTransfer() || tx.isIgnored()) continue;
+            // não há o que fazer, e remarcar só inflaria o relatório. O par de
+            // estorno entra nessa conta: já saiu pela varredura de estorno
+            if (!tx.countsInTotals()) continue;
             if (!ehMovimentoDeInvestimento(tx.getDescription())) continue;
             marcar.add(tx.getId());
             BigDecimal valor = tx.getAmount();

@@ -15,6 +15,7 @@ import br.com.economize.service.statement.category.CategorizationEngine;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -99,11 +100,12 @@ public class TransactionReviewService {
                 .toList();
     }
 
-    public List<BankTransaction> reviewQueue(String email, UUID uploadId) {
+    /** Filtra pelos uploads pedidos; lista vazia preserva a fila global. */
+    public List<BankTransaction> reviewQueue(String email, List<UUID> uploadIds) {
         User user = requireUser(email);
-        if (uploadId != null) {
+        if (uploadIds != null && !uploadIds.isEmpty()) {
             return bankTransactionRepository
-                    .findAllByUserIdAndUploadIdOrderByDateDesc(user.getId(), uploadId).stream()
+                    .findAllByUserIdAndUploadIdInOrderByDateDesc(user.getId(), uploadIds).stream()
                     .filter(t -> PENDING.contains(t.getReviewStatus()))
                     .toList();
         }
@@ -111,7 +113,16 @@ public class TransactionReviewService {
     }
 
     public long pendingCount(String email) {
+        return pendingCount(email, List.of());
+    }
+
+    /** Conta no mesmo recorte de uploads da fila de revisão. */
+    public long pendingCount(String email, List<UUID> uploadIds) {
         User user = requireUser(email);
+        if (uploadIds != null && !uploadIds.isEmpty()) {
+            return bankTransactionRepository.countByUserIdAndUploadIdInAndReviewStatusIn(
+                    user.getId(), uploadIds, PENDING);
+        }
         return bankTransactionRepository.countByUserIdAndReviewStatusIn(user.getId(), PENDING);
     }
 
@@ -272,9 +283,9 @@ public class TransactionReviewService {
      * A aprovação também cristaliza os padrões — é o caminho rápido do usuário
      * que confere a lista e concorda com tudo.
      */
-    public ReviewOutcome confirmAll(String email, UUID uploadId) {
+    public ReviewOutcome confirmAll(String email, List<UUID> uploadIds) {
         User user = requireUser(email);
-        List<BankTransaction> pending = reviewQueue(email, uploadId).stream()
+        List<BankTransaction> pending = reviewQueue(email, uploadIds).stream()
                 .filter(t -> t.getReviewStatus() == BankTransaction.ReviewStatus.SUGGESTED
                         && t.getCategoryId() != null)
                 .toList();
@@ -333,23 +344,34 @@ public class TransactionReviewService {
         CategoryRule rule = categoryRuleRepository.findByUserIdAndPattern(user.getId(), pattern)
                 .orElse(null);
         if (rule == null) {
-            // EXACT de propósito: o padrão é a chave normalizada inteira, então não
-            // há risco de uma regra aprendida "vazar" para estabelecimentos parecidos
-            categoryRuleRepository.save(CategoryRule.builder()
-                    .user(user)
-                    .category(category)
-                    .pattern(pattern)
-                    .matchType(CategoryRule.MatchType.EXACT)
-                    .origin(CategoryRule.Origin.LEARNED)
-                    .hits(1)
-                    .lastHitAt(OffsetDateTime.now())
-                    .build());
-            return;
+            try {
+                // EXACT de propósito: o padrão é a chave normalizada inteira, então não
+                // há risco de uma regra aprendida "vazar" para estabelecimentos parecidos.
+                // saveAndFlush: a violação do unique (user_id, pattern) tem que estourar
+                // AQUI, dentro do catch, e não no commit
+                categoryRuleRepository.saveAndFlush(CategoryRule.builder()
+                        .user(user)
+                        .category(category)
+                        .pattern(pattern)
+                        .matchType(CategoryRule.MatchType.EXACT)
+                        .origin(CategoryRule.Origin.LEARNED)
+                        .hits(1)
+                        .lastHitAt(OffsetDateTime.now())
+                        .build());
+                return;
+            } catch (DataIntegrityViolationException race) {
+                // outra revisão do mesmo padrão inseriu entre a leitura acima e este
+                // insert: a regra dela vale, e esta decisão vira um reforço. Só funciona
+                // porque o serviço não tem transação própria — no Postgres, a violação
+                // abortaria uma transação envolvente e o UPDATE abaixo morreria junto
+                rule = categoryRuleRepository.findByUserIdAndPattern(user.getId(), pattern)
+                        .orElseThrow(() -> race);
+            }
         }
-        rule.setCategory(category);
-        rule.setHits(rule.getHits() + 1);
-        rule.setLastHitAt(OffsetDateTime.now());
-        categoryRuleRepository.save(rule);
+        // UPDATE atômico, não save da entidade: a importação soma acertos direto
+        // no banco (addHits), e salvar a cópia lida acima gravaria o total velho
+        // + 1 por cima do que a sincronização somou nesse meio-tempo
+        categoryRuleRepository.reinforce(rule.getId(), category, OffsetDateTime.now());
     }
 
     /**

@@ -158,7 +158,19 @@ public class MfaService {
         if (mfa.isEnabled()) {
             throw new IllegalArgumentException("O segundo fator já está ativo");
         }
-        Long step = TotpGenerator.matchingStep(decrypt(mfa, user), code, now());
+        String secret;
+        try {
+            secret = decrypt(mfa, user);
+        } catch (SecretCipher.Unreadable e) {
+            // A chave-mestra mudou entre o cadastro e a ativação: o segredo do
+            // QR lido não é mais recuperável. Era 500; o caminho de volta é
+            // gerar outro segredo, então a resposta diz exatamente isso
+            log.warn("Segredo TOTP pendente ilegível para user={} — cadastro precisa ser refeito. {}",
+                    user.getId(), e.getMessage());
+            throw new IllegalArgumentException(
+                    "Não foi possível confirmar o código. Refaça o cadastro do autenticador");
+        }
+        Long step = TotpGenerator.matchingStep(secret, code, now());
         if (step == null) {
             throw new IllegalArgumentException(
                     "Código inválido — confira o relógio do aparelho e tente de novo");
@@ -196,11 +208,9 @@ public class MfaService {
 
         Long step = TotpGenerator.matchingStep(secret, code, now());
         if (step == null) return consumeRecoveryCode(user, code);
-        // Replay: dentro dos 30 segundos de vida, o mesmo código só entra uma vez
-        if (mfa.getLastUsedStep() != null && step <= mfa.getLastUsedStep()) return false;
-        mfa.setLastUsedStep(step);
-        mfaRepository.save(mfa);
-        return true;
+        // Não basta comparar na entidade: duas requisições podem ler o mesmo
+        // passo antes de qualquer save. O UPDATE condicional decide a corrida.
+        return mfaRepository.consumeStepIfNewer(mfa.getId(), step) == 1;
     }
 
     /** Novo lote de códigos; o lote anterior deixa de valer. */
@@ -256,8 +266,11 @@ public class MfaService {
         if (normalized.length() != RECOVERY_CODE_CHARS) return false;
         for (MfaRecoveryCode candidate : recoveryCodeRepository.findAllByUserIdAndUsedAtIsNull(user.getId())) {
             if (passwordEncoder.matches(normalized, candidate.getCodeHash())) {
-                candidate.setUsedAt(OffsetDateTime.now(clock));
-                recoveryCodeRepository.save(candidate);
+                // bcrypt só identifica o hash; o UPDATE condicional decide o
+                // uso único quando duas abas chegam ao mesmo tempo.
+                if (recoveryCodeRepository.consumeIfUnused(candidate.getId(), OffsetDateTime.now(clock)) != 1) {
+                    continue;
+                }
                 log.info("Entrada por código de recuperação para user={} — restam {}",
                         user.getId(),
                         recoveryCodeRepository.countByUserIdAndUsedAtIsNull(user.getId()));

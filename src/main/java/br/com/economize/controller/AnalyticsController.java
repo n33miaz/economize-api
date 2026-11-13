@@ -23,7 +23,6 @@ import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
 import java.time.YearMonth;
-import java.time.ZoneOffset;
 import java.util.List;
 import java.util.UUID;
 
@@ -39,6 +38,8 @@ public class AnalyticsController {
     private final InstallmentProjectionService installmentProjectionService;
     private final SubscriptionHunterService subscriptionHunterService;
     private final IncomePatternService incomePatternService;
+    // "Hoje" na zona financeira (FinancialClockConfig), não na do servidor
+    private final java.time.Clock clock;
 
     @Operation(summary = "Consolidação de um período",
             description = "Entradas, saídas, quebra por categoria e delta vs período anterior. "
@@ -55,11 +56,11 @@ public class AnalyticsController {
             @RequestParam(required = false) String start,
             @RequestParam(required = false) String end) {
         AnalysisWindow requested = AnalysisWindow.resolve(month, start, end);
-        // sem parâmetro nenhum a tela continua abrindo no mês corrente, com a
-        // mesma referência de fuso das janelas de agregação
+        // sem parâmetro nenhum a tela continua abrindo no mês corrente — o de
+        // quem usa (zona financeira), não o do servidor
         AnalysisWindow window = requested != null
                 ? requested
-                : AnalysisWindow.ofMonth(YearMonth.now(ZoneOffset.UTC));
+                : AnalysisWindow.ofMonth(YearMonth.now(clock));
         return Mono.fromCallable(() -> analyticsService.analyze(email, window))
                 .subscribeOn(Schedulers.boundedElastic());
     }
@@ -78,7 +79,7 @@ public class AnalyticsController {
         AnalysisWindow requested = AnalysisWindow.resolve(month, start, end);
         AnalysisWindow window = requested != null
                 ? requested
-                : AnalysisWindow.ofMonth(YearMonth.now(ZoneOffset.UTC));
+                : AnalysisWindow.ofMonth(YearMonth.now(clock));
         return Mono.fromCallable(() -> debtInsightService.summarize(email, window))
                 .subscribeOn(Schedulers.boundedElastic());
     }
@@ -128,9 +129,14 @@ public class AnalyticsController {
             @RequestParam(required = false) String month,
             @RequestParam(required = false) String start,
             @RequestParam(required = false) String end) {
-        AnalysisWindow window = AnalysisWindow.resolve(month, start, end);
+        AnalysisWindow requested = AnalysisWindow.resolve(month, start, end);
+        // Mesmo padrão de /daily: sem recorte nenhum, `resolve` devolve nulo e
+        // o service estourava NPE (500). Cai no mês corrente da zona financeira
+        AnalysisWindow window = requested != null
+                ? requested
+                : AnalysisWindow.ofMonth(YearMonth.now(clock));
         return Mono.fromCallable(() -> categoryBudgetService.statusFor(email, window,
-                        java.time.LocalDate.now(ZoneOffset.UTC)))
+                        java.time.LocalDate.now(clock)))
                 .subscribeOn(Schedulers.boundedElastic());
     }
 
@@ -186,7 +192,7 @@ public class AnalyticsController {
         // resposta que /monthly e /debt já davam para a mesma pergunta
         AnalysisWindow window = requested != null
                 ? requested
-                : AnalysisWindow.ofMonth(YearMonth.now(ZoneOffset.UTC));
+                : AnalysisWindow.ofMonth(YearMonth.now(clock));
         return Mono.fromCallable(() -> analyticsService.dailyTotals(email, window))
                 .subscribeOn(Schedulers.boundedElastic());
     }

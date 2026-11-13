@@ -67,9 +67,11 @@ public class InstallmentProjectionService {
 
     private final BankTransactionRepository bankTransactionRepository;
     private final UserRepository userRepository;
+    // "Hoje" na zona financeira (FinancialClockConfig), não na do servidor
+    private final java.time.Clock clock;
 
     public Overview overviewFor(String email) {
-        return overviewFor(email, YearMonth.now());
+        return overviewFor(email, YearMonth.now(clock));
     }
 
     /** @param hoje injetado para o teste mandar no relógio. */
@@ -83,7 +85,7 @@ public class InstallmentProjectionService {
         Map<String, List<Seen>> grupos = new LinkedHashMap<>();
         for (BankTransaction tx : bankTransactionRepository
                 .findAllByUserIdOrderByDateDesc(user.getId())) {
-            if (tx.isIgnored() || tx.isRefunded() || tx.isInternalTransfer()) continue;
+            if (!tx.countsInTotals()) continue;
             if (tx.getAmount().signum() >= 0) continue;
             DebtClassifier.DebtSignal sinal = DebtClassifier.classify(tx.getDescription());
             if (sinal.installment() == null || sinal.total() == null) continue;

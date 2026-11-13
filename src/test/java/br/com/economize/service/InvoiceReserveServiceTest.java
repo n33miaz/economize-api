@@ -164,6 +164,25 @@ class InvoiceReserveServiceTest {
     }
 
     @Test
+    @DisplayName("ano com sinal ou mais de 4 dígitos é recusado — não cabe no VARCHAR(7)")
+    void shouldRejectYearOutsideFourDigits() {
+        ConnectorAccount cartao = card();
+        when(accountService.requireOwned(cartao.getId(), user.getId())).thenReturn(cartao);
+
+        // YearMonth.parse aceita os dois; o banco não, e o estouro virava 500
+        for (String ref : new String[] {"+10000-01", "-2026-01", "12026-01"}) {
+            assertThatThrownBy(() -> service.save(EMAIL, cartao.getId(), ref,
+                    new BigDecimal("10.00"), null, null))
+                    .as(ref)
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("AAAA-MM");
+        }
+        assertThatThrownBy(() -> service.delete(EMAIL, cartao.getId(), "+10000-01"))
+                .isInstanceOf(IllegalArgumentException.class);
+        verify(repository, never()).save(any());
+    }
+
+    @Test
     @DisplayName("a referência é normalizada, então 2026-09 e 2026-9 apontam para o mesmo ciclo")
     void shouldNormalizeReference() {
         ConnectorAccount cartao = card();
@@ -204,25 +223,6 @@ class InvoiceReserveServiceTest {
 
         assertThat(mapa).hasSize(2);
         assertThat(mapa.get("2026-09").amount()).isEqualByComparingTo("641.14");
-    }
-
-    @Test
-    @DisplayName("o total separado soma todos os cartões e ciclos")
-    void shouldSumEveryReserve() {
-        ConnectorAccount cartao = card();
-        when(repository.findAllByUserId(user.getId())).thenReturn(List.of(
-                reserve(cartao, "2026-08", "320.57"),
-                reserve(cartao, "2026-09", "641.14")));
-
-        assertThat(service.totalReserved(user.getId())).isEqualByComparingTo("961.71");
-    }
-
-    @Test
-    @DisplayName("sem nenhuma reserva o total é zero, nunca nulo")
-    void shouldSumToZeroWithoutReserves() {
-        when(repository.findAllByUserId(user.getId())).thenReturn(List.of());
-
-        assertThat(service.totalReserved(user.getId())).isEqualByComparingTo("0");
     }
 
     // ------------------------------------------------------------- apoio

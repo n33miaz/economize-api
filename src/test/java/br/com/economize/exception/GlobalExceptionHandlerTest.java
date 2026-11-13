@@ -4,6 +4,7 @@ import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
+import java.net.URI;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
@@ -100,5 +101,50 @@ class GlobalExceptionHandlerTest {
         ProblemDetail problem = handler.handleResponseStatusException(ex);
 
         assertThat(problem.getStatus()).isEqualTo(HttpStatus.INTERNAL_SERVER_ERROR.value());
+    }
+    @Test
+    @DisplayName("constraint violada vira 409 genérico, sem vazar constraint nem SQL")
+    void integridadeViolaVira409SemVazar() {
+        // A mensagem real do Hibernate/Postgres traz o nome da constraint e o
+        // SQL; nada disso pode sair na resposta
+        org.springframework.dao.DataIntegrityViolationException ex =
+                new org.springframework.dao.DataIntegrityViolationException(
+                        "could not execute statement [ERROR: duplicate key value violates unique "
+                                + "constraint \"uk_invoice_reserves_card_ref\"] [insert into invoice_reserves ...]",
+                        new java.sql.SQLException("duplicate key uk_invoice_reserves_card_ref"));
+
+        ProblemDetail problem = handler.handleDataIntegrityViolationException(ex);
+
+        assertThat(problem.getStatus()).isEqualTo(HttpStatus.CONFLICT.value());
+        assertThat(problem.getTitle()).isEqualTo("Conflito");
+        assertThat(problem.getType()).hasToString("https://economize.app/erros/conflito");
+        assertThat(problem.getDetail())
+                .startsWith("Não foi possível salvar")
+                .doesNotContain("uk_invoice_reserves_card_ref")
+                .doesNotContain("insert into");
+        assertThat(problem.getProperties()).containsKey("timestamp");
+    }
+
+    @Test
+    @DisplayName("provedor que não respondeu é 503, sem URL nem host no detalhe")
+    void provedorSemRespostaE503() {
+        var ex = new org.springframework.web.reactive.function.client.WebClientRequestException(
+                new java.net.ConnectException("Connection refused"), org.springframework.http.HttpMethod.POST,
+                URI.create("https://api.pluggy.ai/auth?x=1"), new org.springframework.http.HttpHeaders());
+
+        ProblemDetail problem = handler.handleWebClientRequestException(ex);
+
+        assertThat(problem.getStatus()).isEqualTo(503);
+        assertThat(problem.getDetail()).contains("não respondeu").doesNotContain("pluggy");
+    }
+
+    @Test
+    @DisplayName("provedor fora do contrato é 502, sem a mensagem interna")
+    void provedorForaDoContratoE502() {
+        ProblemDetail problem = handler.handleUpstreamProviderException(
+                new UpstreamProviderException("Pluggy não devolveu apiKey — confira PLUGGY_CLIENT_ID/SECRET"));
+
+        assertThat(problem.getStatus()).isEqualTo(502);
+        assertThat(problem.getDetail()).doesNotContain("PLUGGY");
     }
 }

@@ -6,6 +6,7 @@ import org.springframework.http.ProblemDetail;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.bind.support.WebExchangeBindException;
+import org.springframework.web.reactive.function.client.WebClientRequestException;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.server.ServerWebInputException;
@@ -64,6 +65,45 @@ public class GlobalExceptionHandler {
                 return problemDetail;
         }
 
+        /**
+         * Constraint do banco violada (unique, FK, CHECK) que escapou da
+         * validação de entrada — tipicamente duas requisições simultâneas
+         * criando a mesma coisa. Sem este handler virava 500 e o app mandava
+         * "tentar mais tarde" o que é, na verdade, um conflito de estado.
+         *
+         * <p>O detalhe é fixo de propósito: a mensagem da exceção carrega o
+         * nome da constraint e o SQL, que não devem sair para o cliente. No log
+         * vai só a classe da causa, sem o texto (que pode ecoar valores).
+         */
+        @ExceptionHandler(org.springframework.dao.DataIntegrityViolationException.class)
+        public ProblemDetail handleDataIntegrityViolationException(
+                        org.springframework.dao.DataIntegrityViolationException ex) {
+                log.warn("Violação de integridade no banco: causa={}",
+                                ex.getMostSpecificCause().getClass().getName());
+                ProblemDetail problemDetail = ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT,
+                                "Não foi possível salvar: os dados conflitam com o que já existe. "
+                                                + "Atualize a tela e tente de novo.");
+                problemDetail.setTitle("Conflito");
+                problemDetail.setType(Objects
+                                .requireNonNull(URI.create("https://economize.app/erros/conflito")));
+                problemDetail.setProperty("timestamp", Instant.now());
+                return problemDetail;
+        }
+
+        // Arquivo acima do teto do upload. Sem este handler o excesso cairia no
+        // genérico como 500 — e o app mandaria tentar de novo o mesmo arquivo
+        @ExceptionHandler(PayloadTooLargeException.class)
+        public ProblemDetail handlePayloadTooLargeException(PayloadTooLargeException ex) {
+                log.warn("Arquivo recusado por tamanho: {}", ex.getMessage());
+                ProblemDetail problemDetail = ProblemDetail.forStatusAndDetail(HttpStatus.PAYLOAD_TOO_LARGE,
+                                ex.getMessage());
+                problemDetail.setTitle("Arquivo Muito Grande");
+                problemDetail.setType(Objects
+                                .requireNonNull(URI.create("https://economize.app/erros/arquivo-muito-grande")));
+                problemDetail.setProperty("timestamp", Instant.now());
+                return problemDetail;
+        }
+
         // Falha de @Valid no WebFlux — sem este handler cairia no genérico como 500
         @ExceptionHandler(WebExchangeBindException.class)
         public ProblemDetail handleValidationException(WebExchangeBindException ex) {
@@ -112,7 +152,9 @@ public class GlobalExceptionHandler {
         }
 
         /**
-         * EC-107: falha do provedor de IA do USUÁRIO. Precisa vir antes do
+         * EC-107: falha do provedor de IA — da chave do USUÁRIO e, desde
+         * 12/11/2026, também da chave do servidor (antes o 404 do modelo
+         * aposentado saía daqui como 500 genérico). Precisa vir antes do
          * handler de WebClientResponseException e ser uma exceção própria por um
          * motivo de segurança, não de estilo: aquele handler registra
          * {@code getResponseBodyAsString()} em log, e corpo bruto de provedor é
@@ -122,7 +164,7 @@ public class GlobalExceptionHandler {
          */
         @ExceptionHandler(br.com.economize.service.ai.AiProviderException.class)
         public ProblemDetail handleAiProviderException(br.com.economize.service.ai.AiProviderException ex) {
-                log.warn("Provedor de IA do usuário falhou: motivo={}", ex.getReason());
+                log.warn("Provedor de IA falhou: motivo={}", ex.getReason());
                 ProblemDetail problemDetail = ProblemDetail.forStatusAndDetail(HttpStatus.BAD_GATEWAY,
                                 ex.getMessage());
                 problemDetail.setTitle("Erro no Provedor de IA");
@@ -141,6 +183,45 @@ public class GlobalExceptionHandler {
                                 ex.getResponseBodyAsString());
                 ProblemDetail problemDetail = ProblemDetail.forStatusAndDetail(HttpStatus.BAD_GATEWAY,
                                 "Falha ao obter dados de provedores externos.");
+                problemDetail.setTitle("Erro no Provedor de Dados");
+                problemDetail.setType(Objects
+                                .requireNonNull(URI.create("https://economize.app/erros/provedor-externo")));
+                problemDetail.setProperty("timestamp", Instant.now());
+                return problemDetail;
+        }
+
+        /**
+         * O provedor externo não respondeu: timeout, conexão recusada, DNS. É
+         * o caso que o handler de cima não cobre — sem resposta não há status —
+         * e caía no genérico como 500, mandando procurar bug onde o que houve
+         * foi rede. 503 diz ao app que tentar de novo faz sentido.
+         *
+         * <p>A mensagem da exceção carrega método e URL do provedor; nem ela
+         * nem o host saem na resposta. No log vai só a classe da causa.
+         */
+        @ExceptionHandler(WebClientRequestException.class)
+        public ProblemDetail handleWebClientRequestException(WebClientRequestException ex) {
+                log.warn("Provedor externo não respondeu: causa={}",
+                                ex.getMostSpecificCause().getClass().getName());
+                ProblemDetail problemDetail = ProblemDetail.forStatusAndDetail(HttpStatus.SERVICE_UNAVAILABLE,
+                                "O provedor não respondeu. Tente de novo em instantes.");
+                problemDetail.setTitle("Provedor Indisponível");
+                problemDetail.setType(Objects
+                                .requireNonNull(URI.create("https://economize.app/erros/provedor-indisponivel")));
+                problemDetail.setProperty("timestamp", Instant.now());
+                return problemDetail;
+        }
+
+        /**
+         * O provedor respondeu 200 sem o que devia (ex.: a Pluggy sem token).
+         * Defeito de lá, não nosso: 502, e não 500. A mensagem da exceção vai
+         * só para o log — ela pode citar variável de ambiente do servidor.
+         */
+        @ExceptionHandler(UpstreamProviderException.class)
+        public ProblemDetail handleUpstreamProviderException(UpstreamProviderException ex) {
+                log.error("Provedor externo respondeu fora do contrato: {}", ex.getMessage());
+                ProblemDetail problemDetail = ProblemDetail.forStatusAndDetail(HttpStatus.BAD_GATEWAY,
+                                "O provedor respondeu de forma inesperada. Tente de novo em instantes.");
                 problemDetail.setTitle("Erro no Provedor de Dados");
                 problemDetail.setType(Objects
                                 .requireNonNull(URI.create("https://economize.app/erros/provedor-externo")));

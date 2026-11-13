@@ -26,6 +26,10 @@ import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.reactive.server.WebTestClient;
 
+import org.junit.jupiter.api.BeforeEach;
+import java.time.OffsetDateTime;
+import java.time.ZoneId;
+import java.time.Clock;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.YearMonth;
@@ -72,6 +76,27 @@ class AnalyticsControllerTest {
     @MockitoBean
     private IncomePatternService incomePatternService;
 
+    @MockitoBean
+    private Clock clock;
+
+    // 23h30 de 31/03 em São Paulo: o servidor em UTC já está em abril
+    @BeforeEach
+    void fixarRelogioFinanceiro() {
+        when(clock.instant()).thenReturn(OffsetDateTime.parse("2026-03-31T23:30:00-03:00").toInstant());
+        when(clock.getZone()).thenReturn(ZoneId.of("America/Sao_Paulo"));
+    }
+
+    @Test
+    @DisplayName("GET /budgets/status - o ritmo é medido contra o dia de hoje no Brasil")
+    void budgetStatusUsesTheFinancialToday() {
+        webTestClient.get().uri("/api/v1/analytics/budgets/status?month=2026-03")
+                .header(HttpHeaders.AUTHORIZATION, bearerToken())
+                .exchange()
+                .expectStatus().isOk();
+
+        verify(categoryBudgetService).statusFor(eq(EMAIL), any(), eq(LocalDate.of(2026, 3, 31)));
+    }
+
     @Test
     @DisplayName("GET /monthly - month continua funcionando igual (retrocompatibilidade)")
     void monthlyKeepsTheMonthContract() {
@@ -104,7 +129,7 @@ class AnalyticsControllerTest {
                 .expectStatus().isOk();
 
         assertThat(capturedWindow().monthLabel())
-                .isEqualTo(YearMonth.now(ZoneOffset.UTC).toString());
+                .isEqualTo("2026-03");
     }
 
     @Test
@@ -313,7 +338,27 @@ class AnalyticsControllerTest {
                 .as("o serviço nunca pode receber janela nula")
                 .isNotNull();
         assertThat(captor.getValue().month())
-                .isEqualTo(YearMonth.now(ZoneOffset.UTC));
+                .isEqualTo(YearMonth.of(2026, 3));
+    }
+
+    /**
+     * Mesmo defeito do /daily, no teto por categoria: sem recorte a janela
+     * chegava nula ao service e o NPE virava 500.
+     */
+    @Test
+    @DisplayName("GET /budgets/status sem recorte nenhum cai no mês corrente, não em 500")
+    void budgetStatusWithoutAnyWindowFallsBackToTheCurrentMonth() {
+        webTestClient.get().uri("/api/v1/analytics/budgets/status")
+                .header(HttpHeaders.AUTHORIZATION, bearerToken())
+                .exchange()
+                .expectStatus().isOk();
+
+        ArgumentCaptor<AnalysisWindow> captor = ArgumentCaptor.forClass(AnalysisWindow.class);
+        verify(categoryBudgetService).statusFor(eq(EMAIL), captor.capture(), eq(LocalDate.of(2026, 3, 31)));
+        assertThat(captor.getValue())
+                .as("o serviço nunca pode receber janela nula")
+                .isNotNull();
+        assertThat(captor.getValue().month()).isEqualTo(YearMonth.of(2026, 3));
     }
 
     private MonthlyAnalyticsResponse windowResponse() {

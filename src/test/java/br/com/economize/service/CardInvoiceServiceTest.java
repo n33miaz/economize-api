@@ -15,6 +15,8 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.time.ZoneId;
+import java.time.Clock;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalTime;
@@ -71,7 +73,9 @@ class CardInvoiceServiceTest {
     void setUp() {
         user = User.builder().id(UUID.randomUUID()).email(EMAIL).name("Teste").password("x").build();
         service = new CardInvoiceService(accountService, bankTransactionRepository, userRepository,
-                reserveService, cardBillRepository);
+                reserveService, cardBillRepository,
+                // UTC como os dados destes testes, que nascem de now(UTC)
+                Clock.systemUTC());
         // sem fatura do provedor é o caso comum: o cartão pode não ter conector,
         // ou o emissor pode não publicar fatura fechada
         lenient().when(cardBillRepository.findByAccountIdOrderByClosingDateDesc(any()))
@@ -341,6 +345,109 @@ class CardInvoiceServiceTest {
         assertThat(fatura.paymentsTotal()).isEqualByComparingTo("200.00");
     }
 
+    @Test
+    @DisplayName("linha IGNORADA não entra na fatura: nem no total, nem na contagem, nem na lista")
+    void ignoredLinesStayOutOfTheInvoice() {
+        ConnectorAccount cartao = card(null, null);
+        owned(cartao);
+        YearMonth mes = YearMonth.now(ZoneOffset.UTC);
+
+        BankTransaction compra = tx(cartao, "-100.00", mes.atDay(4));
+        // a mesma compra lida uma segunda vez por outra fonte: a varredura de
+        // duplicatas a marcou, e todas as outras somas do app já a deixam de fora
+        BankTransaction duplicata = tx(cartao, "-100.00", mes.atDay(4));
+        duplicata.setIgnored(true);
+        duplicata.setIgnoredReason(BankTransaction.IgnoredReason.DUPLICATE);
+        // crédito ignorado também não conta: ignorar vale para os dois sinais
+        BankTransaction estornoIgnorado = tx(cartao, "30.00", mes.atDay(6));
+        estornoIgnorado.setType("CREDIT");
+        estornoIgnorado.setIgnored(true);
+        estornoIgnorado.setIgnoredReason(BankTransaction.IgnoredReason.USER);
+        transactions(cartao, compra, duplicata, estornoIgnorado);
+
+        CardInvoicesResponse.Invoice fatura = service.invoices(EMAIL, cartao.getId(), 1).invoices().get(0);
+
+        // antes a fatura dizia 200 de compras e 3 lançamentos, enquanto o mês
+        // do mesmo usuário mostrava 100 de despesa
+        assertThat(fatura.purchasesTotal()).isEqualByComparingTo("100.00");
+        assertThat(fatura.refundsTotal()).isEqualByComparingTo("0.00");
+        assertThat(fatura.total()).isEqualByComparingTo("100.00");
+        assertThat(fatura.transactionCount()).isEqualTo(1);
+        assertThat(fatura.transactions()).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("ciclo só com linhas ignoradas não vira fatura")
+    void cycleWithOnlyIgnoredLinesIsOmitted() {
+        ConnectorAccount cartao = card(null, null);
+        owned(cartao);
+        YearMonth mes = YearMonth.now(ZoneOffset.UTC);
+
+        BankTransaction ignorada = tx(cartao, "-100.00", mes.atDay(4));
+        ignorada.setIgnored(true);
+        ignorada.setIgnoredReason(BankTransaction.IgnoredReason.USER);
+        transactions(cartao, ignorada);
+
+        // é o mesmo "ciclo vazio" de um mês sem lançamento: fatura de zero com
+        // zero lançamentos seria um mês em branco na tela
+        assertThat(service.invoices(EMAIL, cartao.getId(), 1).invoices()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("ciclo só com ignoradas mas com fatura do BANCO continua aparecendo, com total zero do nosso lado")
+    void ignoredOnlyCycleKeepsTheProviderBill() {
+        ConnectorAccount cartao = card(10, 17);
+        owned(cartao);
+        LocalDate fechamento = closing(YearMonth.now(ZoneOffset.UTC), 10);
+        BankTransaction ignorada = tx(cartao, "-100.00", fechamento.minusDays(2));
+        ignorada.setIgnored(true);
+        ignorada.setIgnoredReason(BankTransaction.IgnoredReason.USER);
+        transactions(cartao, ignorada);
+        when(cardBillRepository.findByAccountIdOrderByClosingDateDesc(cartao.getId()))
+                .thenReturn(java.util.List.of(bill(fechamento, "2311.49", "347.63")));
+
+        // sumir com o ciclo levava junto a fatura que o emissor fechou — o
+        // valor a pagar de verdade e o mínimo, que não existem em outra tela
+        CardInvoicesResponse.Invoice fatura = service.invoices(EMAIL, cartao.getId(), 6).invoices().get(0);
+
+        assertThat(fatura.providerBill().total()).isEqualByComparingTo("2311.49");
+        assertThat(fatura.total()).isEqualByComparingTo("0");
+        assertThat(fatura.transactionCount()).isZero();
+        assertThat(fatura.transactions()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("ciclo só com ignoradas mas com RESERVA continua aparecendo: o dinheiro separado não some da tela")
+    void ignoredOnlyCycleKeepsTheReserve() {
+        ConnectorAccount cartao = card(null, null);
+        owned(cartao);
+        YearMonth mes = YearMonth.now(ZoneOffset.UTC);
+        BankTransaction ignorada = tx(cartao, "-100.00", mes.atDay(4));
+        ignorada.setIgnored(true);
+        ignorada.setIgnoredReason(BankTransaction.IgnoredReason.DUPLICATE);
+        transactions(cartao, ignorada);
+        when(reserveService.byReference(user.getId(), cartao.getId())).thenReturn(Map.of(mes.toString(),
+                new CardInvoicesResponse.Reserve(UUID.randomUUID(), new BigDecimal("320.57"), null, null, null)));
+
+        CardInvoicesResponse.Invoice fatura = service.invoices(EMAIL, cartao.getId(), 1).invoices().get(0);
+
+        assertThat(fatura.reserve().amount()).isEqualByComparingTo("320.57");
+        assertThat(fatura.total()).isEqualByComparingTo("0");
+        assertThat(fatura.transactionCount()).isZero();
+    }
+
+    @Test
+    @DisplayName("ciclo sem lançamento NENHUM segue omitido mesmo com fatura do banco, como sempre foi")
+    void trulyEmptyCycleStaysOmittedEvenWithProviderBill() {
+        ConnectorAccount cartao = card(10, 17);
+        owned(cartao);
+        transactions(cartao);
+        when(cardBillRepository.findByAccountIdOrderByClosingDateDesc(cartao.getId()))
+                .thenReturn(java.util.List.of(bill(closing(YearMonth.now(ZoneOffset.UTC), 10), "2311.49", "347.63")));
+
+        assertThat(service.invoices(EMAIL, cartao.getId(), 6).invoices()).isEmpty();
+    }
+
     // ------------------------------------------------- a fatura que vence
 
     @Test
@@ -426,6 +533,40 @@ class CardInvoiceServiceTest {
     }
 
     // ------------------------------------------------- apoio
+
+
+    // 23h30 do dia 31 em São Paulo já é 1º de abril no servidor (02h30 UTC)
+    private static final Clock NOITE_DE_31_DE_MARCO = Clock.fixed(
+            OffsetDateTime.parse("2026-03-31T23:30:00-03:00").toInstant(), ZoneId.of("America/Sao_Paulo"));
+    private static final Clock MADRUGADA_DE_1_DE_ABRIL = Clock.fixed(
+            OffsetDateTime.parse("2026-04-01T00:30:00-03:00").toInstant(), ZoneId.of("America/Sao_Paulo"));
+
+    @Test
+    @DisplayName("FUSO: às 23h30 de 31/03 no Brasil o ciclo aberto ainda é março; à 0h30, abril")
+    void todayFollowsTheFinancialZone() {
+        ConnectorAccount cartao = card(null, null);
+        owned(cartao);
+
+        // a janela consultada vai do ciclo anterior ao fim do ciclo de hoje
+        assertThat(windowAskedAt(NOITE_DE_31_DE_MARCO, cartao))
+                .containsExactly(OffsetDateTime.parse("2026-02-01T00:00:00Z"),
+                        OffsetDateTime.parse("2026-04-01T00:00:00Z"));
+        assertThat(windowAskedAt(MADRUGADA_DE_1_DE_ABRIL, cartao))
+                .containsExactly(OffsetDateTime.parse("2026-03-01T00:00:00Z"),
+                        OffsetDateTime.parse("2026-05-01T00:00:00Z"));
+    }
+
+    private List<OffsetDateTime> windowAskedAt(Clock clock, ConnectorAccount cartao) {
+        org.mockito.Mockito.clearInvocations(bankTransactionRepository);
+        new CardInvoiceService(accountService, bankTransactionRepository, userRepository,
+                reserveService, cardBillRepository, clock).invoices(EMAIL, cartao.getId(), 1);
+        org.mockito.ArgumentCaptor<OffsetDateTime> de = org.mockito.ArgumentCaptor.forClass(OffsetDateTime.class);
+        org.mockito.ArgumentCaptor<OffsetDateTime> ate = org.mockito.ArgumentCaptor.forClass(OffsetDateTime.class);
+        org.mockito.Mockito.verify(bankTransactionRepository)
+                .findAllByUserIdAndAccountIdAndDateGreaterThanEqualAndDateLessThanOrderByDateDesc(
+                        eq(user.getId()), eq(cartao.getId()), de.capture(), ate.capture());
+        return List.of(de.getValue(), ate.getValue());
+    }
 
     private ConnectorAccount card(Integer closingDay, Integer dueDay) {
         return ConnectorAccount.builder()

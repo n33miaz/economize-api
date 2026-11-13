@@ -87,7 +87,7 @@ class InvestmentControllerTest {
                 OffsetDateTime.now(), 1, List.of("CONNECTOR", "MANUAL"),
                 new InvestmentResponses.MovementTotals12m(new BigDecimal("3000"), new BigDecimal("500"),
                         new BigDecimal("42.10"), new BigDecimal("2500")),
-                List.of("VT")));
+                List.of("VT"), List.of(), List.of()));
 
         webTestClient.get().uri("/api/v1/investments/summary")
                 .header(HttpHeaders.AUTHORIZATION, bearer())
@@ -361,5 +361,21 @@ class InvestmentControllerTest {
                 .expectStatus().isUnauthorized();
 
         verify(investmentService, never()).summary(any());
+    }
+
+    @Test
+    @DisplayName("POST /sync com o provedor sem responder é 503 sem vazar o host")
+    void syncComProvedorForaDoArE503() {
+        when(investmentService.sync(EMAIL)).thenThrow(new org.springframework.web.reactive.function.client
+                .WebClientRequestException(new java.net.ConnectException("Connection refused"),
+                        org.springframework.http.HttpMethod.POST,
+                        java.net.URI.create("https://api.pluggy.ai/auth"), new HttpHeaders()));
+
+        webTestClient.post().uri("/api/v1/investments/sync")
+                .header(HttpHeaders.AUTHORIZATION, bearer())
+                .exchange()
+                .expectStatus().isEqualTo(503)
+                .expectBody()
+                .jsonPath("$.detail").isEqualTo("O provedor não respondeu. Tente de novo em instantes.");
     }
 }

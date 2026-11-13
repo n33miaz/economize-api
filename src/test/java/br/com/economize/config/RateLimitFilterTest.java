@@ -16,8 +16,14 @@ import org.springframework.web.server.ServerWebExchange;
 import org.springframework.web.server.WebFilterChain;
 import reactor.core.publisher.Mono;
 
+import java.net.InetSocketAddress;
+import java.time.Duration;
 import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
+
+import static org.assertj.core.api.Assertions.assertThat;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
@@ -175,6 +181,152 @@ class RateLimitFilterTest {
         filter.filter(readFamily, chain).block();
         assertEquals(String.valueOf(STANDARD_CAPACITY - 1),
                 readFamily.getResponse().getHeaders().getFirst("X-RateLimit-Remaining"));
+    }
+
+    // ------------------------------------------------ memória dos baldes
+
+    @Test
+    @DisplayName("tokens Bearer distintos não acumulam baldes sem teto: o mapa tem limite")
+    void distinctBearerTokensShouldNotGrowWithoutBound() {
+        RateLimitFilter pequeno = new RateLimitFilter(corsSource(), 60, 10, RELOGIO_PARADO, 50);
+
+        // quem manda um token aleatório por requisição criava um balde
+        // permanente por token: em 512 MB isso derruba o servidor, e nem
+        // precisa de token válido — o filtro roda antes da autenticação
+        for (int i = 0; i < 500; i++) {
+            pequeno.filter(bearer("token-aleatorio-" + i, "/api/v1/indicators/all"), chain).block();
+            pequeno.filter(bearer("token-aleatorio-" + i, "/api/v1/chat"), chain).block();
+        }
+
+        // o teto vale para cada uma das duas famílias de balde
+        assertThat(pequeno.trackedKeys()).hasSizeLessThanOrEqualTo(100);
+    }
+
+    @Test
+    @DisplayName("o token nunca fica guardado: a chave do balde é o hash dele")
+    void rawTokenShouldNotBeRetainedAsKey() {
+        // montado em tempo de execução, e não um literal com cara de JWT: o
+        // varredor de segredos da esteira lê literal assim como chave vazada
+        String miolo = "miolo-" + UUID.randomUUID();
+        String credencial = String.join(".", "cabecalho", miolo, "assinatura");
+
+        filter.filter(bearer(credencial, "/api/v1/indicators/all"), chain).block();
+
+        // um dump de memória ou um log da chave não pode entregar a sessão
+        assertThat(filter.trackedKeys()).hasSize(1)
+                .noneMatch(key -> key.contains(credencial) || key.contains(miolo));
+    }
+
+    @Test
+    @DisplayName("o mesmo token continua caindo no MESMO balde: o hash não afrouxa o limite")
+    void sameTokenShouldKeepSharingOneBucket() {
+        for (int i = 0; i < STANDARD_CAPACITY; i++) {
+            filter.filter(bearer("token-fixo", "/api/v1/indicators/all"), chain).block();
+        }
+        ServerWebExchange excedente = bearer("token-fixo", "/api/v1/indicators/all");
+        filter.filter(excedente, chain).block();
+
+        assertEquals(HttpStatus.TOO_MANY_REQUESTS, excedente.getResponse().getStatusCode());
+        // outro token tem o próprio balde, como antes
+        ServerWebExchange outro = bearer("outro-token", "/api/v1/indicators/all");
+        filter.filter(outro, chain).block();
+        assertThat(outro.getResponse().getStatusCode()).isNotEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+    }
+
+    @Test
+    @DisplayName("balde ocioso expira — e só depois de a janela já tê-lo reposto por inteiro")
+    void idleBucketShouldExpireOnlyAfterItWouldBeFullAgain() {
+        AtomicLong agora = new AtomicLong();
+        TimeMeter relogio = new TimeMeter() {
+            @Override
+            public long currentTimeNanos() {
+                return agora.get();
+            }
+
+            @Override
+            public boolean isWallClockBased() {
+                return false;
+            }
+        };
+        RateLimitFilter comRelogio = new RateLimitFilter(corsSource(), 60, 10, relogio, 50);
+        for (int i = 0; i < 10; i++) {
+            comRelogio.filter(bearer("token-fixo", "/api/v1/chat"), chain).block();
+        }
+
+        // 30 s depois o balde caro ainda está lá e ainda barra: expirar cedo
+        // seria um jeito de zerar o limite esperando
+        agora.set(Duration.ofSeconds(30).toNanos());
+        assertThat(comRelogio.trackedKeys()).hasSize(1);
+
+        // passado o tempo de expiração (maior que a janela de 1 min) o balde
+        // estaria cheio de qualquer forma: jogá-lo fora não perdoa ninguém
+        agora.set(Duration.ofMinutes(10).toNanos());
+        assertThat(comRelogio.trackedKeys()).isEmpty();
+    }
+
+    // ------------------------------------------------ login: só por IP
+
+    @Test
+    @DisplayName("login: Bearer aleatório por requisição NÃO ganha balde novo — a chave é o IP")
+    void randomBearerOnLoginShouldNotGetAFreshBucket() {
+        // era o contorno do limite de tentativas: o filtro roda antes da
+        // autenticação, qualquer texto serve de "token", e cada token novo
+        // abria um balde cheio — a senha e o segundo fator ficavam sem teto
+        for (int i = 0; i < 10; i++) {
+            ServerWebExchange tentativa = login("token-aleatorio-" + i, "203.0.113.7, 10.0.0.5");
+            filter.filter(tentativa, chain).block();
+            assertThat(tentativa.getResponse().getStatusCode()).isNotEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+        }
+        ServerWebExchange excedente = login("mais-um-token", "203.0.113.7, 10.0.0.5");
+        filter.filter(excedente, chain).block();
+
+        assertEquals(HttpStatus.TOO_MANY_REQUESTS, excedente.getResponse().getStatusCode());
+        assertThat(filter.trackedKeys()).hasSize(1).noneMatch(key -> key.contains("u:"));
+        // outro cliente, atrás do MESMO proxy, tem o próprio balde: o limite
+        // não virou um balde único para todo mundo
+        ServerWebExchange vizinho = login(null, "198.51.100.44, 10.0.0.5");
+        filter.filter(vizinho, chain).block();
+        assertThat(vizinho.getResponse().getStatusCode()).isNotEqualTo(HttpStatus.TOO_MANY_REQUESTS);
+    }
+
+    @Test
+    @DisplayName("login: X-Forwarded-For forjado à esquerda não muda o balde")
+    void forgedForwardedForOnLoginShouldNotChangeTheBucket() {
+        for (int i = 0; i < 10; i++) {
+            filter.filter(login(null, "9.9.9." + i + ", 203.0.113.7, 10.0.0.5"), chain).block();
+        }
+        ServerWebExchange excedente = login(null, "1.2.3.4, 203.0.113.7, 10.0.0.5");
+        filter.filter(excedente, chain).block();
+
+        assertEquals(HttpStatus.TOO_MANY_REQUESTS, excedente.getResponse().getStatusCode());
+        assertThat(filter.trackedKeys()).hasSize(1);
+    }
+
+    @Test
+    @DisplayName("fora do /auth o Bearer continua sendo a chave, e os baldes de IP ficam em cache separado")
+    void bearerStillKeysEverythingElse() {
+        filter.filter(MockServerWebExchange.from(MockServerHttpRequest.get("/api/v1/indicators/all")
+                .remoteAddress(new InetSocketAddress("10.0.0.9", 443))
+                .header("X-Forwarded-For", "203.0.113.7, 10.0.0.5")
+                .header(HttpHeaders.AUTHORIZATION, "Bearer token-fixo")), chain).block();
+        filter.filter(login(null, "203.0.113.7, 10.0.0.5"), chain).block();
+
+        assertThat(filter.trackedKeys()).hasSize(2)
+                .anyMatch(key -> key.startsWith("standard:u:"))
+                .anyMatch(key -> key.equals("ip-expensive:ip:203.0.113.7"));
+    }
+
+    private ServerWebExchange login(String token, String forwardedFor) {
+        MockServerHttpRequest.BodyBuilder request = MockServerHttpRequest.post("/api/v1/auth/login")
+                .remoteAddress(new InetSocketAddress("10.0.0.9", 443))
+                .header("X-Forwarded-For", forwardedFor);
+        if (token != null) request.header(HttpHeaders.AUTHORIZATION, "Bearer " + token);
+        return MockServerWebExchange.from(request);
+    }
+
+    private ServerWebExchange bearer(String token, String path) {
+        return MockServerWebExchange.from(MockServerHttpRequest.get(path)
+                .header(HttpHeaders.AUTHORIZATION, "Bearer " + token));
     }
 
     private void exhaustBucket() {

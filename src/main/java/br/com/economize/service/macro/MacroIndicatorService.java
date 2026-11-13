@@ -2,12 +2,15 @@ package br.com.economize.service.macro;
 
 import br.com.economize.dto.indicator.MacroIndicator;
 import br.com.economize.service.provider.MarketSnapshotStore;
+import br.com.economize.service.provider.NoLiveDataException;
+import br.com.economize.service.provider.RecentFallbackCache;
 import br.com.economize.service.provider.fallback.BcbSgsClient;
 import br.com.economize.service.provider.fallback.FailureSummary;
 import com.fasterxml.jackson.core.type.TypeReference;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.cache.annotation.Cacheable;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -32,7 +35,10 @@ import java.util.Optional;
  * IGP-M não pode sumir com o CDI. O que falhou é completado com o item do
  * snapshot persistido (marcado stale), e a lista final vira o snapshot novo.
  * Cache de 6h porque nada aqui muda mais de uma vez por dia — CDI e PTAX são
- * diários, o resto é mensal.
+ * diários, o resto é mensal. Só a lista COMPLETA e viva entra no cache: com
+ * uma série faltando, a resposta (completada pelo snapshot) sai sem ser
+ * guardada, e a próxima chamada tenta a série de novo — antes, uma falha de
+ * segundos do SGS deixava o item velho servido por seis horas.
  *
  * <p>
  * Por que estas séries: 4389 é o CDI anualizado (base 252) que os CDBs
@@ -70,20 +76,77 @@ public class MacroIndicatorService {
     private final BcbSgsClient sgs;
     private final MarketSnapshotStore snapshotStore;
     private final Clock clock;
+    /**
+     * O próprio bean, pelo proxy do Spring: o método {@code @Cacheable} só passa
+     * pelo cache quando chamado de fora — chamado em {@code this}, o proxy é
+     * pulado e nada seria cacheado. {@code @Lazy} resolve a auto-referência sem
+     * ciclo no boot. Nos testes de unidade (sem Spring) é o próprio objeto.
+     */
+    private final MacroIndicatorService self;
+    private final RecentFallbackCache recentFallback;
+
+    /**
+     * Resposta parcial: algumas séries vivas, o resto do snapshot. Sai como
+     * erro do método cacheado para NÃO ficar no cache; quem chama serve a lista
+     * já completada que vai aqui dentro.
+     */
+    static final class PartialMacroData extends NoLiveDataException {
+        private final transient List<MacroIndicator> merged;
+
+        PartialMacroData(List<MacroIndicator> merged) {
+            super("indicadores macro incompletos");
+            this.merged = merged;
+        }
+
+        List<MacroIndicator> merged() {
+            return merged;
+        }
+    }
 
     @Autowired
-    public MacroIndicatorService(BcbSgsClient sgs, MarketSnapshotStore snapshotStore) {
-        this(sgs, snapshotStore, Clock.systemUTC());
+    public MacroIndicatorService(BcbSgsClient sgs, MarketSnapshotStore snapshotStore,
+            RecentFallbackCache recentFallback, @Lazy MacroIndicatorService self) {
+        this(sgs, snapshotStore, Clock.systemUTC(), recentFallback, self);
     }
 
     MacroIndicatorService(BcbSgsClient sgs, MarketSnapshotStore snapshotStore, Clock clock) {
+        this(sgs, snapshotStore, clock, RecentFallbackCache.disabled(), null);
+    }
+
+    MacroIndicatorService(BcbSgsClient sgs, MarketSnapshotStore snapshotStore, Clock clock,
+            RecentFallbackCache recentFallback, MacroIndicatorService self) {
         this.sgs = sgs;
         this.snapshotStore = snapshotStore;
         this.clock = clock;
+        this.recentFallback = recentFallback;
+        this.self = self != null ? self : this;
     }
 
-    @Cacheable("macro")
+    /**
+     * A lista para a rota: a completa e viva sai do cache de 6 h; parcial ou
+     * nenhuma, completada pelo snapshot fora dele e guardada só pela janela
+     * curta de falha ({@link RecentFallbackCache}) — a próxima abertura dentro
+     * dela não refaz as 7 chamadas nem espera o timeout de novo.
+     */
     public Mono<List<MacroIndicator>> getMacroIndicators() {
+        return recentFallback.liveOrFallback("macro", self::liveIndicators,
+                e -> e instanceof PartialMacroData partial
+                        ? Mono.just(partial.merged())
+                        : completeFromSnapshot(List.of()));
+    }
+
+    /**
+     * Só a lista completa e viva, cacheada por 6h. Parcial termina com
+     * {@link PartialMacroData} (que leva a lista completada), nenhuma série com
+     * {@link NoLiveDataException}: erro não entra no cache reativo. O snapshot é
+     * gravado aqui, uma vez por ida à rede, e não a cada leitura do cache.
+     * Público só para o proxy de cache; quem quer a lista chama
+     * {@link #getMacroIndicators}. {@code sync}: chamadas simultâneas com o
+     * cache vazio esperam a MESMA ida à rede (o Caffeine assíncrono junta o
+     * carregamento por chave), em vez de cada uma abrir as suas 7.
+     */
+    @Cacheable(value = "macro", sync = true)
+    public Mono<List<MacroIndicator>> liveIndicators() {
         Instant now = clock.instant();
         LocalDate today = LocalDate.now(clock.withZone(BCB_ZONE));
         return Flux.fromIterable(SERIES)
@@ -95,7 +158,15 @@ public class MacroIndicatorService {
                             return Mono.empty();
                         }))
                 .collectList()
-                .flatMap(this::completeFromSnapshot);
+                .flatMap(live -> {
+                    if (live.isEmpty()) {
+                        return Mono.error(new NoLiveDataException("indicadores macro"));
+                    }
+                    return completeFromSnapshot(live)
+                            .flatMap(merged -> live.size() == SERIES.size()
+                                    ? Mono.just(merged)
+                                    : Mono.error(new PartialMacroData(merged)));
+                });
     }
 
     /**

@@ -18,6 +18,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.DataIntegrityViolationException;
 
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
@@ -72,6 +73,32 @@ class TransactionReviewServiceTest {
             .systemKey("FOOD").flow(Category.Flow.EXPENSE).archived(false).build();
 
     @Test
+    @DisplayName("Fila de revisÃ£o de dois uploads traz somente os lanÃ§amentos dos dois")
+    void reviewQueueFiltersTwoUploads() {
+        UUID primeiroUpload = UUID.randomUUID();
+        UUID segundoUpload = UUID.randomUUID();
+        BankTransaction doPrimeiro = pendingTx("mercado");
+        doPrimeiro.setUploadId(primeiroUpload);
+        BankTransaction doSegundo = pendingTx("padaria");
+        doSegundo.setUploadId(segundoUpload);
+        BankTransaction deOutroUpload = pendingTx("farmacia");
+        deOutroUpload.setUploadId(UUID.randomUUID());
+
+        when(userRepository.findByEmail(EMAIL)).thenReturn(Optional.of(user));
+        when(bankTransactionRepository.findAllByUserIdAndUploadIdInOrderByDateDesc(
+                user.getId(), List.of(primeiroUpload, segundoUpload)))
+                .thenReturn(List.of(doPrimeiro, doSegundo));
+
+        List<BankTransaction> fila = service.reviewQueue(EMAIL, List.of(primeiroUpload, segundoUpload));
+
+        assertThat(fila).extracting(BankTransaction::getUploadId)
+                .containsExactly(primeiroUpload, segundoUpload)
+                .doesNotContain(deOutroUpload.getUploadId());
+        verify(bankTransactionRepository).findAllByUserIdAndUploadIdInOrderByDateDesc(
+                user.getId(), List.of(primeiroUpload, segundoUpload));
+    }
+
+    @Test
     void applyConfirmsTransactionsAndLearnsExactRule() {
         BankTransaction tx1 = pendingTx("ifood rest");
         BankTransaction tx2 = pendingTx("ifood rest");
@@ -96,7 +123,7 @@ class TransactionReviewServiceTest {
         verify(bankTransactionRepository).saveAll(List.of(tx1, tx2));
 
         ArgumentCaptor<CategoryRule> captor = ArgumentCaptor.forClass(CategoryRule.class);
-        verify(categoryRuleRepository).save(captor.capture());
+        verify(categoryRuleRepository).saveAndFlush(captor.capture());
         CategoryRule learned = captor.getValue();
         assertThat(learned.getPattern()).isEqualTo("ifood rest");
         assertThat(learned.getMatchType()).isEqualTo(CategoryRule.MatchType.EXACT);
@@ -143,12 +170,36 @@ class TransactionReviewServiceTest {
 
         service.apply(EMAIL, request(List.of(tx.getId()), food.getId(), null));
 
-        // o usuário corrigiu a categoria: a regra migra para a nova e ganha reforço
-        assertThat(existing.getCategory()).isSameAs(food);
-        assertThat(existing.getHits()).isEqualTo(4);
-        assertThat(existing.getLastHitAt()).isNotNull();
-        verify(categoryRuleRepository).save(same(existing));
-        verify(categoryRuleRepository, times(1)).save(any(CategoryRule.class));
+        // o usuário corrigiu a categoria: a regra migra para a nova e ganha reforço,
+        // num UPDATE atômico no banco — a cópia lida não é somada nem salva
+        verify(categoryRuleRepository).reinforce(eq(existing.getId()), same(food), any(OffsetDateTime.class));
+        verify(categoryRuleRepository, never()).save(any(CategoryRule.class));
+        verify(categoryRuleRepository, never()).saveAndFlush(any(CategoryRule.class));
+        assertThat(existing.getHits()).isEqualTo(3);
+    }
+
+    @Test
+    void applyFallsBackToReinforceWhenAnotherReviewInsertedTheSamePattern() {
+        CategoryRule inserted = CategoryRule.builder()
+                .id(UUID.randomUUID()).user(user).category(food)
+                .pattern("ifood rest").matchType(CategoryRule.MatchType.EXACT)
+                .origin(CategoryRule.Origin.LEARNED).hits(1).build();
+        BankTransaction tx = pendingTx("ifood rest");
+        when(userRepository.findByEmail(EMAIL)).thenReturn(Optional.of(user));
+        when(categoryRepository.findAccessible(food.getId(), user.getId())).thenReturn(Optional.of(food));
+        when(bankTransactionRepository.findAllByUserIdAndIdIn(user.getId(), List.of(tx.getId())))
+                .thenReturn(List.of(tx));
+        // a leitura não acha; entre ela e o insert a outra revisão gravou
+        when(categoryRuleRepository.findByUserIdAndPattern(user.getId(), "ifood rest"))
+                .thenReturn(Optional.empty(), Optional.of(inserted));
+        when(categoryRuleRepository.saveAndFlush(any(CategoryRule.class)))
+                .thenThrow(new DataIntegrityViolationException("uq_rules_user_pattern"));
+
+        TransactionReviewService.ReviewOutcome outcome =
+                service.apply(EMAIL, request(List.of(tx.getId()), food.getId(), null));
+
+        assertThat(outcome.rulesSaved()).isEqualTo(1);
+        verify(categoryRuleRepository).reinforce(eq(inserted.getId()), same(food), any(OffsetDateTime.class));
     }
 
     @Test
@@ -177,7 +228,7 @@ class TransactionReviewServiceTest {
         when(categoryRepository.findAccessible(food.getId(), user.getId())).thenReturn(Optional.of(food));
         when(categoryRuleRepository.findByUserIdAndPattern(user.getId(), "ifood rest")).thenReturn(Optional.empty());
 
-        TransactionReviewService.ReviewOutcome outcome = service.confirmAll(EMAIL, null);
+        TransactionReviewService.ReviewOutcome outcome = service.confirmAll(EMAIL, List.of());
 
         assertThat(outcome.confirmed()).isEqualTo(1);
         assertThat(outcome.rulesSaved()).isEqualTo(1);
@@ -187,7 +238,7 @@ class TransactionReviewServiceTest {
         verify(bankTransactionRepository).saveAll(List.of(suggested));
 
         ArgumentCaptor<CategoryRule> captor = ArgumentCaptor.forClass(CategoryRule.class);
-        verify(categoryRuleRepository).save(captor.capture());
+        verify(categoryRuleRepository).saveAndFlush(captor.capture());
         assertThat(captor.getValue().getPattern()).isEqualTo("ifood rest");
         assertThat(captor.getValue().getOrigin()).isEqualTo(CategoryRule.Origin.LEARNED);
     }
@@ -225,7 +276,7 @@ class TransactionReviewServiceTest {
                 .thenReturn(List.of(perna));
         when(categoryRepository.findAccessible(food.getId(), user.getId())).thenReturn(Optional.of(food));
 
-        TransactionReviewService.ReviewOutcome outcome = service.confirmAll(EMAIL, null);
+        TransactionReviewService.ReviewOutcome outcome = service.confirmAll(EMAIL, List.of());
 
         assertThat(outcome.confirmed()).isEqualTo(1);
         assertThat(outcome.rulesSaved()).isZero();

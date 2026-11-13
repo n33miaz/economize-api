@@ -2,6 +2,7 @@ package br.com.economize.dto.wallet;
 
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.DecimalMin;
+import jakarta.validation.constraints.Digits;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
@@ -34,10 +35,16 @@ public class TransactionRequest {
     @Schema(description = "Quantidade de cotas", example = "100")
     @NotNull(message = "A quantidade é obrigatória")
     @DecimalMin(value = "0.00000001", message = "A quantidade deve ser maior que zero")
+    // quantity é DECIMAL(19,8) (V1): fora disso estourava no banco como 409
+    @Digits(integer = 11, fraction = 8,
+            message = "A quantidade aceita até 11 dígitos inteiros e 8 casas decimais")
     private BigDecimal quantity;
 
     @Schema(description = "Preço unitário na data da operação", example = "38.42")
     @NotNull(message = "O preço é obrigatório")
     @DecimalMin(value = "0.00000001", message = "O preço deve ser maior que zero")
+    // price_at_transaction é DECIMAL(19,4) (V1)
+    @Digits(integer = 15, fraction = 4,
+            message = "O preço aceita até 15 dígitos inteiros e 4 casas decimais")
     private BigDecimal priceAtTransaction;
 }

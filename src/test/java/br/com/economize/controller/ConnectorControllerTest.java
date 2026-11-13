@@ -185,7 +185,7 @@ class ConnectorControllerTest {
         when(provider.listItems(EMAIL)).thenReturn(List.of(ConnectionResponse.of(
                 UUID.randomUUID(), ITEM_ID, 612L, "Nubank",
                 OffsetDateTime.parse("2026-08-15T12:00:00Z"),
-                OffsetDateTime.parse("2026-08-15T13:00:00Z"))));
+                OffsetDateTime.parse("2026-08-15T13:00:00Z"), "NEEDS_USER_ACTION", true)));
 
         webTestClient.get()
                 .uri("/api/v1/connectors/items")
@@ -195,7 +195,9 @@ class ConnectorControllerTest {
                 .expectBody()
                 .jsonPath("$[0].itemId").isEqualTo(ITEM_ID)
                 .jsonPath("$[0].institution").isEqualTo("Nubank")
-                .jsonPath("$[0].lastSyncedAt").isNotEmpty();
+                .jsonPath("$[0].lastSyncedAt").isNotEmpty()
+                .jsonPath("$[0].status").isEqualTo("NEEDS_USER_ACTION")
+                .jsonPath("$[0].needsAttention").isEqualTo(true);
     }
 
     @Test
@@ -223,8 +225,10 @@ class ConnectorControllerTest {
     @DisplayName("POST /sync - Mesmo shape do legado, tipado, com itemsSynced; ?days= é repassado")
     void syncDevolveResultadoTipado() {
         UUID uploadId = UUID.randomUUID();
+        UUID segundoUploadId = UUID.randomUUID();
         when(provider.sync(EMAIL, 30)).thenReturn(new OpenFinanceProvider.SyncResult(
-                new BankStatementService.ImportResult(uploadId, 12, 7, 2, 3, false, "PLUGGY"), 2));
+                new BankStatementService.ImportResult(uploadId, 12, 7, 2, 3, false, "PLUGGY",
+                        List.of(uploadId, segundoUploadId)), 2));
 
         webTestClient.post()
                 .uri("/api/v1/connectors/sync?days=30")
@@ -233,6 +237,8 @@ class ConnectorControllerTest {
                 .expectStatus().isOk()
                 .expectBody()
                 .jsonPath("$.uploadId").isEqualTo(uploadId.toString())
+                .jsonPath("$.uploadIds[0]").isEqualTo(uploadId.toString())
+                .jsonPath("$.uploadIds[1]").isEqualTo(segundoUploadId.toString())
                 .jsonPath("$.transactionsImported").isEqualTo(12)
                 .jsonPath("$.suggested").isEqualTo(7)
                 .jsonPath("$.uncategorized").isEqualTo(2)

@@ -57,6 +57,8 @@ public class AnalyticsService {
     private final CategoryRepository categoryRepository;
     private final UserRepository userRepository;
     private final CycleCaveatService cycleCaveatService;
+    // "Hoje" na zona financeira (FinancialClockConfig), não na do servidor
+    private final java.time.Clock clock;
 
     public MonthlyAnalyticsResponse analyze(String email, AnalysisWindow window) {
         User user = requireUser(email);
@@ -88,7 +90,7 @@ public class AnalyticsService {
                 cycleCaveatService.caveatsFor(
                         user.getId(), window,
                         previous.income.signum() > 0 || previous.expense.signum() > 0,
-                        LocalDate.now(ZoneOffset.UTC)),
+                        LocalDate.now(clock)),
                 lastTransactionDate(user.getId()));
     }
 
@@ -132,8 +134,11 @@ public class AnalyticsService {
         for (BankTransaction tx : bankTransactionRepository
                 .findAllByUserIdAndDateGreaterThanEqualAndDateLessThanOrderByDateDesc(
                         user.getId(), window.startInstant(), window.endExclusiveInstant())) {
-            if (tx.isInternalTransfer() || tx.isIgnored() || tx.isRefunded()) continue;
-            LocalDate dia = tx.getDate().toLocalDate();
+            if (!tx.countsInTotals()) continue;
+            // O dia UTC do instante, que é o fuso em que a janela recorta e em
+            // que os parsers gravam a data do extrato. Lido no offset original,
+            // 31/08 23h -03:00 entrava na consulta de setembro e saía como 31/08
+            LocalDate dia = tx.getDate().atZoneSameInstant(ZoneOffset.UTC).toLocalDate();
             BigDecimal[] somas = porDia.computeIfAbsent(dia,
                     k -> new BigDecimal[] {BigDecimal.ZERO, BigDecimal.ZERO});
             // Líquido, não bruto: a compra com estorno parcial vale o que
@@ -235,7 +240,10 @@ public class AnalyticsService {
         return sum;
     }
 
-    private UUID rootIdOf(UUID categoryId, Map<UUID, Category> catalog) {
+    // Estática e visível no pacote porque o teto por categoria
+    // (CategoryBudgetService) precisa da MESMA resolução de raiz: se cada um
+    // resolvesse do seu jeito, a Análise e o teto discordariam sobre o pai
+    static UUID rootIdOf(UUID categoryId, Map<UUID, Category> catalog) {
         if (categoryId == null) return null;
         Category category = catalog.get(categoryId);
         if (category == null) return categoryId;

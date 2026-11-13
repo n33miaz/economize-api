@@ -14,8 +14,8 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
 import java.time.YearMonth;
-import java.time.ZoneOffset;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.UUID;
@@ -69,6 +69,8 @@ public class WishProjectionService {
     private final IncomeSourceRepository incomeSourceRepository;
     private final WorkProfileRepository workProfileRepository;
     private final AnalyticsService analyticsService;
+    // "Hoje" na zona financeira (FinancialClockConfig), não na do servidor
+    private final java.time.Clock clock;
 
     public WishBaseline baselineFor(UUID userId) {
         return baselineFor(userId, today());
@@ -112,18 +114,24 @@ public class WishProjectionService {
 
         // A âncora do salário, quando existe, recorta os ciclos do jeito que o
         // usuário vive o mês (EC-135) — e não do jeito do calendário
-        Short anchorDay = sources.stream()
-                .filter(s -> s.getKind() == IncomeSource.Kind.SALARY && s.getAnchorDay() != null)
-                .map(IncomeSource::getAnchorDay)
-                .findFirst()
-                .orElse(null);
+        Short anchorDay = salaryAnchorDay(sources);
 
         List<BigDecimal> leftovers = new ArrayList<>();
         List<BigDecimal> expenses = new ArrayList<>();
-        for (AnalysisWindow window : completedCycles(anchorDay, CYCLES_SAMPLED, today)) {
-            AnalyticsService.CycleNet net = analyticsService.netFor(userId, window);
+        WishBaseline.ClosedCycle lastClosedCycle = null;
+        for (CycleWindow cycle : completedCycleWindows(anchorDay, CYCLES_SAMPLED, today)) {
+            AnalyticsService.CycleNet net = analyticsService.netFor(userId, cycle.window());
             // ciclo sem extrato importado não é ciclo em que nada aconteceu
-            if (net.income().signum() == 0 && net.expense().signum() == 0) continue;
+            if (!hasData(net)) continue;
+            if (lastClosedCycle == null) {
+                // A mediana serve para prever; esta é a sobra que de fato fechou
+                // e é a única que pode virar aporte medido. Os ciclos vêm do mais
+                // recente para o mais antigo, então o primeiro COM DADOS é o que
+                // vale — um ciclo vazio daria uma sobra 0 que nunca aconteceu.
+                lastClosedCycle = new WishBaseline.ClosedCycle(
+                        cycle.month().toString(), cycle.window().start(), cycle.window().end(),
+                        scale2(net.leftover()));
+            }
             leftovers.add(net.leftover());
             expenses.add(net.expense());
         }
@@ -138,7 +146,7 @@ public class WishProjectionService {
 
         return new WishBaseline(
                 scale2(workIncome), hourlyRate, hoursPerMonth, hoursPerDay,
-                monthlyLeftover, monthlyExpense, leftovers.size(), List.copyOf(gaps));
+                monthlyLeftover, monthlyExpense, leftovers.size(), List.copyOf(gaps), lastClosedCycle);
     }
 
     public WishProjection project(Wish wish, WishBaseline baseline) {
@@ -229,8 +237,11 @@ public class WishProjectionService {
     /** {@code null} quando nem em dez anos fecha — número gigante não informa. */
     private Integer cyclesToCover(BigDecimal remaining, BigDecimal perCycle) {
         if (perCycle == null || perCycle.signum() <= 0) return null;
-        int cycles = remaining.divide(perCycle, 0, RoundingMode.CEILING).intValue();
-        return cycles > MAX_INSTALLMENTS ? null : Math.max(cycles, 1);
+        BigDecimal cycles = remaining.divide(perCycle, 0, RoundingMode.CEILING);
+        // intValue() truncava valores gigantes antes do teto e podia transformar
+        // séculos de parcelas em um mês. O limite é decidido ainda em decimal.
+        if (cycles.compareTo(BigDecimal.valueOf(MAX_INSTALLMENTS)) > 0) return null;
+        return Math.max(cycles.intValueExact(), 1);
     }
 
     /**
@@ -238,14 +249,62 @@ public class WishProjectionService {
      * o mês do usuário (dia 5 ao dia 4). O ciclo corrente nunca entra.
      */
     List<AnalysisWindow> completedCycles(Short anchorDay, int count, LocalDate today) {
-        List<AnalysisWindow> windows = new ArrayList<>();
+        return completedCycleWindows(anchorDay, count, today).stream()
+                .map(CycleWindow::window)
+                .toList();
+    }
+
+    /**
+     * Diz se o identificador de ciclo já fechou para este usuário. A mesma
+     * âncora que recorta a baseline também impede marcar como medida uma sobra
+     * de ciclo salarial que ainda está em andamento.
+     */
+    public boolean isCycleClosed(UUID userId, YearMonth cycleMonth) {
+        return isCycleClosed(userId, cycleMonth, today());
+    }
+
+    /** Sobrecarga de teste: a fronteira do fechamento não depende do relógio da máquina. */
+    boolean isCycleClosed(UUID userId, YearMonth cycleMonth, LocalDate today) {
+        Short anchorDay = salaryAnchorDay(incomeSourceRepository.findAllByUserIdAndActiveTrue(userId));
+        if (anchorDay == null) return cycleMonth.isBefore(YearMonth.from(today));
+        LocalDate end = anchoredOn(cycleMonth.plusMonths(1), anchorDay).minusDays(1);
+        return end.isBefore(today);
+    }
+
+    /**
+     * O dia-âncora que recorta os ciclos. Com dois salários ativos, a escolha
+     * precisa ser a MESMA na listagem (GET) e no aporte (POST), senão o ciclo
+     * oferecido na tela pode ser recusado como "não fechado". Por isso a regra
+     * é estável e não depende de hoje: o salário ativo mais antigo (createdAt),
+     * com desempate pelo id. A regra do CommittedIncomeService ("o que cai
+     * primeiro a partir de hoje") muda com a data e não serve de identidade.
+     */
+    static Short salaryAnchorDay(List<IncomeSource> activeSources) {
+        return activeSources.stream()
+                .filter(s -> s.getKind() == IncomeSource.Kind.SALARY && s.getAnchorDay() != null)
+                .min(Comparator.comparing(IncomeSource::getCreatedAt,
+                                Comparator.nullsLast(Comparator.naturalOrder()))
+                        .thenComparing(IncomeSource::getId,
+                                Comparator.nullsLast(Comparator.naturalOrder())))
+                .map(IncomeSource::getAnchorDay)
+                .orElse(null);
+    }
+
+    /** O mesmo critério de "ciclo com extrato" para a mediana e para a sobra medida. */
+    private static boolean hasData(AnalyticsService.CycleNet net) {
+        return net.income().signum() != 0 || net.expense().signum() != 0;
+    }
+
+    private List<CycleWindow> completedCycleWindows(Short anchorDay, int count, LocalDate today) {
+        List<CycleWindow> cycles = new ArrayList<>();
 
         if (anchorDay == null) {
             YearMonth current = YearMonth.from(today);
             for (int i = 1; i <= count; i++) {
-                windows.add(AnalysisWindow.ofMonth(current.minusMonths(i)));
+                YearMonth month = current.minusMonths(i);
+                cycles.add(new CycleWindow(month, AnalysisWindow.ofMonth(month)));
             }
-            return windows;
+            return cycles;
         }
 
         // O mês cujo dia-âncora já passou é o do ciclo CORRENTE; os completos
@@ -258,9 +317,13 @@ public class WishProjectionService {
             YearMonth month = cursor.minusMonths(i);
             LocalDate start = anchoredOn(month, anchorDay);
             LocalDate end = anchoredOn(month.plusMonths(1), anchorDay).minusDays(1);
-            windows.add(AnalysisWindow.of(start, end));
+            cycles.add(new CycleWindow(month, AnalysisWindow.of(start, end)));
         }
-        return windows;
+        return cycles;
+    }
+
+    /** Junta a janela à sua chave para não inferir o ciclo da data final. */
+    private record CycleWindow(YearMonth month, AnalysisWindow window) {
     }
 
     /** Dia 31 em fevereiro é o último dia de fevereiro, não erro. */
@@ -289,8 +352,8 @@ public class WishProjectionService {
         return value == null ? null : value.setScale(2, RoundingMode.HALF_UP);
     }
 
-    /** UTC: é o fuso em que os parsers gravam as datas do extrato. */
-    private static LocalDate today() {
-        return LocalDate.now(ZoneOffset.UTC);
+    /** O dia de quem usa (zona financeira); as datas do extrato seguem em UTC. */
+    private LocalDate today() {
+        return LocalDate.now(clock);
     }
 }

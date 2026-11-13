@@ -63,7 +63,7 @@ public class DuplicateTransactionService {
      * jeito. "Um dia de diferença" é o que a pessoa lê no extrato, e é isso que
      * a comparação precisa dizer.
      */
-    private static final long JANELA_DIAS = 1;
+    static final long JANELA_DIAS = 1;
 
     /** Ver {@link #falamDoMesmo}: duas palavras de três letras ou mais. */
     private static final int MIN_PALAVRAS_EM_COMUM = 2;
@@ -90,9 +90,47 @@ public class DuplicateTransactionService {
      *               heurístico e a conta é dele.
      */
     public Outcome sweep(String email, boolean dryRun) {
+        return sweep(email, dryRun, null);
+    }
+
+    /**
+     * A mesma varredura, só sobre o que uma importação trouxe e os candidatos
+     * a par em volta.
+     *
+     * <p><b>Margem: {@link #JANELA_DIAS} de cada lado</b> — a distância que a
+     * própria regra admite entre as duas pontas. A outra ponta de uma linha
+     * importada no dia D só pode estar em D−1, D ou D+1, então o recorte
+     * [primeiro dia importado − 1, último + 1] contém todo par possível de
+     * toda linha importada.
+     *
+     * <p><b>Do que a igualdade com a varredura total depende</b>, dito às
+     * claras porque o pareamento é guloso (cada linha da conexão fica com a
+     * primeira linha de arquivo que serve, e a ordem importa): no histórico
+     * que já estava gravado <b>não há par antigo com antigo por fazer</b> —
+     * a última varredura total não achou mais nada. Valendo isso, todo par
+     * novo tem ao menos uma ponta importada, as duas pontas estão no recorte,
+     * e quem disputa uma linha importada também está. A ordem de leitura
+     * (data decrescente) é a mesma da total.
+     *
+     * <p>Uma varredura só não garante essa condição: o lado da conexão nunca
+     * é marcado e volta a ser candidato na passada seguinte (é o caso que
+     * {@link #falamDoMesmo} descreve). E ela deixa de valer quando a faxina
+     * anterior falhou, quando a pessoa desfez uma marca antiga pela tela ou
+     * quando uma linha antiga ganhou conta de origem fora de uma importação.
+     * Nesses casos o que ficou para trás fora do recorte não é repescado pela
+     * importação seguinte — só pela faxina pedida à mão — e, no caso raro de
+     * um par pendente encostado no recorte, uma linha importada pode casar
+     * com uma ponta que a total daria a outra.
+     *
+     * @param janela o que a importação trouxe; nulo = histórico inteiro
+     */
+    public Outcome sweep(String email, boolean dryRun, HygieneWindow janela) {
         User user = requireUser(email);
-        List<BankTransaction> all = bankTransactionRepository
-                .findAllByUserIdOrderByDateDesc(user.getId());
+        List<BankTransaction> all = janela == null
+                ? bankTransactionRepository.findAllByUserIdOrderByDateDesc(user.getId())
+                : bankTransactionRepository
+                        .findAllByUserIdAndDateGreaterThanEqualAndDateLessThanOrderByDateDesc(
+                                user.getId(), janela.from(JANELA_DIAS), janela.until(JANELA_DIAS));
 
         // Agrupa por valor exato: só quem tem o mesmo valor pode ser par, e isso
         // reduz a comparação de N² para a soma dos quadrados de grupos pequenos.

@@ -56,6 +56,8 @@ public class CardInvoiceService {
     private final UserRepository userRepository;
     private final InvoiceReserveService reserveService;
     private final br.com.economize.repository.CardBillRepository cardBillRepository;
+    // "Hoje" na zona financeira (FinancialClockConfig), não na do servidor
+    private final java.time.Clock clock;
 
     public CardInvoicesResponse invoices(String email, UUID accountId, int months) {
         // validação de entrada antes de qualquer I/O, como no sync do EC-106:
@@ -81,10 +83,10 @@ public class CardInvoiceService {
                 ? CardInvoicesResponse.CycleSource.PROVIDER_CLOSING_DAY
                 : CardInvoicesResponse.CycleSource.CALENDAR_MONTH;
 
-        // O fuso é UTC porque é nele que os parsers gravam a data do extrato e
-        // que a janela de análise (EC-092) já recorta; qualquer outro deslocaria
-        // o dia de virada do ciclo
-        LocalDate today = LocalDate.now(ZoneOffset.UTC);
+        // "Hoje" é o dia de quem usa (zona financeira), não o do servidor: em
+        // UTC a fatura fechava às 21h do Brasil. As datas do extrato seguem em
+        // UTC, que é como os parsers as gravam e como a janela abaixo recorta
+        LocalDate today = LocalDate.now(clock);
         List<Cycle> cycles = buildCycles(closingDay, account.getStatementDueDay(), today, months);
         if (cycles.isEmpty()) {
             return empty(account, source);
@@ -115,15 +117,29 @@ public class CardInvoiceService {
         });
         List<CardInvoicesResponse.Invoice> invoices = new ArrayList<>();
         for (Cycle cycle : cycles) {
+            // Linha ignorada (duplicata de outra fonte, ou decisão do usuário)
+            // sai AQUI, antes de tudo: as demais somas do app já não a contam,
+            // e a fatura somando-a mostrava uma dívida maior do que o gasto do
+            // mês. Sair da lista junto mantém total, contagem e linhas falando
+            // a mesma coisa — ela continua visível no extrato, onde se desfaz
             List<BankTransaction> inCycle = transactions.stream()
+                    .filter(tx -> !tx.isIgnored())
                     .filter(tx -> cycle.contains(utcDay(tx.getDate())))
                     .toList();
-            // ciclo vazio não vira fatura: o usuário abriria um mês em branco de
-            // um cartão que só começou a ser sincronizado depois
-            if (inCycle.isEmpty()) continue;
-            invoices.add(toInvoice(cycle, inCycle, today,
-                    reservas.get(cycle.reference().toString()),
-                    doBanco.get(cycle.reference().toString())));
+            CardInvoicesResponse.Reserve reserva = reservas.get(cycle.reference().toString());
+            CardInvoicesResponse.ProviderBill fechada = doBanco.get(cycle.reference().toString());
+            if (inCycle.isEmpty()) {
+                // ciclo vazio não vira fatura: o usuário abriria um mês em
+                // branco de um cartão que só começou a ser sincronizado depois.
+                // A exceção é o ciclo que TINHA linhas e ficou vazio só porque
+                // todas foram ignoradas: se há reserva ou fatura do banco
+                // presas a ele, omiti-lo sumia com o dinheiro separado e com o
+                // valor que o emissor cobra. Ele aparece com zero do nosso lado
+                boolean soIgnoradas = transactions.stream()
+                        .anyMatch(tx -> cycle.contains(utcDay(tx.getDate())));
+                if (!soIgnoradas || (reserva == null && fechada == null)) continue;
+            }
+            invoices.add(toInvoice(cycle, inCycle, today, reserva, fechada));
         }
         return new CardInvoicesResponse(account.getId(), account.getName(), account.getType(),
                 account.getInstitution(), source, invoices);
@@ -136,7 +152,9 @@ public class CardInvoiceService {
      * do Pluggy) e o que é crédito. Entre os créditos, o que separa PAGAMENTO de
      * ESTORNO é o sinal ESTRUTURAL que a V15 já grava, não heurística de texto:
      * pagamento de fatura é perna de movimentação entre contas do titular e vem
-     * marcado na importação; estorno de compra é crédito sem marca.
+     * marcado na importação; estorno de compra é crédito sem marca. No conector
+     * quem decide a marca é a sincronização: crédito no cartão é pagamento,
+     * salvo quando se anuncia como estorno (ver {@code PluggySyncService}).
      *
      * <p>A diferença muda o número que o usuário lê. Compra de 100 estornada no
      * mesmo ciclo deixa dívida ZERO — mas com os dois no mesmo balde a resposta

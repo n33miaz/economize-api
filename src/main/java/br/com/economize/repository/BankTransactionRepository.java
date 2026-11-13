@@ -32,6 +32,11 @@ public interface BankTransactionRepository extends JpaRepository<BankTransaction
 
     List<BankTransaction> findAllByUserIdAndUploadIdOrderByDateDesc(UUID userId, UUID uploadId);
 
+    List<BankTransaction> findAllByUserIdAndUploadIdInOrderByDateDesc(UUID userId, Collection<UUID> uploadIds);
+
+    long countByUserIdAndUploadIdInAndReviewStatusIn(UUID userId, Collection<UUID> uploadIds,
+                                                      Collection<BankTransaction.ReviewStatus> reviewStatuses);
+
     // EC-113: os lançamentos de UMA conta dentro de uma janela — a consulta que
     // monta a fatura do cartão. É o único leitor do índice
     // (account_id, date) criado na V16; o user_id continua na cláusula por
@@ -114,9 +119,19 @@ public interface BankTransactionRepository extends JpaRepository<BankTransaction
     // fatura não é despesa (a despesa foi a compra) nem o crédito que entra no
     // cartão é receita. Sem esse filtro, conectar cartão + conta corrente
     // dobrava "Despesas do mês" e inventava uma receita do tamanho da fatura.
+    //
+    // O total é o LÍQUIDO de cada linha (valor + o que dela voltou, V40) com o
+    // mesmo piso de BankTransaction.getNetAmount(): o líquido nunca troca de
+    // sinal. Compra de 100 com 120 abatidos (dado de antes do teto na
+    // varredura) vale zero, e não +20 abatendo as outras compras da categoria.
+    // O piso é por LINHA, dentro do sum — em volta da soma ele não seguraria
+    // nada. As duas consultas de soma abaixo repetem o mesmo case.
     @Query("""
             select t.categoryId as categoryId, t.type as type,
-                   sum(t.amount + t.refundedAmount) as total, count(t) as txCount
+                   sum(case when t.amount < 0 and t.amount + t.refundedAmount > 0 then 0
+                            when t.amount > 0 and t.amount + t.refundedAmount < 0 then 0
+                            else t.amount + t.refundedAmount end) as total,
+                   count(t) as txCount
             from BankTransaction t
             where t.user.id = :userId and t.date >= :start and t.date < :end
               and t.internalTransfer = false
@@ -156,7 +171,10 @@ public interface BankTransactionRepository extends JpaRepository<BankTransaction
 
     @Query("""
             select t.categoryId as categoryId, t.type as type,
-                   sum(t.amount + t.refundedAmount) as total, count(t) as txCount
+                   sum(case when t.amount < 0 and t.amount + t.refundedAmount > 0 then 0
+                            when t.amount > 0 and t.amount + t.refundedAmount < 0 then 0
+                            else t.amount + t.refundedAmount end) as total,
+                   count(t) as txCount
             from BankTransaction t
             where t.user.id = :userId and t.date >= :start and t.date < :end
               and t.internalTransfer = false
@@ -273,10 +291,73 @@ public interface BankTransactionRepository extends JpaRepository<BankTransaction
             + "where t.user.id = :userId and t.id in :ids")
     int markAsFamilyTransfer(@Param("userId") UUID userId, @Param("ids") Collection<UUID> ids);
 
+    // ------------------------------------------------------------------
+    // A conferência de saldo (BalanceReconciliationService). Ela roda ao abrir
+    // o extrato e carregava TODOS os lançamentos do usuário para responder
+    // duas perguntas por conta; as duas consultas abaixo respondem as mesmas
+    // perguntas no banco, pelo índice (account_id, date) da V16, sem
+    // materializar lançamento nenhum — e cada uma responde por TODAS as
+    // contas de uma vez: o custo da conferência não cresce com o número delas.
+    //
+    // As cláusulas são as do filtro em memória que elas substituem, linha por
+    // linha — inclusive o que parece esquecimento. NÃO "alinhe" com a regra
+    // das somas da Análise: aqui a pergunta é sobre o saldo da conta, e perna
+    // interna e par de estorno mexem no saldo de verdade.
+    // ------------------------------------------------------------------
+
     /**
-     * Marca as DUAS pernas de um estorno (V29). O crédito guarda de quem é o
-     * estorno; a compra só recebe a marca — quem quiser o caminho de volta
-     * chega por {@code refundOfId}.
+     * Quais destas contas tiveram movimento material depois de {@code since}.
+     *
+     * <p>Movimento é qualquer linha da conta — ignorada, interna ou estornada
+     * também: a pergunta é se a conta está viva, não se a linha entra em soma.
+     * O piso é por LINHA e sobre o valor bruto; "depois" é estrito.
+     *
+     * <p>Nunca chame com a lista vazia: {@code in ()} não é SQL válido.
+     */
+    @Query("""
+            select distinct t.accountId from BankTransaction t
+            where t.user.id = :userId and t.accountId in :accountIds
+              and t.date > :since
+              and abs(t.amount) >= :floor
+            """)
+    List<UUID> findAccountsWithMovementSince(@Param("userId") UUID userId,
+                                             @Param("accountIds") Collection<UUID> accountIds,
+                                             @Param("since") OffsetDateTime since,
+                                             @Param("floor") BigDecimal floor);
+
+    /**
+     * Soma, POR CONTA, do que entrou depois da última leitura de saldo da
+     * própria conta, sem as ignoradas. Cada linha devolvida é
+     * {@code [accountId (UUID), soma (BigDecimal)]}.
+     *
+     * <p>O corte é de cada conta ({@code reportedBalanceAt} dela), e por isso
+     * a data não vem por parâmetro: vem do join. Era uma consulta por conta —
+     * 200 contas ligadas, 200 idas ao banco a cada abertura do extrato.
+     *
+     * <p>Só a ignorada sai: é a única linha que não é dinheiro de verdade (a
+     * duplicata de outra fonte). Valor bruto, "depois" estrito. Conta sem
+     * data de leitura nunca aparece (comparar com nulo não casa), e conta sem
+     * linha depois do corte também não — quem chama trata a ausência como
+     * zero. O dono é filtro dos DOIS lados: lançamento e conta.
+     *
+     * <p>Nunca chame com a lista vazia: {@code in ()} não é SQL válido.
+     */
+    @Query("""
+            select t.accountId, sum(t.amount) from BankTransaction t, ConnectorAccount a
+            where a.id = t.accountId
+              and t.user.id = :userId and a.user.id = :userId
+              and t.accountId in :accountIds
+              and t.date > a.reportedBalanceAt
+              and t.ignored = false
+            group by t.accountId
+            """)
+    List<Object[]> sumByAccountAfterOwnReading(@Param("userId") UUID userId,
+                                               @Param("accountIds") Collection<UUID> accountIds);
+
+    /**
+     * Marca a COMPRA de um estorno inteiro (V29): ela só recebe a marca — quem
+     * quiser o caminho de volta chega pelo {@code refundOfId} do crédito. O
+     * crédito é marcado e ligado por {@link #claimRefund}, um a um.
      */
     @Modifying
     @Transactional
@@ -305,6 +386,17 @@ public interface BankTransactionRepository extends JpaRepository<BankTransaction
     int clearFamilyTransfer(@Param("userId") UUID userId, @Param("ids") Collection<UUID> ids);
 
     /**
+     * Solta TODAS as marcas de Pix da casa de um usuário — quem sai da casa
+     * (ou a vê desfeita) não tem mais com quem trocar dinheiro "da casa".
+     * Amarrado ao user_id: nunca toca linha de outra pessoa.
+     */
+    @Modifying
+    @Transactional
+    @Query("update BankTransaction t set t.familyTransfer = false "
+            + "where t.user.id = :userId and t.familyTransfer = true")
+    int clearAllFamilyTransfers(@Param("userId") UUID userId);
+
+    /**
      * Solta a marca de descarte E o motivo. Sem limpar o motivo, a linha
      * voltaria para as somas carregando "descartada porque duplicada", e a
      * próxima varredura leria isso como decisão já tomada.
@@ -315,39 +407,152 @@ public interface BankTransactionRepository extends JpaRepository<BankTransaction
             + "where t.user.id = :userId and t.id in :ids")
     int clearIgnored(@Param("userId") UUID userId, @Param("ids") Collection<UUID> ids);
 
+    // ------------------------------------------------------------------
+    // O DESFAZER de uma passada do vigia do estorno. Entrada pública:
+    // releaseRefunds. As consultas abaixo dela são as peças.
+    //
+    // Até 12/11/2026 era um UPDATE só, que soltava as linhas da passada e
+    // ZERAVA o abate da compra. Só que o abate é a soma de várias passadas:
+    // compra de 100 com 60 abatidos na passada A e 40 na B, desfeita só a B,
+    // voltava a valer 100 de despesa com o crédito de 60 da A ainda marcado e
+    // ligado a ela — fora da receita e fora do abate, sumido das duas contas.
+    //
+    // O abate de uma compra não é um número que se guarda e se apaga: é o que
+    // os créditos LIGADOS a ela dizem. Então o desfazer solta os créditos da
+    // passada e refaz a conta de cada compra tocada com os que ficaram.
+    // ------------------------------------------------------------------
+
     /**
-     * Solta as duas pernas do par e o vínculo entre elas — e zera o abate do
-     * estorno parcial (V40), que mora na compra: desfazer a passada tem de
-     * devolver a compra ao valor cheio, senão a categoria continuaria menor
-     * sem nenhum crédito explicando por quê.
+     * Desfaz o que uma passada marcou: solta os créditos dela e recalcula as
+     * compras a partir dos créditos que CONTINUAM ligados.
+     *
+     * <p>Para cada compra tocada, depois de soltar:
+     * <ul>
+     *   <li>o abate vira a soma dos créditos ainda ligados, com o teto do
+     *       valor da compra — nunca zero por decreto;</li>
+     *   <li>a marca de estorno INTEIRO só se mantém se o que ficou ligado
+     *       ainda cobre a compra toda. Sem isso a compra volta a contar, pelo
+     *       líquido. A marca nunca é criada aqui, só mantida ou solta.</li>
+     * </ul>
+     *
+     * <p>Roda na transação de quem chama (o desfazer do vigia): soltar o
+     * crédito sem refazer a compra é exatamente o defeito que isto conserta.
+     *
+     * @param ids as linhas que a passada tocou — créditos e compras
+     */
+    @Transactional
+    default void releaseRefunds(UUID userId, Collection<UUID> ids) {
+        if (ids == null || ids.isEmpty()) return;
+        // As compras apontadas pelos créditos têm de ser lidas ANTES de soltar
+        // o vínculo: depois, não há mais como chegar nelas. A passada grava as
+        // duas pontas, então elas já costumam estar em `ids`; isto cobre a
+        // passada antiga que só gravou o crédito
+        java.util.Set<UUID> compras = new java.util.LinkedHashSet<>(ids);
+        compras.addAll(findRefundTargets(userId, ids));
+
+        releaseRefundCredits(userId, ids);
+
+        for (RefundState compra : findRefundStates(userId, compras)) {
+            BigDecimal valor = compra.getAmount().abs();
+            BigDecimal ligado = sumLinkedRefunds(userId, compra.getId());
+            if (ligado == null) ligado = BigDecimal.ZERO;
+            boolean aindaInteiro = compra.getRefunded() && ligado.compareTo(valor) >= 0;
+            setRefundState(userId, compra.getId(), aindaInteiro, ligado.min(valor));
+        }
+    }
+
+    /** As compras para as quais estes créditos apontam. */
+    @Query("select distinct t.refundOfId from BankTransaction t "
+            + "where t.user.id = :userId and t.id in :ids and t.refundOfId is not null")
+    List<UUID> findRefundTargets(@Param("userId") UUID userId, @Param("ids") Collection<UUID> ids);
+
+    /**
+     * Solta os CRÉDITOS: a marca e o vínculo. Só valor positivo — a compra da
+     * mesma lista não é solta por aqui, é recalculada.
      */
     @Modifying
     @Transactional
-    @Query("update BankTransaction t set t.refunded = false, t.refundOfId = null, "
-            + "t.refundedAmount = 0 "
-            + "where t.user.id = :userId and t.id in :ids")
-    int clearRefund(@Param("userId") UUID userId, @Param("ids") Collection<UUID> ids);
+    @Query("update BankTransaction t set t.refunded = false, t.refundOfId = null "
+            + "where t.user.id = :userId and t.id in :ids and t.amount > 0")
+    int releaseRefundCredits(@Param("userId") UUID userId, @Param("ids") Collection<UUID> ids);
+
+    /**
+     * O estado de estorno das COMPRAS da lista. Projeção, e não entidade: o
+     * que se lê aqui vem depois de um UPDATE em massa, e a entidade que já
+     * estivesse no contexto devolveria o valor de antes dele.
+     */
+    @Query("select t.id as id, t.amount as amount, t.refunded as refunded "
+            + "from BankTransaction t "
+            + "where t.user.id = :userId and t.id in :ids and t.amount < 0")
+    List<RefundState> findRefundStates(@Param("userId") UUID userId,
+                                       @Param("ids") Collection<UUID> ids);
+
+    /** Soma dos créditos ainda marcados e ligados a esta compra; nulo se nenhum. */
+    @Query("select sum(t.amount) from BankTransaction t "
+            + "where t.user.id = :userId and t.refundOfId = :compraId and t.refunded = true")
+    BigDecimal sumLinkedRefunds(@Param("userId") UUID userId, @Param("compraId") UUID compraId);
+
+    /** Grava o estado recalculado de uma compra. */
+    @Modifying
+    @Transactional
+    @Query("update BankTransaction t set t.refunded = :refunded, t.refundedAmount = :refundedAmount "
+            + "where t.user.id = :userId and t.id = :compraId")
+    int setRefundState(@Param("userId") UUID userId,
+                       @Param("compraId") UUID compraId,
+                       @Param("refunded") boolean refunded,
+                       @Param("refundedAmount") BigDecimal refundedAmount);
+
+    interface RefundState {
+        UUID getId();
+
+        BigDecimal getAmount();
+
+        boolean getRefunded();
+    }
 
     /**
      * Abate um estorno PARCIAL na compra (V40). Soma em vez de atribuir: uma
      * compra pode receber dois créditos parciais em faturas diferentes.
+     *
+     * <p>Soma com TETO no valor da compra. A varredura já manda só o que
+     * resta, mas decide com o que leu; duas passadas ao mesmo tempo leem a
+     * mesma compra e cada uma manda um abate que cabe. O teto que vale nos
+     * dois casos é o que está na própria escrita.
      */
     @Modifying
     @Transactional
-    @Query("update BankTransaction t set t.refundedAmount = t.refundedAmount + :amount "
+    @Query("update BankTransaction t set t.refundedAmount = "
+            + "case when t.refundedAmount + :amount > abs(t.amount) then abs(t.amount) "
+            + "else t.refundedAmount + :amount end "
             + "where t.user.id = :userId and t.id = :compraId")
     int applyPartialRefund(@Param("userId") UUID userId,
                            @Param("compraId") UUID compraId,
                            @Param("amount") BigDecimal amount);
 
-    /** Liga o crédito à compra que ele estornou. Uma linha por par. */
+    /**
+     * REIVINDICA o crédito para uma compra: marca e liga numa escrita só, e só
+     * se ele ainda não tiver dono.
+     *
+     * <p>É a trava da varredura de estornos. Duas varreduras ao mesmo tempo (a
+     * higiene e o botão) leem o mesmo crédito solto e decidem, as duas,
+     * abatê-lo da compra: o estorno de 60 virava 100 abatidos. A condição
+     * {@code refundOfId is null} mora no UPDATE, e não numa leitura anterior:
+     * a segunda varredura espera a primeira confirmar, reavalia a condição e
+     * altera ZERO linhas. Só quem alterou uma linha segue para o abate.
+     *
+     * <p>A condição é o vínculo, e não a marca: o crédito de cartão já chega
+     * marcado e sem vínculo (o conector o grava neutro), e é justamente ele
+     * que ainda procura a compra.
+     *
+     * @return 1 se o crédito ficou com esta varredura; 0 se já era de outra
+     */
     @Modifying
     @Transactional
-    @Query("update BankTransaction t set t.refundOfId = :compraId "
-            + "where t.user.id = :userId and t.id = :creditoId")
-    int linkRefund(@Param("userId") UUID userId,
-                   @Param("creditoId") UUID creditoId,
-                   @Param("compraId") UUID compraId);
+    @Query("update BankTransaction t set t.refunded = true, t.refundOfId = :compraId "
+            + "where t.user.id = :userId and t.id = :creditoId and t.refundOfId is null")
+    int claimRefund(@Param("userId") UUID userId,
+                    @Param("creditoId") UUID creditoId,
+                    @Param("compraId") UUID compraId);
 
     /**
      * Marca em bloco o lado descartado de pares duplicados (V26). O motivo viaja

@@ -108,17 +108,6 @@ public class InvoiceReserveService {
                         (a, b) -> b));
     }
 
-    /**
-     * Total separado pelo usuário, somando todos os cartões e ciclos. É o número
-     * que a previsão de saldo desconta do disponível.
-     */
-    @Transactional(readOnly = true)
-    public BigDecimal totalReserved(UUID userId) {
-        return repository.findAllByUserId(userId).stream()
-                .map(InvoiceReserve::getAmount)
-                .reduce(BigDecimal.ZERO, BigDecimal::add);
-    }
-
     static CardInvoicesResponse.Reserve toResponse(InvoiceReserve reserva) {
         ConnectorAccount cofre = reserva.getHeldInAccount();
         return new CardInvoicesResponse.Reserve(
@@ -139,8 +128,14 @@ public class InvoiceReserveService {
         if (reference == null || reference.isBlank()) {
             throw new IllegalArgumentException("Informe o ciclo da fatura, no formato AAAA-MM");
         }
+        String limpa = reference.trim();
+        // YearMonth.parse aceita ano com sinal e mais de 4 dígitos ("+10000-01",
+        // 9 caracteres): passava aqui e estourava o VARCHAR(7) do banco como 500
+        if (!limpa.matches("\\d{4}-\\d{2}")) {
+            throw new IllegalArgumentException("Ciclo inválido: use o formato AAAA-MM");
+        }
         try {
-            return YearMonth.parse(reference.trim()).toString();
+            return YearMonth.parse(limpa).toString();
         } catch (DateTimeParseException e) {
             throw new IllegalArgumentException(
                     "Ciclo inválido: use o formato AAAA-MM (recebido: " + reference + ")");

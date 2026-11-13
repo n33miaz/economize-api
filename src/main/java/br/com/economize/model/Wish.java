@@ -44,7 +44,9 @@ public class Wish {
     @Column(name = "target_amount", nullable = false, precision = 19, scale = 4)
     private BigDecimal targetAmount;
 
-    @Column(name = "saved_amount", nullable = false, precision = 19, scale = 4)
+    // O saldo só muda pelo UPDATE atômico do repositório. Assim, salvar uma
+    // meta lida antes de um aporte não devolve ao banco o saldo antigo.
+    @Column(name = "saved_amount", nullable = false, precision = 19, scale = 4, updatable = false)
     private BigDecimal savedAmount;
 
     @Column(name = "category_id")

@@ -8,9 +8,11 @@ import br.com.economize.repository.BankTransactionRepository;
 import br.com.economize.repository.FamilyMemberRepository;
 import br.com.economize.repository.UserRepository;
 import br.com.economize.service.CounterpartyMatcher;
+import br.com.economize.service.HygieneWindow;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
@@ -77,6 +79,35 @@ public class FamilyTransferService {
      */
     @Transactional
     public Outcome reconcile(String email) {
+        return reconcile(email, null);
+    }
+
+    /**
+     * A varredura do histórico inteiro numa transação NOVA. É a que roda logo
+     * depois de alguém entrar na casa (FamilyService#join, após o commit): ali
+     * a transação do join já terminou, e participar dela não gravaria nada.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public Outcome reconcileInNewTransaction(String email) {
+        return reconcile(email, null);
+    }
+
+    /**
+     * A mesma varredura, só sobre o que uma importação trouxe.
+     *
+     * <p><b>Margem zero.</b> A regra olha uma linha de cada vez — a descrição
+     * dela contra o nome dos outros membros — e nunca pareia duas linhas. Para
+     * o que foi importado, o resultado é o da varredura total.
+     *
+     * <p>O que deixa de acontecer aqui é a repescagem: quem entra numa casa
+     * DEPOIS de importar o extrato tem o histórico reexaminado pela faxina
+     * pedida à mão (ou por {@code /family/reconcile-transfers}), não mais de
+     * carona na importação seguinte.
+     *
+     * @param janela o que a importação trouxe; nulo = histórico inteiro
+     */
+    @Transactional
+    public Outcome reconcile(String email, HygieneWindow janela) {
         User user = requireUser(email);
         FamilyMember me = memberRepository.findByUserId(user.getId()).orElse(null);
         if (me == null) {
@@ -98,7 +129,11 @@ public class FamilyTransferService {
             return new Outcome(0, 0, 0);
         }
 
-        List<BankTransaction> all = bankTransactionRepository.findAllByUserIdOrderByDateDesc(user.getId());
+        List<BankTransaction> all = janela == null
+                ? bankTransactionRepository.findAllByUserIdOrderByDateDesc(user.getId())
+                : bankTransactionRepository
+                        .findAllByUserIdAndDateGreaterThanEqualAndDateLessThanOrderByDateDesc(
+                                user.getId(), janela.from(0), janela.until(0));
         Set<UUID> marcar = new LinkedHashSet<>();
         for (BankTransaction tx : all) {
             if (tx.isFamilyTransfer() || tx.isInternalTransfer() || tx.isIgnored()) continue;
