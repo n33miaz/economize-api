@@ -27,7 +27,12 @@ import org.springframework.test.web.reactive.server.WebTestClient;
  * nada) e que o IP escolhido é o do cliente.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
-        properties = "server.forward-headers-strategy=native")
+        properties = {
+                "server.forward-headers-strategy=native",
+                // Banco H2 próprio: o testdb é compartilhado e o create-drop de
+                // outro contexto, ao fechar, apaga a tabela users que o token exige
+                "spring.datasource.url=jdbc:h2:mem:clientipforwarded;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE"
+        })
 @DisplayName("IP do cliente com cabeçalhos encaminhados em modo nativo")
 class ClientIpForwardedHeadersTest {
 
