@@ -168,10 +168,10 @@ public class UserController {
                 .subscribeOn(Schedulers.boundedElastic())
                 .map(userId -> {
                     // cada linha sai do banco direto para a resposta: o ZIP inteiro nunca fica em memória
-                    Flux<DataBuffer> body = DataBufferUtils.outputStreamPublisher(
+                    Flux<DataBuffer> body = Flux.from(DataBufferUtils.outputStreamPublisher(
                             out -> accountDataExporter.write(userId, out),
                             DefaultDataBufferFactory.sharedInstance,
-                            task -> Schedulers.boundedElastic().schedule(task));
+                            task -> Schedulers.boundedElastic().schedule(task)));
                     return ResponseEntity.ok()
                             .contentType(MediaType.parseMediaType("application/zip"))
                             .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment()
