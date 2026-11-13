@@ -162,8 +162,8 @@ public class InvestmentService {
 
         if (itemsRead == 0 && lastFailure != null) {
             // TODAS as conexões falharam: aí não é "uma conexão ruim", é o
-            // provedor fora ou credencial da aplicação errada — o 502 do handler
-            // é a resposta honesta, com o motivo em log
+            // provedor fora ou credencial da aplicação errada — o handler responde
+            // 502 (o provedor respondeu erro) ou 503 (nem respondeu), motivo em log
             throw lastFailure;
         }
         log.info("Sync de investimentos: {} criadas, {} atualizadas em {} conexão(ões) para user={}",

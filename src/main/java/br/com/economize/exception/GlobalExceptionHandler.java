@@ -6,6 +6,7 @@ import org.springframework.http.ProblemDetail;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.bind.support.WebExchangeBindException;
+import org.springframework.web.reactive.function.client.WebClientRequestException;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.server.ServerWebInputException;
@@ -182,6 +183,45 @@ public class GlobalExceptionHandler {
                                 ex.getResponseBodyAsString());
                 ProblemDetail problemDetail = ProblemDetail.forStatusAndDetail(HttpStatus.BAD_GATEWAY,
                                 "Falha ao obter dados de provedores externos.");
+                problemDetail.setTitle("Erro no Provedor de Dados");
+                problemDetail.setType(Objects
+                                .requireNonNull(URI.create("https://economize.app/erros/provedor-externo")));
+                problemDetail.setProperty("timestamp", Instant.now());
+                return problemDetail;
+        }
+
+        /**
+         * O provedor externo não respondeu: timeout, conexão recusada, DNS. É
+         * o caso que o handler de cima não cobre — sem resposta não há status —
+         * e caía no genérico como 500, mandando procurar bug onde o que houve
+         * foi rede. 503 diz ao app que tentar de novo faz sentido.
+         *
+         * <p>A mensagem da exceção carrega método e URL do provedor; nem ela
+         * nem o host saem na resposta. No log vai só a classe da causa.
+         */
+        @ExceptionHandler(WebClientRequestException.class)
+        public ProblemDetail handleWebClientRequestException(WebClientRequestException ex) {
+                log.warn("Provedor externo não respondeu: causa={}",
+                                ex.getMostSpecificCause().getClass().getName());
+                ProblemDetail problemDetail = ProblemDetail.forStatusAndDetail(HttpStatus.SERVICE_UNAVAILABLE,
+                                "O provedor não respondeu. Tente de novo em instantes.");
+                problemDetail.setTitle("Provedor Indisponível");
+                problemDetail.setType(Objects
+                                .requireNonNull(URI.create("https://economize.app/erros/provedor-indisponivel")));
+                problemDetail.setProperty("timestamp", Instant.now());
+                return problemDetail;
+        }
+
+        /**
+         * O provedor respondeu 200 sem o que devia (ex.: a Pluggy sem token).
+         * Defeito de lá, não nosso: 502, e não 500. A mensagem da exceção vai
+         * só para o log — ela pode citar variável de ambiente do servidor.
+         */
+        @ExceptionHandler(UpstreamProviderException.class)
+        public ProblemDetail handleUpstreamProviderException(UpstreamProviderException ex) {
+                log.error("Provedor externo respondeu fora do contrato: {}", ex.getMessage());
+                ProblemDetail problemDetail = ProblemDetail.forStatusAndDetail(HttpStatus.BAD_GATEWAY,
+                                "O provedor respondeu de forma inesperada. Tente de novo em instantes.");
                 problemDetail.setTitle("Erro no Provedor de Dados");
                 problemDetail.setType(Objects
                                 .requireNonNull(URI.create("https://economize.app/erros/provedor-externo")));

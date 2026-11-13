@@ -1,5 +1,10 @@
 package br.com.economize.controller;
 
+import org.springframework.http.HttpMethod;
+import org.springframework.web.reactive.function.client.WebClientRequestException;
+import br.com.economize.exception.UpstreamProviderException;
+import java.net.URI;
+import java.util.concurrent.TimeoutException;
 import br.com.economize.config.CorsConfig;
 import br.com.economize.dto.connector.ConnectionResponse;
 import br.com.economize.dto.connector.RegisterPluggyItemRequest;
@@ -280,5 +285,40 @@ class PluggyConnectorControllerTest {
 
     private String bearerToken() {
         return "Bearer " + jwtUtil.generateToken(EMAIL);
+    }
+
+    @Test
+    @DisplayName("POST /connect-token - Pluggy sem responder é 503, sem a URL do provedor na resposta")
+    void connectTokenShouldAnswer503WhenProviderIsDown() {
+        when(provider.connectToken(EMAIL, null)).thenThrow(new WebClientRequestException(
+                new TimeoutException("read timed out"), HttpMethod.POST,
+                URI.create("https://api.pluggy.ai/auth"), new HttpHeaders()));
+
+        String corpo = webTestClient.post()
+                .uri("/api/v1/connectors/pluggy/connect-token")
+                .header(HttpHeaders.AUTHORIZATION, bearerToken())
+                .exchange()
+                .expectStatus().isEqualTo(503)
+                .expectBody(String.class).returnResult().getResponseBody();
+
+        org.assertj.core.api.Assertions.assertThat(corpo)
+                .contains("O provedor não respondeu")
+                .doesNotContain("pluggy.ai");
+    }
+
+    @Test
+    @DisplayName("POST /connect-token - Pluggy 200 sem token é 502, sem citar variável de ambiente")
+    void connectTokenShouldAnswer502WhenProviderOmitsToken() {
+        when(provider.connectToken(EMAIL, null)).thenThrow(
+                new UpstreamProviderException("Pluggy não devolveu apiKey — confira PLUGGY_CLIENT_ID/SECRET"));
+
+        String corpo = webTestClient.post()
+                .uri("/api/v1/connectors/pluggy/connect-token")
+                .header(HttpHeaders.AUTHORIZATION, bearerToken())
+                .exchange()
+                .expectStatus().isEqualTo(502)
+                .expectBody(String.class).returnResult().getResponseBody();
+
+        org.assertj.core.api.Assertions.assertThat(corpo).doesNotContain("PLUGGY_CLIENT");
     }
 }

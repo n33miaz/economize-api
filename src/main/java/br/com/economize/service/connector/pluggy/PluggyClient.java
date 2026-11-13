@@ -1,5 +1,6 @@
 package br.com.economize.service.connector.pluggy;
 
+import br.com.economize.exception.UpstreamProviderException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
@@ -61,7 +62,7 @@ public class PluggyClient {
                 })
                 .block();
         if (body == null || body.get("apiKey") == null) {
-            throw new IllegalStateException("Pluggy não devolveu apiKey — confira PLUGGY_CLIENT_ID/SECRET");
+            throw new UpstreamProviderException("Pluggy não devolveu apiKey — confira PLUGGY_CLIENT_ID/SECRET");
         }
         return String.valueOf(body.get("apiKey"));
     }
@@ -87,7 +88,7 @@ public class PluggyClient {
                 })
                 .block();
         if (body == null || body.get("accessToken") == null) {
-            throw new IllegalStateException("Pluggy não devolveu accessToken do Connect");
+            throw new UpstreamProviderException("Pluggy não devolveu accessToken do Connect");
         }
         return String.valueOf(body.get("accessToken"));
     }

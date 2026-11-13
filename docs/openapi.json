@@ -1,6 +1,29 @@
 {
   "components": {
     "schemas": {
+      "AcceptIncomeSuggestion": {
+        "properties": {
+          "anchorDay": {
+            "format": "int32",
+            "maximum": 31,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "expectedAmount": {
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 120,
+            "minLength": 0,
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "AccountMergeSuggestion": {
         "properties": {
           "digits": {
@@ -3968,7 +3991,7 @@
             "default": "",
             "example": "alice@exemplo.com",
             "format": "email",
-            "maxLength": 180,
+            "maxLength": 150,
             "minLength": 0,
             "type": "string"
           },
@@ -3976,7 +3999,7 @@
             "default": "",
             "description": "Como a pessoa quer ser chamada no app",
             "example": "Alice",
-            "maxLength": 120,
+            "maxLength": 100,
             "minLength": 0,
             "type": "string"
           },
@@ -7804,7 +7827,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/CreateIncomeSource"
+                "$ref": "#/components/schemas/AcceptIncomeSuggestion"
               }
             }
           }
