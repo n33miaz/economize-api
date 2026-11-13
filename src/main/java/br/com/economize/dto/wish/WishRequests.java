@@ -142,6 +142,28 @@ public final class WishRequests {
     ) {
     }
 
+    /**
+     * Ajustes opcionais ao aceitar uma sugestão do extrato. Não é o
+     * {@link CreateIncomeSource}: lá tipo e nome são obrigatórios, e o app manda
+     * {@code {}} para aceitar a sugestão como veio — o que é válido aqui, porque
+     * o que faltar vem da própria série. Os limites são os mesmos do cadastro.
+     */
+    public record AcceptIncomeSuggestion(
+            String kind,
+
+            @Size(max = 120, message = "Nome deve ter no máximo 120 caracteres")
+            String name,
+
+            @DecimalMin(value = "0.00", inclusive = false, message = "Valor deve ser positivo")
+            @Digits(integer = 15, fraction = 4, message = "Valor fora da faixa aceita")
+            BigDecimal expectedAmount,
+
+            @Min(value = 1, message = "Dia deve estar entre 1 e 31")
+            @Max(value = 31, message = "Dia deve estar entre 1 e 31")
+            Integer anchorDay
+    ) {
+    }
+
     public record UpdateIncomeSource(
             @Size(max = 120, message = "Nome deve ter no máximo 120 caracteres")
             String name,
