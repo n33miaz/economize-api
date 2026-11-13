@@ -7,6 +7,7 @@ import br.com.economize.dto.indicator.ForeignQuote;
 import br.com.economize.service.IndicatorService;
 import br.com.economize.service.provider.MarketSnapshotStore;
 import br.com.economize.service.provider.NoLiveDataException;
+import br.com.economize.service.provider.RecentFallbackCache;
 import br.com.economize.service.provider.fallback.FailureSummary;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -27,6 +28,7 @@ import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.ZoneId;
 import java.util.Locale;
+import java.util.Optional;
 import java.util.regex.Pattern;
 
 /**
@@ -77,33 +79,43 @@ public class ForeignQuoteService {
      * ciclo no boot. Nos testes de unidade (sem Spring) é o próprio objeto.
      */
     private final ForeignQuoteService self;
+    private final RecentFallbackCache recentFallback;
 
     public ForeignQuoteService(WebClient webClient, MarketSourcesProperties properties,
             MarketSnapshotStore snapshotStore, IndicatorService indicatorService) {
-        this(webClient, properties, snapshotStore, indicatorService, null);
+        this(webClient, properties, snapshotStore, indicatorService, RecentFallbackCache.disabled(), null);
     }
 
     @Autowired
     public ForeignQuoteService(WebClient webClient, MarketSourcesProperties properties,
             MarketSnapshotStore snapshotStore, IndicatorService indicatorService,
-            @Lazy ForeignQuoteService self) {
+            RecentFallbackCache recentFallback, @Lazy ForeignQuoteService self) {
         this.webClient = webClient;
         this.properties = properties;
         this.snapshotStore = snapshotStore;
         this.indicatorService = indicatorService;
+        this.recentFallback = recentFallback;
         this.self = self != null ? self : this;
     }
 
-    /** Símbolo e mercado já validados e normalizados pelo controller. Vazio = ninguém conhece o papel. */
+    /**
+     * Símbolo e mercado já validados e normalizados pelo controller. Vazio =
+     * ninguém conhece o papel. O "ninguém conhece" vai como {@code Optional}
+     * vazio para caber na janela curta de falha ({@link RecentFallbackCache}):
+     * um símbolo desconhecido não volta ao Yahoo e ao Stooq a cada tela.
+     */
     public Mono<ForeignQuote> getQuote(String symbol, String market) {
         String snapshotKey = snapshotKey(symbol, market);
-        return self.liveQuote(symbol, market)
-                .onErrorResume(NoLiveDataException.class, e -> snapshotStore.lookupPayload(snapshotKey, TYPE)
+        return recentFallback.<Optional<ForeignQuote>>liveOrFallback("quote:" + market + ":" + symbol,
+                () -> self.liveQuote(symbol, market).map(Optional::of),
+                e -> snapshotStore.lookupPayload(snapshotKey, TYPE)
                         .map(snapshot -> {
                             log.warn("Cotação [{}]: fontes indisponíveis; servindo snapshot de {} ({})",
                                     LogSafe.value(symbol), snapshot.savedAt(), snapshot.source());
-                            return snapshot.payload().asStale();
-                        }))
+                            return Optional.of(snapshot.payload().asStale());
+                        })
+                        .defaultIfEmpty(Optional.empty()))
+                .flatMap(Mono::justOrEmpty)
                 .flatMap(this::withPriceBrl);
     }
 
@@ -111,9 +123,10 @@ public class ForeignQuoteService {
      * Só a cotação VIVA (Yahoo ou Stooq), cacheada por 30 min; sem nenhuma,
      * {@link NoLiveDataException} — erro não entra no cache reativo, e o vazio
      * entraria. Público só para o proxy de cache; quem quer a cotação chama
-     * {@link #getQuote}.
+     * {@link #getQuote}. {@code sync}: chamadas simultâneas esperam a mesma
+     * ida à rede.
      */
-    @Cacheable("foreignQuote")
+    @Cacheable(value = "foreignQuote", sync = true)
     public Mono<ForeignQuote> liveQuote(String symbol, String market) {
         String snapshotKey = snapshotKey(symbol, market);
         return yahoo(symbol, market)

@@ -33,6 +33,15 @@ public class MarketSourcesProperties {
      */
     private int awesomeHomeReserve = 48;
 
+    /**
+     * Por quanto tempo a resposta de fallback (snapshot, vazio, papel
+     * desconhecido) de macro, Tesouro, histórico e cotação estrangeira é
+     * reaproveitada sem voltar ao provedor. Curto de propósito: corta a rajada
+     * de aberturas de tela durante uma falha sem esconder a volta da fonte. Ver
+     * {@link br.com.economize.service.provider.RecentFallbackCache}.
+     */
+    private java.time.Duration fallbackWindow = java.time.Duration.ofMinutes(2);
+
     /** Frankfurter: câmbio de referência do BCE, sem chave. */
     private String frankfurterUrl = "https://api.frankfurter.app";
 

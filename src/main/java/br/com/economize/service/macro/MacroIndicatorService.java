@@ -3,6 +3,7 @@ package br.com.economize.service.macro;
 import br.com.economize.dto.indicator.MacroIndicator;
 import br.com.economize.service.provider.MarketSnapshotStore;
 import br.com.economize.service.provider.NoLiveDataException;
+import br.com.economize.service.provider.RecentFallbackCache;
 import br.com.economize.service.provider.fallback.BcbSgsClient;
 import br.com.economize.service.provider.fallback.FailureSummary;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -82,6 +83,7 @@ public class MacroIndicatorService {
      * ciclo no boot. Nos testes de unidade (sem Spring) é o próprio objeto.
      */
     private final MacroIndicatorService self;
+    private final RecentFallbackCache recentFallback;
 
     /**
      * Resposta parcial: algumas séries vivas, o resto do snapshot. Sai como
@@ -103,29 +105,32 @@ public class MacroIndicatorService {
 
     @Autowired
     public MacroIndicatorService(BcbSgsClient sgs, MarketSnapshotStore snapshotStore,
-            @Lazy MacroIndicatorService self) {
-        this(sgs, snapshotStore, Clock.systemUTC(), self);
+            RecentFallbackCache recentFallback, @Lazy MacroIndicatorService self) {
+        this(sgs, snapshotStore, Clock.systemUTC(), recentFallback, self);
     }
 
     MacroIndicatorService(BcbSgsClient sgs, MarketSnapshotStore snapshotStore, Clock clock) {
-        this(sgs, snapshotStore, clock, null);
+        this(sgs, snapshotStore, clock, RecentFallbackCache.disabled(), null);
     }
 
     MacroIndicatorService(BcbSgsClient sgs, MarketSnapshotStore snapshotStore, Clock clock,
-            MacroIndicatorService self) {
+            RecentFallbackCache recentFallback, MacroIndicatorService self) {
         this.sgs = sgs;
         this.snapshotStore = snapshotStore;
         this.clock = clock;
+        this.recentFallback = recentFallback;
         this.self = self != null ? self : this;
     }
 
     /**
-     * A lista para a rota: a completa e viva sai do cache; parcial ou nenhuma,
-     * completada pelo snapshot FORA do cache, a cada chamada.
+     * A lista para a rota: a completa e viva sai do cache de 6 h; parcial ou
+     * nenhuma, completada pelo snapshot fora dele e guardada só pela janela
+     * curta de falha ({@link RecentFallbackCache}) — a próxima abertura dentro
+     * dela não refaz as 7 chamadas nem espera o timeout de novo.
      */
     public Mono<List<MacroIndicator>> getMacroIndicators() {
-        return self.liveIndicators()
-                .onErrorResume(NoLiveDataException.class, e -> e instanceof PartialMacroData partial
+        return recentFallback.liveOrFallback("macro", self::liveIndicators,
+                e -> e instanceof PartialMacroData partial
                         ? Mono.just(partial.merged())
                         : completeFromSnapshot(List.of()));
     }
@@ -136,9 +141,11 @@ public class MacroIndicatorService {
      * {@link NoLiveDataException}: erro não entra no cache reativo. O snapshot é
      * gravado aqui, uma vez por ida à rede, e não a cada leitura do cache.
      * Público só para o proxy de cache; quem quer a lista chama
-     * {@link #getMacroIndicators}.
+     * {@link #getMacroIndicators}. {@code sync}: chamadas simultâneas com o
+     * cache vazio esperam a MESMA ida à rede (o Caffeine assíncrono junta o
+     * carregamento por chave), em vez de cada uma abrir as suas 7.
      */
-    @Cacheable("macro")
+    @Cacheable(value = "macro", sync = true)
     public Mono<List<MacroIndicator>> liveIndicators() {
         Instant now = clock.instant();
         LocalDate today = LocalDate.now(clock.withZone(BCB_ZONE));

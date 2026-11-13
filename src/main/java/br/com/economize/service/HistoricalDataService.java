@@ -4,6 +4,7 @@ import br.com.economize.dto.HistoricalDataPoint;
 import br.com.economize.service.provider.AwesomeApiBudget;
 import br.com.economize.service.provider.MarketSnapshotStore;
 import br.com.economize.service.provider.NoLiveDataException;
+import br.com.economize.service.provider.RecentFallbackCache;
 import br.com.economize.service.provider.fallback.BcbSgsClient;
 import br.com.economize.service.provider.fallback.CoinGeckoSource;
 import br.com.economize.service.provider.fallback.CurrencyNames;
@@ -96,23 +97,26 @@ public class HistoricalDataService {
      * boot. Nos testes de unidade (sem Spring) é o próprio objeto.
      */
     private final HistoricalDataService self;
+    private final RecentFallbackCache recentFallback;
 
     public HistoricalDataService(WebClient webClient, String awesomeApiUrl,
             AwesomeApiBudget budget, BcbSgsClient sgs, CoinGeckoSource coinGecko,
             MarketSnapshotStore snapshotStore) {
-        this(webClient, awesomeApiUrl, budget, sgs, coinGecko, snapshotStore, null);
+        this(webClient, awesomeApiUrl, budget, sgs, coinGecko, snapshotStore, RecentFallbackCache.disabled(), null);
     }
 
     @Autowired
     public HistoricalDataService(WebClient webClient, @Value("${awesome.api.url}") String awesomeApiUrl,
             AwesomeApiBudget budget, BcbSgsClient sgs, CoinGeckoSource coinGecko,
-            MarketSnapshotStore snapshotStore, @Lazy HistoricalDataService self) {
+            MarketSnapshotStore snapshotStore, RecentFallbackCache recentFallback,
+            @Lazy HistoricalDataService self) {
         this.webClient = webClient;
         this.awesomeApiUrl = awesomeApiUrl;
         this.budget = budget;
         this.sgs = sgs;
         this.coinGecko = coinGecko;
         this.snapshotStore = snapshotStore;
+        this.recentFallback = recentFallback;
         this.self = self != null ? self : this;
     }
 
@@ -133,7 +137,9 @@ public class HistoricalDataService {
     /**
      * Série para o gráfico: a viva (do cache, quando houver) ou, sem ela, o
      * snapshot persistido; sem nenhum dos dois, lista vazia. O fallback fica
-     * aqui, FORA do cache, para a próxima chamada tentar a rede de novo.
+     * fora do cache de 1 h e só na janela curta de falha
+     * ({@link RecentFallbackCache}): com todas as fontes fora, cada abertura
+     * do gráfico gastaria mais 1 da fatia diária da AwesomeAPI.
      */
     public Mono<List<HistoricalDataPoint>> getHistoricalData(String currencyCode, int days) {
         String code = normalizeCode(currencyCode);
@@ -141,8 +147,8 @@ public class HistoricalDataService {
             return Mono.error(new IllegalArgumentException("Moeda ou janela não suportada no histórico"));
         }
         String snapshotKey = snapshotKey(code, days);
-        return self.liveHistory(code, days)
-                .onErrorResume(NoLiveDataException.class, e -> snapshotStore.lookupPayload(snapshotKey, POINTS)
+        return recentFallback.liveOrFallback("historical:" + code + ":" + days, () -> self.liveHistory(code, days),
+                e -> snapshotStore.lookupPayload(snapshotKey, POINTS)
                         .map(snapshot -> {
                             log.warn("Histórico {} ({}d): fontes indisponíveis; servindo snapshot de {} ({})",
                                     LogSafe.value(code), days, snapshot.savedAt(), snapshot.source());
@@ -157,8 +163,10 @@ public class HistoricalDataService {
      * vazio: erro não entra no cache reativo, e vazio entraria como nulo pelo
      * prazo inteiro. Público só para o proxy de cache; quem quer a série chama
      * {@link #getHistoricalData}. {@code code} já normalizado e validado.
+     * {@code sync}: chamadas simultâneas esperam a mesma ida à rede (e gastam
+     * 1 do orçamento, não N).
      */
-    @Cacheable("historical")
+    @Cacheable(value = "historical", sync = true)
     public Mono<List<HistoricalDataPoint>> liveHistory(String code, int days) {
         boolean crypto = CoinGeckoSource.supports(code);
         String snapshotKey = snapshotKey(code, days);
