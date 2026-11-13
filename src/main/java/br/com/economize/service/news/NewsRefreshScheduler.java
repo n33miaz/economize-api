@@ -91,6 +91,9 @@ public class NewsRefreshScheduler {
     private Mono<Void> refreshAll() {
         List<NewsProvider> providers = registry.getAll();
         return Flux.fromIterable(providers)
+                // updatedAt só prova resposta boa; esta marca prova que a rede
+                // foi tentada e impede GETs frios de reiniciarem o ciclo caro.
+                .doOnSubscribe(subscription -> store.markAttempted())
                 .flatMap(this::refreshFeed, concurrency)
                 .then(Mono.<Void>fromRunnable(store::rebuild))
                 .doOnSubscribe(s -> log.info("Atualizando {} feeds de notícias, {} por vez", providers.size(),

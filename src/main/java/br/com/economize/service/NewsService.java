@@ -52,7 +52,7 @@ public class NewsService {
      * cache, e uma agregação só, compartilhada por todos os filtros.
      */
     public Mono<NewsResponse> getTopHeadlines(NewsQuery query) {
-        if (store.updatedAt() != null) {
+        if (store.updatedAt() != null || !store.claimColdStartAttempt()) {
             return Mono.fromSupplier(() -> filter(query));
         }
         log.info("Agregado de notícias ainda vazio (boot frio); aguardando até {} s pelo primeiro ciclo",
