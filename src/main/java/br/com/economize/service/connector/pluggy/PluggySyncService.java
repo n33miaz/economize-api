@@ -133,6 +133,17 @@ public class PluggySyncService {
     }
 
     public SyncResult sync(String email, int days) {
+        return sync(email, days, true);
+    }
+
+    /**
+     * A mesma sincronizacao, com a escolha de PEDIR ou nao coleta nova ao
+     * provedor. {@code pedirColeta=false} so le o retrato que o Pluggy ja
+     * guardou: e a segunda passada da sincronizacao automatica, que colhe o que
+     * a primeira pediu sem gastar outro pedido. A saude das conexoes continua
+     * sendo conferida nos dois modos.
+     */
+    public SyncResult sync(String email, int days, boolean pedirColeta) {
         // validação de entrada antes de qualquer I/O. Fora da faixa é 400 com o
         // limite dito: silenciosamente virar 1 dia (o Math.max de antes) fazia
         // ?days=-5 devolver "0 transações importadas" como se a janela estivesse
@@ -150,7 +161,7 @@ public class PluggySyncService {
                     "Já existe uma sincronização em andamento. Aguarde ela terminar.");
         }
         try {
-            return syncLocked(user, days);
+            return syncLocked(user, days, pedirColeta);
         } finally {
             // Solta mesmo quando a sync falha no meio: sem isso uma exceção do
             // provedor travaria o usuário até o próximo deploy
@@ -158,7 +169,7 @@ public class PluggySyncService {
         }
     }
 
-    private SyncResult syncLocked(User user, int days) {
+    private SyncResult syncLocked(User user, int days, boolean pedirColeta) {
         if (!pluggyClient.isConfigured()) {
             throw new IllegalArgumentException(
                     "Conector Pluggy sem credenciais — defina PLUGGY_CLIENT_ID e PLUGGY_CLIENT_SECRET");
@@ -179,7 +190,7 @@ public class PluggySyncService {
         // retrato estiver velho, PEDIR um novo. Ler de novo um retrato velho
         // devolve o mesmo retrato velho — foi assim que nove compras de cartao
         // de setembro ficaram de fora enquanto o sync respondia 200. Ver V37.
-        conferirSaude(apiKey, items);
+        conferirSaude(apiKey, items, pedirColeta);
         // A saude vai para o banco AGORA, e nao so no saveAll do fim. Antes,
         // NOT_FOUND / NEEDS_USER_ACTION e o carimbo do pedido de coleta viviam
         // so em memoria: se a importacao falhasse, o app nunca via o
@@ -693,7 +704,7 @@ public class PluggySyncService {
      * <p>Falha aqui NAO derruba a sincronizacao: dado velho e melhor que tela
      * vazia, desde que o app possa dizer que ele e velho — e agora pode.
      */
-    private void conferirSaude(String apiKey, List<PluggyItem> items) {
+    private void conferirSaude(String apiKey, List<PluggyItem> items, boolean pedirColeta) {
         OffsetDateTime agora = OffsetDateTime.now();
         for (PluggyItem item : items) {
             try {
@@ -727,7 +738,7 @@ public class PluggySyncService {
                 boolean velho = item.horasDesdeAColeta().orElse(Long.MAX_VALUE) >= HORAS_ATE_PEDIR_COLETA;
                 boolean pedidoRecente = item.getUpdateRequestedAt() != null
                         && Duration.between(item.getUpdateRequestedAt(), agora).toHours() < HORAS_ENTRE_PEDIDOS;
-                if (velho && !pedidoRecente) {
+                if (pedirColeta && velho && !pedidoRecente) {
                     item.setUpdateRequestedAt(agora);
                     Map<String, Object> apos;
                     try {
