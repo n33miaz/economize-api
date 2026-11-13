@@ -12,7 +12,7 @@ import java.util.Map;
  * devolvem só o código; sem esta tabela o item da Home mudaria de nome cada vez
  * que a fonte mudasse, e o app, que casa favoritos por id, perderia o vínculo.
  */
-final class CurrencyNames {
+public final class CurrencyNames {
 
     private static final Map<String, String> NAMES = Map.ofEntries(
             Map.entry("USD", "Dólar Americano/Real Brasileiro"),
@@ -51,6 +51,14 @@ final class CurrencyNames {
             Map.entry("DOGE", "Dogecoin"));
 
     private CurrencyNames() {
+    }
+
+    /**
+     * O código está na lista de moedas e cripto que a API conhece? É a "lista
+     * suportada" das rotas que recebem código de moeda do cliente (histórico).
+     */
+    public static boolean isKnown(String code) {
+        return code != null && NAMES.containsKey(code);
     }
 
     static String nameOf(String code) {

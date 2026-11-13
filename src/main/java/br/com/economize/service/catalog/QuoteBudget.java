@@ -1,12 +1,16 @@
 package br.com.economize.service.catalog;
 
 import br.com.economize.config.MarketCatalogProperties;
+import br.com.economize.service.provider.BudgetUsageStore;
+import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.time.Clock;
 import java.time.LocalDate;
+import java.util.Map;
 
 /**
  * Teto diário de requisições ao provedor de ações (Brapi), para TODAS as
@@ -43,10 +47,15 @@ import java.time.LocalDate;
  * Home vazia não.
  *
  * <p>
- * <b>Limitação conhecida e aceita:</b> a contagem é por instância, em memória.
- * Com mais de uma instância o teto real é o número de instâncias × este teto —
- * hoje o free tier roda uma só, e um contador compartilhado exigiria
- * dependência nova (Redis).
+ * O uso do dia é gravado em {@code market_snapshots} ({@link BudgetUsageStore})
+ * e lido de volta no boot: sem isso cada reinício do Render devolvia o teto
+ * inteiro, e a cota real da Brapi (uma só por dia) estourava.
+ *
+ * <p>
+ * <b>Limitação conhecida e aceita:</b> a contagem é por instância. Com mais de
+ * uma instância gravando a mesma linha, o teto real seria o número de
+ * instâncias × este teto — hoje o free tier roda uma só, e um contador
+ * compartilhado de verdade exigiria dependência nova (Redis).
  */
 @Slf4j
 @Component
@@ -60,24 +69,70 @@ public class QuoteBudget {
         ON_DEMAND
     }
 
+    /** Nome do provedor na chave persistida ({@code data:budget:brapi:<dia>}). */
+    static final String PROVIDER = "brapi";
+
     private final int dailyLimit;
     private final int onDemandLimit;
     private final Clock clock;
+    private final BudgetUsageStore usageStore;
 
     private LocalDate currentDay;
     private int used;
     private int onDemandUsed;
 
-    @Autowired
+    /** Só memória — é o modo dos testes de unidade. */
     public QuoteBudget(MarketCatalogProperties properties) {
-        this(properties, Clock.systemDefaultZone());
+        this(properties, Clock.systemDefaultZone(), null);
+    }
+
+    @Autowired
+    public QuoteBudget(MarketCatalogProperties properties, BudgetUsageStore usageStore) {
+        this(properties, Clock.systemDefaultZone(), usageStore);
     }
 
     QuoteBudget(MarketCatalogProperties properties, Clock clock) {
+        this(properties, clock, null);
+    }
+
+    QuoteBudget(MarketCatalogProperties properties, Clock clock, BudgetUsageStore usageStore) {
         this.dailyLimit = properties.getDailyProviderBudget();
         this.onDemandLimit = properties.getDailyQuoteBudget();
         this.clock = clock;
+        this.usageStore = usageStore;
         this.currentDay = LocalDate.now(clock);
+    }
+
+    /**
+     * Retoma o uso do dia gravado por um processo anterior. {@code max} e não
+     * soma: o que este processo já contou antes do boot terminar é o mesmo
+     * dinheiro, não outro.
+     */
+    @PostConstruct
+    public synchronized void restore() {
+        if (usageStore == null) {
+            return;
+        }
+        rolloverIfNeeded();
+        Map<String, Integer> saved = usageStore.load(PROVIDER, currentDay);
+        used = Math.max(used, saved.getOrDefault("used", 0));
+        onDemandUsed = Math.max(onDemandUsed, saved.getOrDefault("onDemandUsed", 0));
+        if (used > 0) {
+            log.info("Orçamento da Brapi retomado: {} de {} já usados hoje ({} sob demanda)",
+                    used, dailyLimit, onDemandUsed);
+        }
+    }
+
+    /** Grava o uso na hora: o Render manda SIGTERM ao adormecer e ao publicar versão. */
+    @PreDestroy
+    public void flush() {
+        if (usageStore != null) {
+            usageStore.write(PROVIDER, usage());
+        }
+    }
+
+    private synchronized BudgetUsageStore.Usage usage() {
+        return new BudgetUsageStore.Usage(currentDay, Map.of("used", used, "onDemandUsed", onDemandUsed));
     }
 
     /**
@@ -94,6 +149,9 @@ public class QuoteBudget {
         used += granted;
         if (purpose == Purpose.ON_DEMAND) {
             onDemandUsed += granted;
+        }
+        if (granted > 0 && usageStore != null) {
+            usageStore.scheduleFlush(PROVIDER, this::usage);
         }
         if (granted < wanted) {
             log.warn("Orçamento diário de cotações esgotado ({}): pedidas {}, liberadas {} "
