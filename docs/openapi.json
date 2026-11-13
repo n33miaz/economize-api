@@ -10953,6 +10953,10 @@
             "content": {
               "application/zip": {
                 "schema": {
+                  "additionalProperties": {
+                    "default": ""
+                  },
+                  "default": "",
                   "format": "binary",
                   "type": "string"
                 }
