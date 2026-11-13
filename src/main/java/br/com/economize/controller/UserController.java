@@ -4,6 +4,7 @@ import br.com.economize.config.ClientIpResolver;
 import br.com.economize.dto.auth.AuthResponse;
 import br.com.economize.dto.user.ChangePasswordRequest;
 import br.com.economize.dto.user.ConnectionInfoResponse;
+import br.com.economize.dto.user.DeleteAccountRequest;
 import br.com.economize.dto.user.UpdateUserRequest;
 import br.com.economize.dto.user.UserMeResponse;
 import br.com.economize.dto.user.UserStatsResponse;
@@ -14,20 +15,33 @@ import br.com.economize.repository.TransactionRepository;
 import br.com.economize.repository.UserRepository;
 import br.com.economize.security.JwtUtil;
 import br.com.economize.service.PasswordService;
+import br.com.economize.service.privacy.AccountDataExporter;
+import br.com.economize.service.privacy.AccountPrivacyService;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.Schema;
+import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.core.io.buffer.DataBuffer;
+import org.springframework.core.io.buffer.DataBufferUtils;
+import org.springframework.core.io.buffer.DefaultDataBufferFactory;
+import org.springframework.http.ContentDisposition;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.server.reactive.ServerHttpRequest;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.time.LocalDate;
 import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
@@ -46,6 +60,8 @@ public class UserController {
     private final BankTransactionRepository bankTransactionRepository;
     private final TransactionRepository transactionRepository;
     private final ReportRepository reportRepository;
+    private final AccountDataExporter accountDataExporter;
+    private final AccountPrivacyService accountPrivacyService;
 
     @Operation(summary = "Dados do usuário autenticado")
     @GetMapping("/me")
@@ -136,6 +152,49 @@ public class UserController {
             // ignora o corpo, então 200 com o token não quebra quem não o lê
             return ResponseEntity.ok(new AuthResponse(jwtUtil.generateToken(user), user.getName()));
         }).subscribeOn(Schedulers.boundedElastic());
+    }
+
+    @Operation(operationId = "exportMyData", summary = "Baixar todos os meus dados (LGPD)",
+            description = "ZIP com um CSV por tipo de dado (UTF-8 com BOM, separador `;`, datas ISO-8601, "
+                    + "ponto decimal) e um `LEIA-ME.txt` que explica cada arquivo. Ficam de fora só segredos: "
+                    + "hash da senha, chave de IA, segredo e códigos do segundo fator, hashes de convites, "
+                    + "chaves de integração e aparelhos. Gerado em streaming; conta no limite de uso caro.")
+    @ApiResponse(responseCode = "200", description = "O ZIP, como anexo",
+            content = @Content(mediaType = "application/zip",
+                    schema = @Schema(type = "string", format = "binary")))
+    @GetMapping(value = "/me/export", produces = "application/zip")
+    public Mono<ResponseEntity<Flux<DataBuffer>>> exportMyData(@AuthenticationPrincipal String email) {
+        return Mono.fromCallable(() -> requireUser(email).getId())
+                .subscribeOn(Schedulers.boundedElastic())
+                .map(userId -> {
+                    // cada linha sai do banco direto para a resposta: o ZIP inteiro nunca fica em memória
+                    Flux<DataBuffer> body = DataBufferUtils.outputStreamPublisher(
+                            out -> accountDataExporter.write(userId, out),
+                            DefaultDataBufferFactory.sharedInstance,
+                            task -> Schedulers.boundedElastic().schedule(task));
+                    return ResponseEntity.ok()
+                            .contentType(MediaType.parseMediaType("application/zip"))
+                            .header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment()
+                                    .filename("economize-meus-dados-" + LocalDate.now() + ".zip")
+                                    .build().toString())
+                            .body(body);
+                });
+    }
+
+    @Operation(operationId = "deleteMyAccount", summary = "Excluir a própria conta (LGPD)",
+            description = "Permanente. Exige a senha e, com o segundo fator ligado, o código (`code`); "
+                    + "senha ou código errado: 400. Quem criou uma casa com outros membros recebe 409 "
+                    + "(remova os membros ou desfaça a casa antes). Apaga todos os dados numa transação, "
+                    + "derruba todas as sessões e, depois, remove as conexões bancárias no Pluggy "
+                    + "(sem falhar a exclusão se o agregador estiver fora).")
+    @DeleteMapping("/me")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public Mono<Void> deleteMyAccount(@AuthenticationPrincipal String email,
+                                      @Valid @RequestBody DeleteAccountRequest request) {
+        return Mono.<Void>fromRunnable(() ->
+                        accountPrivacyService.deleteAccount(email, request.password(), request.code()))
+                .subscribeOn(Schedulers.boundedElastic())
+                .then();
     }
 
     private User requireUser(String email) {
