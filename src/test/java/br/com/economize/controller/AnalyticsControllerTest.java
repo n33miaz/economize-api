@@ -13,6 +13,8 @@ import br.com.economize.service.AnalyticsService;
 import br.com.economize.service.DebtInsightService;
 import br.com.economize.service.InstallmentProjectionService;
 import br.com.economize.service.CategoryBudgetService;
+import br.com.economize.service.CommitmentPanelService;
+import br.com.economize.dto.analytics.CommitmentsResponse;
 import br.com.economize.service.SubscriptionHunterService;
 import br.com.economize.service.wish.IncomePatternService;
 import org.junit.jupiter.api.DisplayName;
@@ -75,6 +77,9 @@ class AnalyticsControllerTest {
 
     @MockitoBean
     private IncomePatternService incomePatternService;
+
+    @MockitoBean
+    private CommitmentPanelService commitmentPanelService;
 
     @MockitoBean
     private Clock clock;
@@ -369,6 +374,39 @@ class AnalyticsControllerTest {
                         LocalDate.of(2026, 6, 10), LocalDate.of(2026, 7, 11),
                         new BigDecimal("5000.00"), new BigDecimal("3000.00"), new BigDecimal("2000.00")),
                 List.of(), 0, List.of(), LocalDate.of(2026, 8, 10));
+    }
+
+    @Test
+    @DisplayName("GET /commitments - repassa janela e limite e devolve meses com percentual")
+    void commitmentsPassesParameters() {
+        when(commitmentPanelService.panel(EMAIL, 12, new java.math.BigDecimal("35")))
+                .thenReturn(new CommitmentsResponse(new java.math.BigDecimal("35"),
+                        new CommitmentsResponse.CommitmentIncome(new java.math.BigDecimal("2000.00"), "SOURCES", 1),
+                        java.util.List.of(new CommitmentsResponse.CommitmentMonth("2026-03", true,
+                                new java.math.BigDecimal("100.00"), new java.math.BigDecimal("700.00"),
+                                new java.math.BigDecimal("800.00"), new java.math.BigDecimal("40.0"), true)),
+                        new java.math.BigDecimal("40.0"), true));
+
+        webTestClient.get().uri("/api/v1/analytics/commitments?months=12&thresholdPct=35")
+                .header(HttpHeaders.AUTHORIZATION, bearerToken())
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.income.origin").isEqualTo("SOURCES")
+                .jsonPath("$.months[0].shareOfIncome").isEqualTo(40.0)
+                .jsonPath("$.aboveThreshold").isEqualTo(true);
+    }
+
+    @Test
+    @DisplayName("GET /commitments - janela fora da faixa é 400")
+    void commitmentsRejectsBadWindow() {
+        when(commitmentPanelService.panel(EMAIL, 13, null))
+                .thenThrow(new IllegalArgumentException("Janela inválida"));
+
+        webTestClient.get().uri("/api/v1/analytics/commitments?months=13")
+                .header(HttpHeaders.AUTHORIZATION, bearerToken())
+                .exchange()
+                .expectStatus().isBadRequest();
     }
 
     private String bearerToken() {

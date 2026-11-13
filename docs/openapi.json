@@ -1016,6 +1016,70 @@
         },
         "type": "object"
       },
+      "CommitmentIncome": {
+        "properties": {
+          "amount": {
+            "type": "number"
+          },
+          "origin": {
+            "type": "string"
+          },
+          "sources": {
+            "format": "int32",
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "CommitmentMonth": {
+        "properties": {
+          "aboveThreshold": {
+            "type": "boolean"
+          },
+          "debts": {
+            "type": "number"
+          },
+          "installments": {
+            "type": "number"
+          },
+          "month": {
+            "type": "string"
+          },
+          "partial": {
+            "type": "boolean"
+          },
+          "shareOfIncome": {
+            "type": "number"
+          },
+          "total": {
+            "type": "number"
+          }
+        },
+        "type": "object"
+      },
+      "CommitmentsResponse": {
+        "properties": {
+          "aboveThreshold": {
+            "type": "boolean"
+          },
+          "income": {
+            "$ref": "#/components/schemas/CommitmentIncome"
+          },
+          "months": {
+            "items": {
+              "$ref": "#/components/schemas/CommitmentMonth"
+            },
+            "type": "array"
+          },
+          "peakSharePct": {
+            "type": "number"
+          },
+          "thresholdPct": {
+            "type": "number"
+          }
+        },
+        "type": "object"
+      },
       "CommittedItem": {
         "properties": {
           "amount": {
@@ -6457,6 +6521,47 @@
           }
         },
         "summary": "Pôr ou mudar o teto de uma categoria",
+        "tags": [
+          "Análise"
+        ]
+      }
+    },
+    "/api/v1/analytics/commitments": {
+      "get": {
+        "description": "Mês a mês, do corrente em diante (`months` de 1 a 12, padrão 6): parcelas de compras já feitas (a mesma projeção de /installments) e dívidas recorrentes (financiamento, empréstimo, consórcio, rotativo e parcelamento de fatura), com o percentual da renda. A renda é a soma das fontes CONFIRMADAS, sem vale-refeição e vale-alimentação: `origin` SOURCES (valor cadastrado), MEASURED (padrão medido no extrato para fonte sem valor) ou NONE (sem renda: `shareOfIncome` vem nulo). `aboveThreshold` marca o mês acima de `thresholdPct` (40% por padrão, configurável) — uma referência, não regra. A fatura cheia não entra: ela já contém as parcelas. O mês corrente é parcial (`partial`): conta só o que ainda vai cair.",
+        "operationId": "commitments",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "months",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "thresholdPct",
+            "required": false,
+            "schema": {
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommitmentsResponse"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "summary": "Parcelas e compromissos dos próximos meses, contra a renda",
         "tags": [
           "Análise"
         ]

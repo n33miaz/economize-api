@@ -1,6 +1,7 @@
 package br.com.economize.controller;
 
 import br.com.economize.dto.analytics.AnalysisWindow;
+import br.com.economize.dto.analytics.CommitmentsResponse;
 import br.com.economize.dto.analytics.DailyTotalResponse;
 import br.com.economize.dto.analytics.DebtOverviewResponse;
 import br.com.economize.dto.analytics.IncomePatternResponse;
@@ -8,6 +9,7 @@ import br.com.economize.dto.analytics.MonthlyAnalyticsResponse;
 import br.com.economize.dto.analytics.PurchasePreferenceRequest;
 import br.com.economize.service.AnalyticsService;
 import br.com.economize.service.CategoryBudgetService;
+import br.com.economize.service.CommitmentPanelService;
 import br.com.economize.service.DebtInsightService;
 import br.com.economize.service.InstallmentProjectionService;
 import br.com.economize.service.SubscriptionHunterService;
@@ -38,6 +40,7 @@ public class AnalyticsController {
     private final InstallmentProjectionService installmentProjectionService;
     private final SubscriptionHunterService subscriptionHunterService;
     private final IncomePatternService incomePatternService;
+    private final CommitmentPanelService commitmentPanelService;
     // "Hoje" na zona financeira (FinancialClockConfig), não na do servidor
     private final java.time.Clock clock;
 
@@ -169,6 +172,25 @@ public class AnalyticsController {
     public Mono<InstallmentProjectionService.Overview> installments(
             @AuthenticationPrincipal String email) {
         return Mono.fromCallable(() -> installmentProjectionService.overviewFor(email))
+                .subscribeOn(Schedulers.boundedElastic());
+    }
+
+    @Operation(summary = "Parcelas e compromissos dos próximos meses, contra a renda",
+            description = "Mês a mês, do corrente em diante (`months` de 1 a 12, padrão 6): parcelas de "
+                    + "compras já feitas (a mesma projeção de /installments) e dívidas recorrentes "
+                    + "(financiamento, empréstimo, consórcio, rotativo e parcelamento de fatura), com o "
+                    + "percentual da renda. A renda é a soma das fontes CONFIRMADAS, sem vale-refeição e "
+                    + "vale-alimentação: `origin` SOURCES (valor cadastrado), MEASURED (padrão medido no "
+                    + "extrato para fonte sem valor) ou NONE (sem renda: `shareOfIncome` vem nulo). "
+                    + "`aboveThreshold` marca o mês acima de `thresholdPct` (40% por padrão, configurável) "
+                    + "— uma referência, não regra. A fatura cheia não entra: ela já contém as parcelas. "
+                    + "O mês corrente é parcial (`partial`): conta só o que ainda vai cair.")
+    @GetMapping("/commitments")
+    public Mono<CommitmentsResponse> commitments(
+            @AuthenticationPrincipal String email,
+            @RequestParam(required = false) Integer months,
+            @RequestParam(required = false) java.math.BigDecimal thresholdPct) {
+        return Mono.fromCallable(() -> commitmentPanelService.panel(email, months, thresholdPct))
                 .subscribeOn(Schedulers.boundedElastic());
     }
 
