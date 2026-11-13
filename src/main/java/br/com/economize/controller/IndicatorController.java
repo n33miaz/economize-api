@@ -6,6 +6,7 @@ import br.com.economize.dto.Indicator;
 import br.com.economize.dto.catalog.CatalogPage;
 import br.com.economize.dto.indicator.AssetDetail;
 import br.com.economize.exception.ResourceNotFoundException;
+import br.com.economize.service.HistoricalDataService;
 import br.com.economize.service.IndicatorService;
 import br.com.economize.service.provider.BrapiProvider;
 import br.com.economize.service.catalog.CatalogQuery;
@@ -119,6 +120,9 @@ public class IndicatorController {
     @Operation(summary = "Buscar ativo específico", description = """
             Busca cotação de um ativo específico (ex: PETR4, AAPL34).
 
+            Cada código: letras, dígitos, `^` e ponto, até 12 caracteres \
+            (PETR4, MXRF11, AAPL34, ^BVSP); fora disso responde 400.
+
             Aceita mais de um ticker separado por vírgula, até o teto de 10 por \
             chamada — acima disso responde 400. O teto existe porque o provedor \
             de ações cobra UMA requisição por ticker contra a cota diária: sem \
@@ -127,7 +131,7 @@ public class IndicatorController {
             único, que é a do app publicado, não muda em nada.""")
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Cotações encontradas"),
-            @ApiResponse(responseCode = "400", description = "Busca vazia ou acima do teto de tickers", content = @Content(schema = @Schema(implementation = ProblemDetail.class)))
+            @ApiResponse(responseCode = "400", description = "Busca vazia, código fora do formato ou acima do teto de tickers", content = @Content(schema = @Schema(implementation = ProblemDetail.class)))
     })
     @GetMapping("/search")
     public Mono<ResponseEntity<List<Indicator>>> searchIndicator(@RequestParam String query) {
@@ -157,7 +161,20 @@ public class IndicatorController {
                             + "Para listas maiores use GET /indicators/catalog.",
                     MAX_SEARCH_TICKERS, tickers.size()));
         }
+        tickers.forEach(IndicatorController::requireTicker);
         return String.join(",", tickers);
+    }
+
+    /**
+     * O código vai cru para a URL da Brapi e para a chave do snapshot; fora do
+     * formato de um código da B3 ele não tem cotação nenhuma a ganhar e só
+     * serviria para contornar cache e quarentena (ver BrapiProvider.TICKER).
+     */
+    private static void requireTicker(String ticker) {
+        if (!BrapiProvider.TICKER.matcher(ticker).matches()) {
+            throw new IllegalArgumentException(
+                    "Código inválido: use letras, dígitos, ^ e ponto, até 12 caracteres (ex.: PETR4, ^BVSP).");
+        }
     }
 
     @Operation(summary = "Detalhe enriquecido de um ativo", description = """
@@ -173,24 +190,46 @@ public class IndicatorController {
             nunca zero — papel recém-listado não tem 30 dias.""")
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Detalhe do ativo"),
+            @ApiResponse(responseCode = "400", description = "Código fora do formato de um papel da B3", content = @Content(schema = @Schema(implementation = ProblemDetail.class))),
             @ApiResponse(responseCode = "404", description = "O provedor não conhece este papel", content = @Content(schema = @Schema(implementation = ProblemDetail.class)))
     })
     @GetMapping("/{code}/detail")
     public Mono<ResponseEntity<AssetDetail>> getAssetDetail(
             @Parameter(description = "Código do papel na B3", example = "PETR4")
             @PathVariable String code) {
-        return brapiProvider.fetchDetail(code)
+        String symbol = code == null ? "" : code.trim().toUpperCase(Locale.ROOT);
+        requireTicker(symbol);
+        return brapiProvider.fetchDetail(symbol)
                 .map(ResponseEntity::ok)
                 .switchIfEmpty(Mono.error(new ResourceNotFoundException(
                         "Ativo não encontrado")));
     }
 
-    @Operation(summary = "Dados Históricos", description = "Retorna o histórico de variação de uma moeda nos últimos dias.")
+    @Operation(summary = "Dados Históricos", description = """
+            Retorna o histórico de variação de uma moeda nos últimos dias.
+
+            `currencyCode`: código de moeda ou cripto da lista suportada (USD, \
+            EUR, BTC...), com ou sem o prefixo `currency_`/`crypto_`. `days`: só \
+            as janelas que o app usa (hoje, 7). Fora disso responde 400 — cada \
+            par novo (código, janela) custaria uma chamada à AwesomeAPI, do mesmo \
+            orçamento diário que sustenta a Home.""")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Série diária, mais recente primeiro"),
+            @ApiResponse(responseCode = "400", description = "Código fora da lista suportada ou janela não aceita", content = @Content(schema = @Schema(implementation = ProblemDetail.class)))
+    })
     @GetMapping("/historical/{currencyCode}")
     public Mono<ResponseEntity<List<HistoricalDataPoint>>> getHistoricalData(
             @PathVariable String currencyCode,
             @RequestParam(defaultValue = "7") int days) {
-        return indicatorService.getHistoricalData(currencyCode, days)
+        String code = HistoricalDataService.normalizeCode(currencyCode);
+        if (!HistoricalDataService.isSupportedCode(code)) {
+            throw new IllegalArgumentException("Moeda não suportada no histórico (ex.: USD, EUR, BTC).");
+        }
+        if (!HistoricalDataService.ALLOWED_DAYS.contains(days)) {
+            throw new IllegalArgumentException("Janela não aceita; use days em " + HistoricalDataService.ALLOWED_DAYS
+                    + ".");
+        }
+        return indicatorService.getHistoricalData(code, days)
                 .map(ResponseEntity::ok);
     }
 

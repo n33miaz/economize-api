@@ -138,6 +138,89 @@ class IndicatorControllerTest {
         }
 
         @Test
+        @DisplayName("GET /search - Código fora do formato da B3 é 400 e não chega ao provedor")
+        void shouldRejectMalformedTicker() {
+                // o código ia cru para a URL da Brapi e para a chave do snapshot
+                for (String query : List.of("petr4!x", "PETR4/../X", "ABCDEFGHIJKLM", "PETR4,VALE3 X")) {
+                        webTestClient.get()
+                                        .uri(builder -> builder.path("/api/v1/indicators/search")
+                                                        .queryParam("query", "{q}").build(query))
+                                        .header(HttpHeaders.AUTHORIZATION, bearerToken())
+                                        .exchange()
+                                        .expectStatus().isBadRequest();
+                }
+                verify(indicatorService, never()).searchIndicators(anyString());
+        }
+
+        @Test
+        @DisplayName("GET /search - Índice com ^, FII e BDR passam na validação")
+        void shouldAcceptRealTickerShapes() {
+                when(indicatorService.searchIndicators("^BVSP,MXRF11,AAPL34")).thenReturn(Mono.just(List.of()));
+
+                webTestClient.get()
+                                .uri(builder -> builder.path("/api/v1/indicators/search")
+                                                .queryParam("query", "{q}").build("^bvsp,MXRF11,AAPL34"))
+                                .header(HttpHeaders.AUTHORIZATION, bearerToken())
+                                .exchange()
+                                .expectStatus().isOk();
+
+                verify(indicatorService).searchIndicators("^BVSP,MXRF11,AAPL34");
+        }
+
+        @Test
+        @DisplayName("GET /{code}/detail - Código fora do formato é 400; válido chega normalizado")
+        void detailShouldValidateTicker() {
+                webTestClient.get()
+                                .uri("/api/v1/indicators/{code}/detail", "PETR4!X")
+                                .header(HttpHeaders.AUTHORIZATION, bearerToken())
+                                .exchange()
+                                .expectStatus().isBadRequest();
+                verify(brapiProvider, never()).fetchDetail(anyString());
+
+                when(brapiProvider.fetchDetail("PETR4")).thenReturn(Mono.empty());
+                webTestClient.get()
+                                .uri("/api/v1/indicators/{code}/detail", "petr4")
+                                .header(HttpHeaders.AUTHORIZATION, bearerToken())
+                                .exchange()
+                                .expectStatus().isNotFound();
+                verify(brapiProvider).fetchDetail("PETR4");
+        }
+
+        @Test
+        @DisplayName("GET /historical - Janela fora da lista e código fora do catálogo são 400, sem gastar cota")
+        void historicalShouldRejectUnknownWindowAndCode() {
+                for (String uri : List.of("/api/v1/indicators/historical/USD?days=8",
+                                "/api/v1/indicators/historical/USD?days=120",
+                                "/api/v1/indicators/historical/XYZ?days=7",
+                                "/api/v1/indicators/historical/USDBRL?days=7",
+                                "/api/v1/indicators/historical/US1?days=7")) {
+                        webTestClient.get()
+                                        .uri(uri)
+                                        .header(HttpHeaders.AUTHORIZATION, bearerToken())
+                                        .exchange()
+                                        .expectStatus().isBadRequest();
+                }
+                verify(indicatorService, never()).getHistoricalData(anyString(), org.mockito.ArgumentMatchers.anyInt());
+        }
+
+        @Test
+        @DisplayName("GET /historical - Chamada do app (padrão 7 dias, id com prefixo) chega normalizada")
+        void historicalShouldAcceptAppCall() {
+                when(indicatorService.getHistoricalData("USD", 7)).thenReturn(Mono.just(List.of()));
+                when(indicatorService.getHistoricalData("BTC", 7)).thenReturn(Mono.just(List.of()));
+
+                webTestClient.get().uri("/api/v1/indicators/historical/USD")
+                                .header(HttpHeaders.AUTHORIZATION, bearerToken())
+                                .exchange().expectStatus().isOk();
+                webTestClient.get().uri("/api/v1/indicators/historical/crypto_btc?days=7")
+                                .header(HttpHeaders.AUTHORIZATION, bearerToken())
+                                .exchange().expectStatus().isOk();
+
+                verify(indicatorService).getHistoricalData("USD", 7);
+                verify(indicatorService).getHistoricalData("BTC", 7);
+        }
+
+        @Test
         @DisplayName("GET /convert - Deve realizar conversão corretamente")
         void shouldConvertCurrency() {
                 BigDecimal resultValue = new BigDecimal("20.00");

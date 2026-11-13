@@ -152,6 +152,15 @@ jobs:
           rotas=$(python3 -c "import json;print(len(json.load(open('docs/openapi.json'))['paths']))")
           echo "contrato em dia: $rotas rotas"
 
+      - name: Integração em Postgres real
+        # A suíte de tag "postgres" (perfil postgres-it): rollback da importação
+        # e as travas de UPDATE condicional disputadas por threads, contra as
+        # migrations de verdade. Ela fica fora do Build & Test porque precisa de
+        # Docker; aqui o Testcontainers sobe o próprio postgres:16-alpine (o
+        # service acima segue com a aplicação). Só testes: a compilação já saiu
+        # do Empacotar, e a catraca de cobertura não vale para uma fatia
+        run: ./mvnw -B -Ppostgres-it -Djacoco.skip=true test
+
       - name: Publicar o contrato como artefato
         if: always()
         uses: actions/upload-artifact@v7

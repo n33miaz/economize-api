@@ -529,9 +529,9 @@ public class BankStatementService {
         log.info("Importadas {} novas transações ({}) em {} upload(s): {} sugeridas, {} sem categoria, "
                         + "{} reconciliadas, user={}",
                 toSave.size(), format, uploads.size(), suggested, uncategorized, reconciled, user.getId());
-        // A resposta tem lugar para UM upload ("revisar esta importação"). Com
-        // várias conexões vai o que mais trouxe novidade — o primeiro, no empate;
-        // os outros continuam alcançáveis pela lista de fontes.
+        // uploadId preserva o contrato publicado e aponta o que mais trouxe
+        // novidade; uploadIds reúne cada fonte com lançamento novo para a
+        // revisão multi-banco.
         StatementUpload principal = uploads.get(0);
         for (StatementUpload upload : uploads) {
             if (upload.getTransactionsImported() > principal.getTransactionsImported()) principal = upload;
@@ -548,8 +548,12 @@ public class BankStatementService {
         OffsetDateTime maisNova = datasTocadas.isEmpty() ? null : java.util.Collections.max(datasTocadas);
         eventPublisher.publish(new StatementImportedEvent(user.getId(), format, toSave.size(), principal.getId(),
                 maisAntiga, maisNova));
+        List<UUID> uploadIds = uploads.stream()
+                .filter(upload -> upload.getTransactionsImported() > 0)
+                .map(StatementUpload::getId)
+                .toList();
         return new ImportResult(principal.getId(), toSave.size(), suggested, uncategorized, reconciled, false,
-                format.name());
+                format.name(), uploadIds);
     }
 
     /**
@@ -895,6 +899,18 @@ public class BankStatementService {
     }
 
     public record ImportResult(UUID uploadId, int transactionsImported, int suggested,
-                               int uncategorized, int reconciled, boolean duplicated, String format) {
+                               int uncategorized, int reconciled, boolean duplicated, String format,
+                               List<UUID> uploadIds) {
+
+        /** Mantém os chamadores antigos e associa o upload único à nova lista. */
+        public ImportResult(UUID uploadId, int transactionsImported, int suggested,
+                            int uncategorized, int reconciled, boolean duplicated, String format) {
+            this(uploadId, transactionsImported, suggested, uncategorized, reconciled, duplicated, format,
+                    uploadId == null ? List.of() : List.of(uploadId));
+        }
+
+        public ImportResult {
+            uploadIds = List.copyOf(uploadIds);
+        }
     }
 }

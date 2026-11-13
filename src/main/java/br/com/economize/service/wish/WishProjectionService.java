@@ -237,8 +237,11 @@ public class WishProjectionService {
     /** {@code null} quando nem em dez anos fecha — número gigante não informa. */
     private Integer cyclesToCover(BigDecimal remaining, BigDecimal perCycle) {
         if (perCycle == null || perCycle.signum() <= 0) return null;
-        int cycles = remaining.divide(perCycle, 0, RoundingMode.CEILING).intValue();
-        return cycles > MAX_INSTALLMENTS ? null : Math.max(cycles, 1);
+        BigDecimal cycles = remaining.divide(perCycle, 0, RoundingMode.CEILING);
+        // intValue() truncava valores gigantes antes do teto e podia transformar
+        // séculos de parcelas em um mês. O limite é decidido ainda em decimal.
+        if (cycles.compareTo(BigDecimal.valueOf(MAX_INSTALLMENTS)) > 0) return null;
+        return Math.max(cycles.intValueExact(), 1);
     }
 
     /**

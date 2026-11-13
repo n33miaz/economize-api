@@ -1,5 +1,11 @@
 package br.com.economize.controller;
 
+import br.com.economize.model.User;
+import java.util.Map;
+import java.util.Optional;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.when;
+import static org.hamcrest.Matchers.containsString;
 import br.com.economize.config.CorsConfig;
 import br.com.economize.dto.auth.ForgotPasswordRequest;
 import br.com.economize.dto.auth.ResetPasswordRequest;
@@ -133,5 +139,91 @@ class AuthControllerTest {
                 .expectStatus().isUnauthorized();
 
         Mockito.verifyNoInteractions(sessionVersions);
+    }
+
+    // ------------------------------------------------------------ cadastro
+
+    private WebTestClient.ResponseSpec registrar(String nome, String email, String senha) {
+        return webTestClient.post()
+                .uri("/api/v1/auth/register")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of("name", nome, "email", email, "password", senha))
+                .exchange();
+    }
+
+    @Test
+    @DisplayName("POST /register - Nome acima de 100 caracteres é 400, não o 409 do banco")
+    void registerShouldRejectNameAboveColumn() {
+        // users.name é VARCHAR(100): antes passava no @Size(120) e estourava no
+        // INSERT, que o handler traduzia como "conflito"
+        registrar("a".repeat(101), "ana@economize.dev", "SenhaForte123")
+                .expectStatus().isBadRequest()
+                .expectBody()
+                .jsonPath("$.detail").value(containsString("100 caracteres"));
+
+        verify(userRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("POST /register - E-mail acima de 150 caracteres é 400")
+    void registerShouldRejectEmailAboveColumn() {
+        String email = "b".repeat(60) + "@" + "c".repeat(60) + "." + "d".repeat(30) + ".dev";
+
+        registrar("Ana", email, "SenhaForte123")
+                .expectStatus().isBadRequest()
+                .expectBody()
+                .jsonPath("$.detail").value(containsString("150 caracteres"));
+
+        verify(userRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("POST /register - Senha acima de 72 bytes é 400 em português, e não 409 de e-mail repetido")
+    void registerShouldRejectPasswordAbove72Bytes() {
+        // 20 emojis: 40 caracteres para o @Size, 80 bytes para o BCrypt
+        registrar("Ana", "ana@economize.dev", "\uD83D\uDE00".repeat(20))
+                .expectStatus().isBadRequest()
+                .expectBody()
+                .jsonPath("$.detail").value(containsString("longa demais"));
+
+        verify(userRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("POST /register - E-mail já cadastrado continua 409")
+    void registerShouldAnswer409OnlyForDuplicateEmail() {
+        when(userRepository.findByEmail("ana@economize.dev"))
+                .thenReturn(Optional.of(User.builder().email("ana@economize.dev").build()));
+
+        registrar("Ana", "ana@economize.dev", "SenhaForte123")
+                .expectStatus().isEqualTo(409);
+
+        verify(userRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("POST /register - Outro IllegalArgumentException não vira 409 de duplicidade")
+    void registerShouldNotTurnOtherErrorsInto409() {
+        // era o caso do BCrypt: qualquer IllegalArgumentException respondia
+        // "e-mail já existe" para um e-mail novo
+        when(userRepository.save(any())).thenThrow(new IllegalArgumentException("falha qualquer"));
+
+        registrar("Ana", "ana@economize.dev", "SenhaForte123")
+                .expectStatus().isBadRequest();
+    }
+
+    @Test
+    @DisplayName("POST /reset-password - Senha acima de 72 bytes é 400 em português")
+    void resetPasswordShouldRejectPasswordAbove72Bytes() {
+        webTestClient.post()
+                .uri("/api/v1/auth/reset-password")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(new ResetPasswordRequest("token-valido", "\u00E9".repeat(37)))
+                .exchange()
+                .expectStatus().isBadRequest()
+                .expectBody()
+                .jsonPath("$.detail").value(containsString("longa demais"));
+
+        verify(passwordService, never()).resetPassword(anyString(), anyString());
     }
 }

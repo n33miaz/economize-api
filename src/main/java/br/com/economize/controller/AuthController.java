@@ -7,6 +7,7 @@ import br.com.economize.dto.auth.ForgotPasswordRequest;
 import br.com.economize.dto.auth.MfaChallengeRequest;
 import br.com.economize.dto.auth.RegisterRequest;
 import br.com.economize.dto.auth.ResetPasswordRequest;
+import br.com.economize.exception.ResourceConflictException;
 import br.com.economize.model.User;
 import br.com.economize.repository.UserRepository;
 import br.com.economize.security.JwtUtil;
@@ -62,7 +63,7 @@ public class AuthController {
     public Mono<ResponseEntity<AuthResponse>> register(@Valid @RequestBody RegisterRequest request) {
         return Mono.fromCallable(() -> {
             if (userRepository.findByEmail(request.getEmail()).isPresent()) {
-                throw new IllegalArgumentException("Email já cadastrado");
+                throw new ResourceConflictException("Email já cadastrado");
             }
 
             User user = User.builder()
@@ -76,7 +77,11 @@ public class AuthController {
             return ResponseEntity.ok(new AuthResponse(token, user.getName()));
 
         }).subscribeOn(Schedulers.boundedElastic())
-                .onErrorResume(IllegalArgumentException.class,
+                // Só a duplicidade de e-mail vira o 409 vazio. Antes era qualquer
+                // IllegalArgumentException — e o BCrypt lança essa mesma classe
+                // para senha acima de 72 bytes, então o app dizia "e-mail já
+                // cadastrado" para um e-mail novo. O resto segue para o handler.
+                .onErrorResume(ResourceConflictException.class,
                         e -> Mono.just(ResponseEntity.status(HttpStatus.CONFLICT).build()));
     }
 

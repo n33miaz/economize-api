@@ -259,6 +259,13 @@ public class UserAiSettingsService {
         if (apiKey.chars().anyMatch(Character::isWhitespace)) {
             throw new IllegalArgumentException("A chave não pode conter espaços");
         }
+        // Chave real de provedor é ASCII. Caractere acentuado ou emoji ocupa até
+        // 4 bytes, e 512 deles geravam um envelope cifrado maior que a coluna
+        // api_key_cipher VARCHAR(1024) (V17) — o banco recusava e o app via 409
+        if (apiKey.chars().anyMatch(c -> c < 0x21 || c > 0x7E)) {
+            throw new IllegalArgumentException(
+                    "A chave só pode ter letras sem acento, números e símbolos comuns");
+        }
         return apiKey;
     }
 

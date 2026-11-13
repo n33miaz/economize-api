@@ -45,6 +45,9 @@ public class PdfParser implements StatementParserStrategy {
     public PdfParser(TxtParser txtParser, StatementImportProperties limits) {
         this.txtParser = txtParser;
         this.limits = limits;
+        // na criação do bean: se a troca dos decodificadores falhar (PDFBox
+        // de outra versão), a API não sobe em vez de aceitar PDF-bomba
+        PdfDecodeBudget.install();
     }
 
     @Override
@@ -54,7 +57,44 @@ public class PdfParser implements StatementParserStrategy {
 
     @Override
     public List<ParsedTransaction> parse(InputStream input) {
-        try (PDDocument document = Loader.loadPDF(input.readAllBytes())) {
+        byte[] bytes;
+        try {
+            bytes = input.readAllBytes();
+        } catch (IOException e) {
+            throw new IllegalStateException("Falha ao ler PDF", e);
+        }
+        // O orçamento vale da carga (Loader.loadPDF, onde o PDFBox já
+        // descomprime object streams e xref streams) até o fim da extração,
+        // e só nesta thread; ver PdfDecodeBudget
+        try (PdfDecodeBudget budget = PdfDecodeBudget.open(
+                limits.getMaxPdfStreamSize().toBytes(), limits.getMaxPdfDecodedTotal().toBytes())) {
+            try {
+                List<ParsedTransaction> parsed = extract(bytes);
+                // o PDFBox pode ter engolido o estouro e seguido sem o fluxo
+                if (budget.exceeded()) throw tooExpanded();
+                return parsed;
+            } catch (RuntimeException e) {
+                // o estouro pode chegar embrulhado (IllegalStateException de
+                // IOException, ou outra exceção do PDFBox): a marca decide
+                if (budget.exceeded() && !isTooExpanded(e)) throw tooExpanded();
+                throw e;
+            }
+        }
+    }
+
+    private IllegalArgumentException tooExpanded() {
+        return new IllegalArgumentException(TOO_EXPANDED);
+    }
+
+    private static boolean isTooExpanded(RuntimeException e) {
+        return e instanceof IllegalArgumentException && TOO_EXPANDED.equals(e.getMessage());
+    }
+
+    private static final String TOO_EXPANDED = "O PDF se expande além do limite aceito para um extrato. "
+            + "Exporte um período menor ou use OFX/CSV.";
+
+    private List<ParsedTransaction> extract(byte[] bytes) {
+        try (PDDocument document = Loader.loadPDF(bytes)) {
             // Teto de páginas ANTES de extrair: a extração é a parte cara. Recusa
             // em vez de ler só o começo — ver StatementImportProperties
             int pages = document.getNumberOfPages();
@@ -115,9 +155,8 @@ public class PdfParser implements StatementParserStrategy {
         } catch (TextLimitExceeded e) {
             throw new IllegalArgumentException("O PDF tem texto demais para um extrato (mais de "
                     + limits.getMaxPdfTextChars() + " caracteres). Exporte um período menor do extrato.");
-        } catch (StreamLimitExceeded e) {
-            throw new IllegalArgumentException("O PDF se expande além do limite aceito para um extrato. "
-                    + "Exporte um período menor ou use OFX/CSV.");
+        } catch (StreamLimitExceeded | PdfDecodeBudget.PdfDecodeLimitExceeded e) {
+            throw tooExpanded();
         } catch (IOException e) {
             throw new IllegalStateException("Falha ao ler PDF", e);
         }
@@ -173,7 +212,10 @@ public class PdfParser implements StatementParserStrategy {
         try {
             byte[] stage = null;
             for (int i = 0; i < filters.size(); i++) {
-                Filter filter = FilterFactory.INSTANCE.getFilter(filters.get(i));
+                // o original, sem o orçamento do documento: esta medição já tem
+                // o próprio teto por fluxo e não deve gastar o total contando
+                // de novo um fluxo que a extração vai decodificar
+                Filter filter = PdfDecodeBudget.original(FilterFactory.INSTANCE.getFilter(filters.get(i)));
                 boolean last = i == filters.size() - 1;
                 // só os estágios intermediários guardam bytes (para o próximo
                 // filtro), e nunca mais que o teto; o último só conta

@@ -8,6 +8,7 @@ import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
 
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
@@ -49,5 +50,35 @@ class MarketSnapshotRepositoryTest {
                 OffsetDateTime.now(ZoneOffset.UTC), "Tesouro Transparente"));
 
         assertEquals(big.length(), repository.findById("data:treasury").orElseThrow().getPayload().length());
+    }
+
+    @Test
+    @DisplayName("Limpeza apaga num DELETE só o que é mais velho que o corte, e nada mais")
+    void shouldDeleteOnlyRowsOlderThanCutoff() {
+        OffsetDateTime now = OffsetDateTime.of(2026, 11, 12, 12, 0, 0, 0, ZoneOffset.UTC);
+        repository.saveAndFlush(new MarketSnapshot("search:brapi:OLD1", "[]", now.minusDays(8), "Brapi"));
+        repository.saveAndFlush(new MarketSnapshot("data:historical:USD:7", "[]", now.minusDays(30), "AwesomeAPI"));
+        repository.saveAndFlush(new MarketSnapshot("awesome:all", "[]", now.minusDays(1), "AwesomeAPI"));
+        repository.saveAndFlush(new MarketSnapshot("data:budget:brapi:2026-11-12", "{}", now, "budget"));
+
+        int removed = repository.deleteSavedBefore(now.minusDays(7));
+
+        assertEquals(2, removed);
+        assertEquals(List.of("awesome:all", "data:budget:brapi:2026-11-12"),
+                repository.findAll().stream().map(MarketSnapshot::getKey).sorted().toList());
+    }
+
+    @Test
+    @DisplayName("Hidratação só traz lista de cotação que ainda vale: sem data: e sem vencido")
+    void shouldFindOnlyHydratableRows() {
+        OffsetDateTime now = OffsetDateTime.of(2026, 11, 12, 12, 0, 0, 0, ZoneOffset.UTC);
+        repository.saveAndFlush(new MarketSnapshot("awesome:all", "[]", now.minusHours(2), "AwesomeAPI"));
+        repository.saveAndFlush(new MarketSnapshot("brapi:PETR4", "[]", now.minusDays(8), "Brapi"));
+        repository.saveAndFlush(new MarketSnapshot("data:macro", "[]", now.minusHours(1), "BCB"));
+        repository.saveAndFlush(new MarketSnapshot("data:budget:awesome:2026-11-12", "{}", now, "budget"));
+
+        List<MarketSnapshot> rows = repository.findHydratable(now.minusDays(7), "data:%");
+
+        assertEquals(List.of("awesome:all"), rows.stream().map(MarketSnapshot::getKey).toList());
     }
 }

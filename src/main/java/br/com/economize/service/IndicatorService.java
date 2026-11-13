@@ -64,7 +64,7 @@ public class IndicatorService {
         // for atendido daqui sai de graça.
         @Cacheable("indicatorSearch")
         public Mono<List<Indicator>> searchIndicators(String query) {
-                log.info("Buscando dinamicamente pelo ativo: {}", query);
+                log.info("Buscando dinamicamente pelo ativo: {}", LogSafe.value(query));
                 return Flux.fromIterable(dataProviders)
                                 .flatMap(provider -> provider.searchIndicator(query))
                                 .reduce(new java.util.ArrayList<Indicator>(), (acc, list) -> {

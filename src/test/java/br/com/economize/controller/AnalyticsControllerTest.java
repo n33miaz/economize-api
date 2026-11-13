@@ -341,6 +341,26 @@ class AnalyticsControllerTest {
                 .isEqualTo(YearMonth.of(2026, 3));
     }
 
+    /**
+     * Mesmo defeito do /daily, no teto por categoria: sem recorte a janela
+     * chegava nula ao service e o NPE virava 500.
+     */
+    @Test
+    @DisplayName("GET /budgets/status sem recorte nenhum cai no mês corrente, não em 500")
+    void budgetStatusWithoutAnyWindowFallsBackToTheCurrentMonth() {
+        webTestClient.get().uri("/api/v1/analytics/budgets/status")
+                .header(HttpHeaders.AUTHORIZATION, bearerToken())
+                .exchange()
+                .expectStatus().isOk();
+
+        ArgumentCaptor<AnalysisWindow> captor = ArgumentCaptor.forClass(AnalysisWindow.class);
+        verify(categoryBudgetService).statusFor(eq(EMAIL), captor.capture(), eq(LocalDate.of(2026, 3, 31)));
+        assertThat(captor.getValue())
+                .as("o serviço nunca pode receber janela nula")
+                .isNotNull();
+        assertThat(captor.getValue().month()).isEqualTo(YearMonth.of(2026, 3));
+    }
+
     private MonthlyAnalyticsResponse windowResponse() {
         return new MonthlyAnalyticsResponse(
                 null, LocalDate.of(2026, 7, 12), LocalDate.of(2026, 8, 12),

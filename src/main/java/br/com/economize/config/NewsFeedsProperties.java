@@ -55,6 +55,9 @@ public class NewsFeedsProperties {
      */
     private Duration maxAge = Duration.ofDays(3);
 
+    /** Pausa após tentativa sem resposta boa, para boot frio não martelar feeds indisponíveis. */
+    private Duration coldStartRetry = Duration.ofMinutes(2);
+
     /**
      * Quantos feeds o ciclo baixa ao mesmo tempo. Dois, porque na CPU de 0,1 do
      * plano free onze handshakes TLS simultâneos estouravam todos os timeouts

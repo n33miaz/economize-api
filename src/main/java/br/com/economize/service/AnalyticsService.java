@@ -240,7 +240,10 @@ public class AnalyticsService {
         return sum;
     }
 
-    private UUID rootIdOf(UUID categoryId, Map<UUID, Category> catalog) {
+    // Estática e visível no pacote porque o teto por categoria
+    // (CategoryBudgetService) precisa da MESMA resolução de raiz: se cada um
+    // resolvesse do seu jeito, a Análise e o teto discordariam sobre o pai
+    static UUID rootIdOf(UUID categoryId, Map<UUID, Category> catalog) {
         if (categoryId == null) return null;
         Category category = catalog.get(categoryId);
         if (category == null) return categoryId;

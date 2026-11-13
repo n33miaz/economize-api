@@ -12,6 +12,7 @@ import br.com.economize.service.HygieneWindow;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
@@ -78,6 +79,16 @@ public class FamilyTransferService {
      */
     @Transactional
     public Outcome reconcile(String email) {
+        return reconcile(email, null);
+    }
+
+    /**
+     * A varredura do histórico inteiro numa transação NOVA. É a que roda logo
+     * depois de alguém entrar na casa (FamilyService#join, após o commit): ali
+     * a transação do join já terminou, e participar dela não gravaria nada.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public Outcome reconcileInNewTransaction(String email) {
         return reconcile(email, null);
     }
 

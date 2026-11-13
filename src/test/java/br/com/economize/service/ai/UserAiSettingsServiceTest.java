@@ -359,4 +359,24 @@ class UserAiSettingsServiceTest {
 
         assertThat(service(new SecretCipher("", "k1", "")).catalog().byokAvailable()).isFalse();
     }
+
+    @Test
+    @DisplayName("Chave com caractere fora do ASCII imprimível é recusada — o envelope não caberia na coluna")
+    void saveShouldRefuseNonAsciiKey() {
+        SecretCipher cipher = new SecretCipher(KEY_1, "k1", "");
+        // caracteres de 3 bytes no limite de tamanho: dentro do teto de
+        // caracteres, fora da coluna api_key_cipher VARCHAR(1024) depois de cifrado
+        String acentuada = "\u20AC".repeat(properties.getMaxKeyLength());
+
+        assertThatThrownBy(() -> service(cipher)
+                .save(ana.getEmail(), new SaveAiSettingsRequest("OPENAI", "gpt-4o-mini", acentuada)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("sem acento")
+                .hasMessageNotContaining(acentuada);
+        verify(repository, never()).save(any());
+
+        // a maior chave ASCII aceita cabe na coluna depois de cifrada
+        String envelope = cipher.encrypt("s".repeat(properties.getMaxKeyLength()), ana.getId().toString());
+        assertThat(envelope.length()).isLessThanOrEqualTo(1024);
+    }
 }

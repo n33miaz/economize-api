@@ -1,6 +1,29 @@
 {
   "components": {
     "schemas": {
+      "AcceptIncomeSuggestion": {
+        "properties": {
+          "anchorDay": {
+            "format": "int32",
+            "maximum": 31,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "expectedAmount": {
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 120,
+            "minLength": 0,
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "AccountMergeSuggestion": {
         "properties": {
           "digits": {
@@ -1141,6 +1164,12 @@
           "lastSyncedAt": {
             "format": "date-time",
             "type": "string"
+          },
+          "needsAttention": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": "string"
           }
         },
         "type": "object"
@@ -1179,6 +1208,12 @@
             "format": "int32",
             "type": "integer"
           },
+          "skippedConnections": {
+            "items": {
+              "$ref": "#/components/schemas/SkippedConnection"
+            },
+            "type": "array"
+          },
           "suggested": {
             "format": "int32",
             "type": "integer"
@@ -1194,6 +1229,13 @@
           "uploadId": {
             "format": "uuid",
             "type": "string"
+          },
+          "uploadIds": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "type": "array"
           }
         },
         "type": "object"
@@ -3949,7 +3991,7 @@
             "default": "",
             "example": "alice@exemplo.com",
             "format": "email",
-            "maxLength": 180,
+            "maxLength": 150,
             "minLength": 0,
             "type": "string"
           },
@@ -3957,7 +3999,7 @@
             "default": "",
             "description": "Como a pessoa quer ser chamada no app",
             "example": "Alice",
-            "maxLength": 120,
+            "maxLength": 100,
             "minLength": 0,
             "type": "string"
           },
@@ -4289,6 +4331,21 @@
           "openTrips": {
             "format": "int32",
             "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "SkippedConnection": {
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
           }
         },
         "type": "object"
@@ -7785,7 +7842,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/CreateIncomeSource"
+                "$ref": "#/components/schemas/AcceptIncomeSuggestion"
               }
             }
           }
@@ -8060,7 +8117,7 @@
     },
     "/api/v1/indicators/historical/{currencyCode}": {
       "get": {
-        "description": "Retorna o histórico de variação de uma moeda nos últimos dias.",
+        "description": "Retorna o histórico de variação de uma moeda nos últimos dias.\n\n`currencyCode`: código de moeda ou cripto da lista suportada (USD, EUR, BTC...), com ou sem o prefixo `currency_`/`crypto_`. `days`: só as janelas que o app usa (hoje, 7). Fora disso responde 400 — cada par novo (código, janela) custaria uma chamada à AwesomeAPI, do mesmo orçamento diário que sustenta a Home.",
         "operationId": "getHistoricalData",
         "parameters": [
           {
@@ -8094,7 +8151,21 @@
                 }
               }
             },
-            "description": "OK"
+            "description": "Série diária, mais recente primeiro"
+          },
+          "400": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail",
+                  "additionalProperties": {
+                    "default": ""
+                  },
+                  "default": ""
+                }
+              }
+            },
+            "description": "Código fora da lista suportada ou janela não aceita"
           }
         },
         "summary": "Dados Históricos",
@@ -8204,7 +8275,7 @@
     },
     "/api/v1/indicators/search": {
       "get": {
-        "description": "Busca cotação de um ativo específico (ex: PETR4, AAPL34).\n\nAceita mais de um ticker separado por vírgula, até o teto de 10 por chamada — acima disso responde 400. O teto existe porque o provedor de ações cobra UMA requisição por ticker contra a cota diária: sem ele, uma única chamada com centenas de códigos consumiria a cota do dia inteiro e deixaria todo mundo sem cotação. A chamada de ticker único, que é a do app publicado, não muda em nada.",
+        "description": "Busca cotação de um ativo específico (ex: PETR4, AAPL34).\n\nCada código: letras, dígitos, `^` e ponto, até 12 caracteres (PETR4, MXRF11, AAPL34, ^BVSP); fora disso responde 400.\n\nAceita mais de um ticker separado por vírgula, até o teto de 10 por chamada — acima disso responde 400. O teto existe porque o provedor de ações cobra UMA requisição por ticker contra a cota diária: sem ele, uma única chamada com centenas de códigos consumiria a cota do dia inteiro e deixaria todo mundo sem cotação. A chamada de ticker único, que é a do app publicado, não muda em nada.",
         "operationId": "searchIndicator",
         "parameters": [
           {
@@ -8242,7 +8313,7 @@
                 }
               }
             },
-            "description": "Busca vazia ou acima do teto de tickers"
+            "description": "Busca vazia, código fora do formato ou acima do teto de tickers"
           }
         },
         "summary": "Buscar ativo específico",
@@ -8303,6 +8374,20 @@
               }
             },
             "description": "Detalhe do ativo"
+          },
+          "400": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail",
+                  "additionalProperties": {
+                    "default": ""
+                  },
+                  "default": ""
+                }
+              }
+            },
+            "description": "Código fora do formato de um papel da B3"
           },
           "404": {
             "content": {
@@ -9958,7 +10043,7 @@
     },
     "/api/v1/transactions/review": {
       "get": {
-        "description": "Transações aguardando aprovação (sugeridas) ou ajuda (sem categoria), agrupadas por estabelecimento normalizado. uploadId restringe a uma importação.",
+        "description": "Transações aguardando aprovação (sugeridas) ou ajuda (sem categoria), agrupadas por estabelecimento normalizado. uploadId pode se repetir para restringir a várias importações (ex.: ?uploadId=a&uploadId=b); um uploadId continua válido.",
         "operationId": "reviewQueue",
         "parameters": [
           {
@@ -9966,8 +10051,11 @@
             "name": "uploadId",
             "required": false,
             "schema": {
-              "format": "uuid",
-              "type": "string"
+              "items": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "type": "array"
             }
           }
         ],
@@ -10025,7 +10113,7 @@
     },
     "/api/v1/transactions/review/confirm-all": {
       "post": {
-        "description": "Confirma tudo que o motor sugeriu (não toca as sem categoria). uploadId restringe a uma importação.",
+        "description": "Confirma tudo que o motor sugeriu (não toca as sem categoria). uploadId pode se repetir para restringir a importações.",
         "operationId": "confirmAll",
         "parameters": [
           {
@@ -10033,8 +10121,11 @@
             "name": "uploadId",
             "required": false,
             "schema": {
-              "format": "uuid",
-              "type": "string"
+              "items": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "type": "array"
             }
           }
         ],
@@ -10059,8 +10150,22 @@
     },
     "/api/v1/transactions/review/count": {
       "get": {
-        "description": "Só o número. A Home e a Análise mostravam \"N transações esperando você\" baixando a fila inteira agrupada (92 KB para 1.656 pendentes) a cada abertura, quando a única coisa desenhada era a contagem.",
+        "description": "Só o número. A Home e a Análise mostravam \"N transações esperando você\" baixando a fila inteira agrupada (92 KB para 1.656 pendentes) a cada abertura, quando a única coisa desenhada era a contagem. uploadId pode se repetir para contar várias importações.",
         "operationId": "reviewCount",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "uploadId",
+            "required": false,
+            "schema": {
+              "items": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "type": "array"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {

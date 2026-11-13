@@ -158,7 +158,19 @@ public class MfaService {
         if (mfa.isEnabled()) {
             throw new IllegalArgumentException("O segundo fator já está ativo");
         }
-        Long step = TotpGenerator.matchingStep(decrypt(mfa, user), code, now());
+        String secret;
+        try {
+            secret = decrypt(mfa, user);
+        } catch (SecretCipher.Unreadable e) {
+            // A chave-mestra mudou entre o cadastro e a ativação: o segredo do
+            // QR lido não é mais recuperável. Era 500; o caminho de volta é
+            // gerar outro segredo, então a resposta diz exatamente isso
+            log.warn("Segredo TOTP pendente ilegível para user={} — cadastro precisa ser refeito. {}",
+                    user.getId(), e.getMessage());
+            throw new IllegalArgumentException(
+                    "Não foi possível confirmar o código. Refaça o cadastro do autenticador");
+        }
+        Long step = TotpGenerator.matchingStep(secret, code, now());
         if (step == null) {
             throw new IllegalArgumentException(
                     "Código inválido — confira o relógio do aparelho e tente de novo");

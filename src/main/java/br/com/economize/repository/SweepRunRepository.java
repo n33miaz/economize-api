@@ -38,6 +38,19 @@ public interface SweepRunRepository extends JpaRepository<SweepRun, UUID> {
             nativeQuery = true)
     void addItem(@Param("runId") UUID runId, @Param("transactionId") UUID transactionId);
 
+    /**
+     * Marca a passada como desfeita SÓ se ninguém marcou antes. Ler
+     * {@code undoneAt == null} e depois salvar não é atômico: dois desfazer
+     * simultâneos passavam os dois pela leitura e liberavam as linhas duas
+     * vezes. O UPDATE condicional decide no banco quem venceu — devolve 1 para
+     * o vencedor e 0 para o resto.
+     */
+    @Modifying
+    @Query("update SweepRun r set r.undoneAt = :now "
+            + "where r.id = :id and r.user.id = :userId and r.undoneAt is null")
+    int markUndone(@Param("id") UUID id, @Param("userId") UUID userId,
+                   @Param("now") java.time.OffsetDateTime now);
+
     default void addItems(UUID runId, Collection<UUID> transactionIds) {
         transactionIds.forEach(id -> addItem(runId, id));
     }

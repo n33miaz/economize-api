@@ -129,7 +129,12 @@ public class AnalyticsController {
             @RequestParam(required = false) String month,
             @RequestParam(required = false) String start,
             @RequestParam(required = false) String end) {
-        AnalysisWindow window = AnalysisWindow.resolve(month, start, end);
+        AnalysisWindow requested = AnalysisWindow.resolve(month, start, end);
+        // Mesmo padrão de /daily: sem recorte nenhum, `resolve` devolve nulo e
+        // o service estourava NPE (500). Cai no mês corrente da zona financeira
+        AnalysisWindow window = requested != null
+                ? requested
+                : AnalysisWindow.ofMonth(YearMonth.now(clock));
         return Mono.fromCallable(() -> categoryBudgetService.statusFor(email, window,
                         java.time.LocalDate.now(clock)))
                 .subscribeOn(Schedulers.boundedElastic());

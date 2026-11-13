@@ -205,6 +205,23 @@ class NewsRefreshSchedulerTest {
     }
 
     @Test
+    @DisplayName("Tentativa so e marcada no fim, para o boot frio poder se juntar ao ciclo em andamento")
+    void marksAttemptOnlyAfterCycleFinishes() {
+        Sinks.One<FeedFetchResult> gate = Sinks.one();
+        StubProvider a = new StubProvider("a", "economia", gate::asMono);
+        when(registry.getAll()).thenReturn(List.of(a));
+
+        Mono<Void> cycle = scheduler.refreshNow();
+
+        assertNull(store.lastAttemptAt());
+        gate.tryEmitValue(FeedFetchResult.updated(List.of(article("a", "Copom mantem Selic", "https://a/1")),
+                null, null));
+        StepVerifier.create(cycle).verifyComplete();
+
+        assertEquals(NOW, store.lastAttemptAt());
+    }
+
+    @Test
     @DisplayName("Provider que ignora o próprio timeout não segura o ciclo: rede de segurança vira falha")
     void safetyTimeoutTreatsHungProviderAsFailure() {
         properties.setFeedTimeout(Duration.ofSeconds(1));

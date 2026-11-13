@@ -206,4 +206,33 @@ class BrapiDetailParseTest {
         assertThat(provider.fetchDetail(null).blockOptional()).isEmpty();
         assertThat(requestedUris).isEmpty();
     }
+
+    @Test
+    @DisplayName("Detalhe vivo fica em cache: abrir o mesmo papel de novo não gasta cota")
+    void detalheVivoVemDoCacheNaSegundaAbertura() {
+        responder(Map.of("symbol", "PETR4", "regularMarketPrice", 46.87));
+        int antes = budget.remaining();
+
+        AssetDetail primeira = provider.fetchDetail("PETR4").block();
+        AssetDetail segunda = provider.fetchDetail("petr4").block();
+
+        assertThat(requestedUris).hasSize(1);
+        assertThat(budget.remaining()).isEqualTo(antes - 1);
+        assertThat(segunda).isEqualTo(primeira);
+    }
+
+    @Test
+    @DisplayName("Detalhe stale (provedor fora) não fica em cache: a próxima abertura tenta a rede")
+    void detalheStaleNaoEntraNoCache() {
+        falha.set(new RuntimeException("timeout"));
+        assertThat(provider.fetchDetail("VALE3").block().stale()).isTrue();
+
+        falha.set(null);
+        responder(Map.of("symbol", "VALE3", "regularMarketPrice", 60.10));
+        AssetDetail viva = provider.fetchDetail("VALE3").block();
+
+        assertThat(requestedUris).hasSize(2);
+        assertThat(viva.stale()).isFalse();
+        assertThat(viva.price()).isEqualByComparingTo("60.10");
+    }
 }

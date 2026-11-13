@@ -406,6 +406,8 @@ class BankStatementImportPathsTest {
         // a resposta soma as conexões e aponta o upload que mais trouxe novidade
         assertThat(resultado.transactionsImported()).isEqualTo(3);
         assertThat(resultado.uploadId()).isEqualTo(gravadas.get(0).upload().getId());
+        assertThat(resultado.uploadIds()).containsExactly(
+                gravadas.get(0).upload().getId(), gravadas.get(1).upload().getId());
         assertThat(resultado.format()).isEqualTo("PLUGGY");
     }
 

@@ -15,6 +15,7 @@ import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
 import java.io.StringReader;
+import java.net.URI;
 import java.time.Duration;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
@@ -132,7 +133,7 @@ public class RssNewsProvider implements NewsProvider {
         }
         article.setDescription(description);
 
-        article.setUrl(entry.getLink());
+        article.setUrl(safeHttpUrl(entry.getLink()));
         article.setAuthor(entry.getAuthor());
 
         // feeds Atom só trazem <updated>; sem esta alternativa o artigo ficaria
@@ -150,9 +151,23 @@ public class RssNewsProvider implements NewsProvider {
         article.setSource(source);
 
         if (entry.getEnclosures() != null && !entry.getEnclosures().isEmpty()) {
-            article.setUrlToImage(entry.getEnclosures().get(0).getUrl());
+            article.setUrlToImage(safeHttpUrl(entry.getEnclosures().get(0).getUrl()));
         }
 
         return article;
+    }
+
+    /** Só links web chegam ao app, que abre a URL fora do processo. */
+    private static String safeHttpUrl(String value) {
+        if (value == null || value.isBlank()) return null;
+        try {
+            URI uri = URI.create(value);
+            String scheme = uri.getScheme();
+            return uri.getHost() != null && scheme != null
+                    && (scheme.equalsIgnoreCase("http") || scheme.equalsIgnoreCase("https"))
+                    ? value : null;
+        } catch (IllegalArgumentException invalidUri) {
+            return null;
+        }
     }
 }
