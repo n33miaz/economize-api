@@ -16,6 +16,10 @@
 	<description>BFF para o app Economize!</description>
 	<properties>
 		<java.version>17</java.version>
+		<!-- A suíte em Postgres real (tag "postgres") fica FORA do `mvn test`
+		     de sempre: ela precisa de Docker e sobe um container. Quem quer
+		     rodá-la liga o perfil postgres-it, que zera esta exclusão. -->
+		<surefire.excludedGroups>postgres</surefire.excludedGroups>
 	</properties>
 	<dependencyManagement>
 		<dependencies>
@@ -338,6 +342,47 @@
 					</excludes>
 				</configuration>
 			</plugin>
+
+			<!-- Só o filtro de tag; o resto do surefire segue o padrão do Boot.
+			     Com -Dtest=... a exclusão continua valendo, então rodar uma
+			     classe H2 no dia a dia não muda. -->
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-surefire-plugin</artifactId>
+				<configuration>
+					<excludedGroups>${surefire.excludedGroups}</excludedGroups>
+				</configuration>
+			</plugin>
 		</plugins>
 	</build>
+
+	<profiles>
+		<!-- Integração em Postgres de verdade (Testcontainers, postgres:16-alpine,
+		     migrations do Flyway aplicadas). Roda SÓ a tag "postgres":
+		       ./mvnw -T 1 -Djacoco.skip=true -Ppostgres-it test
+		     As classes terminam em PostgresIT, nome que o include padrão do
+		     surefire não pega — daí o include explícito. A catraca de cobertura
+		     fica de fora porque mediria só esta fatia da suíte e reprovaria. -->
+		<profile>
+			<id>postgres-it</id>
+			<properties>
+				<surefire.excludedGroups></surefire.excludedGroups>
+				<jacoco.skip>true</jacoco.skip>
+			</properties>
+			<build>
+				<plugins>
+					<plugin>
+						<groupId>org.apache.maven.plugins</groupId>
+						<artifactId>maven-surefire-plugin</artifactId>
+						<configuration>
+							<groups>postgres</groups>
+							<includes>
+								<include>**/*PostgresIT.java</include>
+							</includes>
+						</configuration>
+					</plugin>
+				</plugins>
+			</build>
+		</profile>
+	</profiles>
 </project>
