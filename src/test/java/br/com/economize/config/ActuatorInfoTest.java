@@ -32,7 +32,10 @@ import org.springframework.test.web.reactive.server.WebTestClient;
                 // os mesmos valores de produção — a guarda no fim do arquivo
                 // cobra que o application.properties principal diga o mesmo
                 "management.info.java.enabled=false",
-                "management.endpoint.health.show-details=when-authorized"
+                "management.endpoint.health.show-details=when-authorized",
+                // Banco H2 próprio: o testdb é compartilhado e o create-drop de
+                // outro contexto, ao fechar, apaga a tabela users que o token exige
+                "spring.datasource.url=jdbc:h2:mem:actuatorinfo;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE"
         })
 @DisplayName("Identidade da build no /actuator/info (EC-044)")
 class ActuatorInfoTest {
@@ -43,7 +46,16 @@ class ActuatorInfoTest {
     @Autowired
     private br.com.economize.security.JwtUtil jwtUtil;
 
+    @Autowired
+    private br.com.economize.repository.UserRepository userRepository;
+
     private String token() {
+        // Desde a V45 o filtro confere a versão da sessão no banco: token de
+        // conta que não existe não autentica mais, então a conta precisa existir
+        if (userRepository.findByEmail("teste@economize.app").isEmpty()) {
+            userRepository.save(br.com.economize.model.User.builder()
+                    .name("Teste").email("teste@economize.app").password("x").build());
+        }
         return "Bearer " + jwtUtil.generateToken("teste@economize.app");
     }
 

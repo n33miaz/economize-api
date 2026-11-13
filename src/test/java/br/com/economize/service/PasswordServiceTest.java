@@ -4,6 +4,7 @@ import br.com.economize.model.PasswordResetToken;
 import br.com.economize.model.User;
 import br.com.economize.repository.PasswordResetTokenRepository;
 import br.com.economize.repository.UserRepository;
+import br.com.economize.security.SessionVersionService;
 import br.com.economize.service.mail.EmailSender;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -45,6 +46,9 @@ class PasswordServiceTest {
     @Mock
     private EmailSender emailSender;
 
+    @Mock
+    private SessionVersionService sessionVersions;
+
     private PasswordService service;
 
     private final User user = User.builder()
@@ -52,7 +56,8 @@ class PasswordServiceTest {
 
     @BeforeEach
     void setUp() {
-        service = new PasswordService(userRepository, tokenRepository, passwordEncoder, emailSender, RESET_URL_BASE);
+        service = new PasswordService(userRepository, tokenRepository, passwordEncoder, emailSender, sessionVersions,
+                RESET_URL_BASE);
     }
 
     @Test
@@ -125,6 +130,8 @@ class PasswordServiceTest {
         assertThat(resetToken.getUsedAt()).isNotNull();
         verify(userRepository).save(user);
         verify(tokenRepository).save(resetToken);
+        // redefinir pelo e-mail derruba as sessões emitidas com a senha antiga
+        verify(sessionVersions).revokeAll(user);
     }
 
     @Test
@@ -193,10 +200,27 @@ class PasswordServiceTest {
         when(userRepository.findByEmail(EMAIL)).thenReturn(Optional.of(user));
         when(passwordEncoder.matches("SenhaAtual1", "$2a$10$hashAtual")).thenReturn(true);
         when(passwordEncoder.encode("NovaSenha123")).thenReturn("$2a$10$novoHash");
+        // a versão que o UPDATE da revogação deixou no banco
+        when(userRepository.findSessionVersionByEmail(EMAIL)).thenReturn(Optional.of(1));
 
-        service.changePassword(EMAIL, "SenhaAtual1", "NovaSenha123");
+        User changed = service.changePassword(EMAIL, "SenhaAtual1", "NovaSenha123");
 
+        // o usuário devolvido já está na versão nova: é dela que sai o token da resposta
+        assertThat(changed.getSessionVersion()).isEqualTo(1);
         assertThat(user.getPassword()).isEqualTo("$2a$10$novoHash");
         verify(userRepository).save(user);
+        // trocar a senha derruba as sessões emitidas com a antiga
+        verify(sessionVersions).revokeAll(user);
+    }
+
+    @Test
+    @DisplayName("change-password: senha atual errada não derruba sessão nenhuma")
+    void changePasswordWithWrongCurrentDoesNotRevoke() {
+        when(userRepository.findByEmail(EMAIL)).thenReturn(Optional.of(user));
+        when(passwordEncoder.matches("errada", user.getPassword())).thenReturn(false);
+
+        assertThatThrownBy(() -> service.changePassword(EMAIL, "errada", "NovaSenha123"))
+                .isInstanceOf(IllegalArgumentException.class);
+        verify(sessionVersions, never()).revokeAll(any());
     }
 }

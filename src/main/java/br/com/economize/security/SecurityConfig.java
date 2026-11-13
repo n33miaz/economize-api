@@ -2,6 +2,7 @@ package br.com.economize.security;
 
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.web.reactive.EnableWebFluxSecurity;
 import org.springframework.security.config.web.server.SecurityWebFiltersOrder;
@@ -27,6 +28,10 @@ public class SecurityConfig {
                 // preflight OPTIONS antes da checagem de autenticação
                 .cors(Customizer.withDefaults())
                 .authorizeExchange(exchanges -> exchanges
+                        // "Sair de todos os aparelhos" mora sob /auth, mas só faz
+                        // sentido com sessão: precisa vir ANTES da regra pública
+                        // de /auth/**, porque vale a primeira que casar
+                        .pathMatchers(HttpMethod.POST, "/api/v1/auth/logout-all").authenticated()
                         // Rotas públicas
                         .pathMatchers("/api/v1/auth/**").permitAll()
                         // Versão mínima do app: o cliente pergunta ANTES de ter

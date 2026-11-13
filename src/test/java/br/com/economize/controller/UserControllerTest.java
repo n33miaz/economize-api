@@ -121,15 +121,23 @@ class UserControllerTest {
     }
 
     @Test
-    @DisplayName("POST /me/change-password - Autenticado com senha atual correta deve retornar 204")
-    void changePasswordShouldReturn204OnSuccess() {
+    @DisplayName("POST /me/change-password - Senha atual correta devolve 200 com token novo na versão nova")
+    void changePasswordShouldReturnFreshTokenOnSuccess() {
+        org.mockito.Mockito.when(passwordService.changePassword(EMAIL, "SenhaAtual1", "NovaSenha123"))
+                .thenReturn(br.com.economize.model.User.builder()
+                        .email(EMAIL).name("Ana").sessionVersion(1).build());
+
         webTestClient.post()
                 .uri("/api/v1/users/me/change-password")
                 .header(HttpHeaders.AUTHORIZATION, bearerToken())
                 .contentType(MediaType.APPLICATION_JSON)
                 .bodyValue(new ChangePasswordRequest("SenhaAtual1", "NovaSenha123"))
                 .exchange()
-                .expectStatus().isNoContent();
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.token").value(token -> org.assertj.core.api.Assertions.assertThat(
+                        JwtUtil.sessionVersionOf(jwtUtil.extractClaims((String) token))).isEqualTo(1))
+                .jsonPath("$.name").isEqualTo("Ana");
 
         verify(passwordService).changePassword(EMAIL, "SenhaAtual1", "NovaSenha123");
     }

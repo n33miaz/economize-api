@@ -11,6 +11,7 @@ import br.com.economize.exception.ResourceConflictException;
 import br.com.economize.model.User;
 import br.com.economize.repository.UserRepository;
 import br.com.economize.security.JwtUtil;
+import br.com.economize.security.SessionVersionService;
 import br.com.economize.service.MfaService;
 import br.com.economize.service.PasswordService;
 import br.com.economize.service.TrustedDeviceService;
@@ -19,6 +20,7 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ServerWebExchange;
@@ -39,16 +41,18 @@ public class AuthController {
     private final PasswordService passwordService;
     private final MfaService mfaService;
     private final TrustedDeviceService deviceService;
+    private final SessionVersionService sessionVersions;
 
     public AuthController(UserRepository userRepository, PasswordEncoder passwordEncoder, JwtUtil jwtUtil,
                           PasswordService passwordService, MfaService mfaService,
-                          TrustedDeviceService deviceService) {
+                          TrustedDeviceService deviceService, SessionVersionService sessionVersions) {
         this.userRepository = userRepository;
         this.passwordEncoder = passwordEncoder;
         this.jwtUtil = jwtUtil;
         this.passwordService = passwordService;
         this.mfaService = mfaService;
         this.deviceService = deviceService;
+        this.sessionVersions = sessionVersions;
     }
 
     @Operation(summary = "Criar conta",
@@ -69,7 +73,7 @@ public class AuthController {
                     .build();
 
             userRepository.save(user);
-            String token = jwtUtil.generateToken(user.getEmail());
+            String token = jwtUtil.generateToken(user);
             return ResponseEntity.ok(new AuthResponse(token, user.getName()));
 
         }).subscribeOn(Schedulers.boundedElastic())
@@ -107,10 +111,10 @@ public class AuthController {
             // atrapalha o dono é fator que o dono desliga.
             if (mfaService.isEnabledFor(user)
                     && !deviceService.isTrusted(user, hintFrom(request, exchange))) {
-                return ResponseEntity.ok(AuthResponse.challenge(jwtUtil.generateMfaChallenge(user.getEmail())));
+                return ResponseEntity.ok(AuthResponse.challenge(jwtUtil.generateMfaChallenge(user)));
             }
 
-            return ResponseEntity.ok(new AuthResponse(jwtUtil.generateToken(user.getEmail()), completeLogin(user)));
+            return ResponseEntity.ok(new AuthResponse(jwtUtil.generateToken(user), completeLogin(user)));
 
         }).subscribeOn(Schedulers.boundedElastic())
                 .onErrorResume(IllegalArgumentException.class,
@@ -125,11 +129,18 @@ public class AuthController {
     public Mono<ResponseEntity<AuthResponse>> loginMfa(@Valid @RequestBody MfaChallengeRequest request,
                                                         ServerWebExchange exchange) {
         return Mono.fromCallable(() -> {
-            String email = jwtUtil.emailFromMfaChallenge(request.mfaToken());
-            if (email == null) throw new IllegalArgumentException("Desafio inválido");
+            JwtUtil.MfaChallenge challenge = jwtUtil.parseMfaChallenge(request.mfaToken());
+            if (challenge == null) throw new IllegalArgumentException("Desafio inválido");
 
-            User user = userRepository.findByEmail(email)
+            User user = userRepository.findByEmail(challenge.email())
                     .orElseThrow(() -> new IllegalArgumentException("Desafio inválido"));
+
+            // Desafio de antes de uma revogação não vira sessão: quem passou pela
+            // senha ANTIGA não pode completar o segundo passo depois de a vítima
+            // trocá-la ou mandar sair de todos os aparelhos
+            if (challenge.sessionVersion() != user.getSessionVersion()) {
+                throw new IllegalArgumentException("Desafio inválido");
+            }
 
             if (!mfaService.verify(user, request.code())) {
                 throw new IllegalArgumentException("Código inválido");
@@ -142,7 +153,7 @@ public class AuthController {
                     : null;
 
             AuthResponse resposta = new AuthResponse(
-                    jwtUtil.generateToken(user.getEmail()), completeLogin(user));
+                    jwtUtil.generateToken(user), completeLogin(user));
             resposta.setDeviceToken(deviceToken);
             return ResponseEntity.ok(resposta);
 
@@ -199,5 +210,25 @@ public class AuthController {
             passwordService.resetPassword(request.token(), request.newPassword());
             return ResponseEntity.noContent().<Void>build();
         }).subscribeOn(Schedulers.boundedElastic());
+    }
+
+    @Operation(operationId = "logoutAll", summary = "Sair de todos os aparelhos",
+            description = "Derruba TODAS as sessões da conta, inclusive a que fez o pedido: todo token emitido "
+                    + "até agora passa a responder 401, e os aparelhos lembrados voltam a pedir o código do "
+                    + "segundo fator. Para continuar usando o app é preciso entrar de novo.")
+    @PostMapping("/logout-all")
+    public Mono<ResponseEntity<Void>> logoutAll(@AuthenticationPrincipal String email) {
+        // A rota está sob /auth/**, que é pública; o SecurityConfig a exige
+        // autenticada. A conferência aqui é a segunda trava, para o dia em que
+        // alguém reordenar as regras de lá
+        if (email == null) return Mono.just(ResponseEntity.status(HttpStatus.UNAUTHORIZED).<Void>build());
+        return Mono.fromCallable(() -> {
+            User user = userRepository.findByEmail(email)
+                    .orElseThrow(() -> new IllegalArgumentException("Usuário não encontrado"));
+            sessionVersions.revokeAll(user);
+            return ResponseEntity.noContent().<Void>build();
+        }).subscribeOn(Schedulers.boundedElastic())
+                .onErrorResume(IllegalArgumentException.class,
+                        e -> Mono.just(ResponseEntity.status(HttpStatus.UNAUTHORIZED).build()));
     }
 }

@@ -6867,6 +6867,21 @@
         ]
       }
     },
+    "/api/v1/auth/logout-all": {
+      "post": {
+        "description": "Derruba TODAS as sessões da conta, inclusive a que fez o pedido: todo token emitido até agora passa a responder 401, e os aparelhos lembrados voltam a pedir o código do segundo fator. Para continuar usando o app é preciso entrar de novo.",
+        "operationId": "logoutAll",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        },
+        "summary": "Sair de todos os aparelhos",
+        "tags": [
+          "Autenticação"
+        ]
+      }
+    },
     "/api/v1/auth/register": {
       "post": {
         "description": "Devolve o token já pronto para uso — cadastrar e entrar são o mesmo passo. Responde 409 quando o e-mail já existe e 400 quando nome, e-mail ou senha não passam na validação (a senha tem piso de 8 caracteres, o mesmo da troca e da recuperação).",
@@ -10839,7 +10854,7 @@
     },
     "/api/v1/users/me/change-password": {
       "post": {
-        "description": "Exige a senha atual; se não conferir, retorna 400.",
+        "description": "Exige a senha atual; se não conferir, retorna 400. A troca derruba todas as sessões da conta, e a resposta traz um `token` NOVO (mesmo formato do login: token e nome) para este aparelho continuar logado; os outros aparelhos precisam entrar de novo.",
         "operationId": "changePassword",
         "requestBody": {
           "content": {
@@ -10853,6 +10868,13 @@
         },
         "responses": {
           "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthResponse"
+                }
+              }
+            },
             "description": "OK"
           }
         },
