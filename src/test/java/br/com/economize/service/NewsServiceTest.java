@@ -17,6 +17,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.Sinks;
 import reactor.test.StepVerifier;
 
 import java.time.Clock;
@@ -239,6 +240,56 @@ class NewsServiceTest {
                 .verifyComplete();
 
         verify(refresher).refreshNow();
+    }
+
+    @Test
+    @DisplayName("Boot frio durante ciclo agendado aguarda o ciclo em andamento")
+    void coldStartShouldJoinRefreshAlreadyInFlight() {
+        Sinks.One<FeedFetchResult> gate = Sinks.one();
+        NewsProvider provider = new NewsProvider() {
+            @Override
+            public String getId() {
+                return "fonte-em-andamento";
+            }
+
+            @Override
+            public String getName() {
+                return getId();
+            }
+
+            @Override
+            public String getRegion() {
+                return "br";
+            }
+
+            @Override
+            public String getCategory() {
+                return "economia";
+            }
+
+            @Override
+            public Mono<FeedFetchResult> fetch(String etag, String lastModified) {
+                return gate.asMono();
+            }
+        };
+        when(registry.getAll()).thenReturn(List.of(provider));
+        NewsRefreshScheduler inFlightRefresher = new NewsRefreshScheduler(registry, store,
+                new NewsRelevanceFilter(), new br.com.economize.config.NewsFeedsProperties());
+        NewsService inFlightService = new NewsService(registry, store, inFlightRefresher,
+                new NewsRelevanceFilter());
+
+        inFlightRefresher.refreshNow();
+        assertNull(store.lastAttemptAt(), "ciclo em andamento ainda nao consome a tentativa fria");
+        // Uma tentativa anterior nao pode impedir a espera pelo ciclo atual.
+        store.markAttempted();
+
+        StepVerifier.create(inFlightService.getTopHeadlines(query(null, null, null, null, null, null)))
+                .expectSubscription()
+                .then(() -> gate.tryEmitValue(FeedFetchResult.updated(List.of(
+                        article("Copom mantem Selic", "https://fonte.test/1", "2026-08-14T09:00:00Z",
+                                "fonte-em-andamento", "selic-cdi")), null, null)))
+                .assertNext(response -> assertEquals(1, response.getTotalResults()))
+                .verifyComplete();
     }
 
     @Test
