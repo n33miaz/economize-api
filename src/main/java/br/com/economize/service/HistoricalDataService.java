@@ -3,13 +3,17 @@ package br.com.economize.service;
 import br.com.economize.dto.HistoricalDataPoint;
 import br.com.economize.service.provider.AwesomeApiBudget;
 import br.com.economize.service.provider.MarketSnapshotStore;
+import br.com.economize.service.provider.NoLiveDataException;
 import br.com.economize.service.provider.fallback.BcbSgsClient;
 import br.com.economize.service.provider.fallback.CoinGeckoSource;
+import br.com.economize.service.provider.fallback.CurrencyNames;
 import br.com.economize.service.provider.fallback.FailureSummary;
 import com.fasterxml.jackson.core.type.TypeReference;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cache.annotation.Cacheable;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.stereotype.Service;
@@ -22,6 +26,8 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
+import java.util.regex.Pattern;
 
 /**
  * Série diária de uma moeda ou cripto para o gráfico do app.
@@ -37,13 +43,28 @@ import java.util.Map;
  *
  * <p>
  * Cache de 1h por (moeda, janela): série diária não muda mais rápido que isso,
- * e a AwesomeAPI cobra cada consulta da mesma cota que já derruba a Home.
+ * e a AwesomeAPI cobra cada consulta da mesma cota que já derruba a Home. O
+ * cache guarda SÓ série viva ({@link #liveHistory}); snapshot e lista vazia são
+ * aplicados fora dele, a cada chamada — antes uma falha de dez segundos ficava
+ * servida como "sem dados" pela hora inteira.
  */
 @Slf4j
 @Service
 public class HistoricalDataService {
 
     public static final String AWESOME_SOURCE = "AwesomeAPI";
+
+    /**
+     * Janelas aceitas na rota. São exatamente as que o app pede (o gráfico usa o
+     * padrão de 7 dias; nenhuma versão publicada pediu outra). Cada par novo
+     * (código, janela) é entrada nova no cache e uma chamada a mais à AwesomeAPI:
+     * com {@code days} livre, {@code ?days=1..120} gastava o dia em dois minutos.
+     * Uma janela nova no app entra aqui junto.
+     */
+    public static final Set<Integer> ALLOWED_DAYS = Set.of(7);
+
+    /** Forma de um código de moeda/cripto do catálogo (USD, DOGE). */
+    public static final Pattern CODE = Pattern.compile("^[A-Z]{3,4}$");
 
     private static final TypeReference<List<HistoricalDataPoint>> POINTS = new TypeReference<>() {
     };
@@ -68,45 +89,96 @@ public class HistoricalDataService {
     private final BcbSgsClient sgs;
     private final CoinGeckoSource coinGecko;
     private final MarketSnapshotStore snapshotStore;
+    /**
+     * O próprio bean, pelo proxy do Spring: {@link #liveHistory} só passa pelo
+     * cache quando chamado de fora — chamado em {@code this}, o proxy é pulado e
+     * nada seria cacheado. {@code @Lazy} resolve a auto-referência sem ciclo no
+     * boot. Nos testes de unidade (sem Spring) é o próprio objeto.
+     */
+    private final HistoricalDataService self;
 
-    public HistoricalDataService(WebClient webClient, @Value("${awesome.api.url}") String awesomeApiUrl,
+    public HistoricalDataService(WebClient webClient, String awesomeApiUrl,
             AwesomeApiBudget budget, BcbSgsClient sgs, CoinGeckoSource coinGecko,
             MarketSnapshotStore snapshotStore) {
+        this(webClient, awesomeApiUrl, budget, sgs, coinGecko, snapshotStore, null);
+    }
+
+    @Autowired
+    public HistoricalDataService(WebClient webClient, @Value("${awesome.api.url}") String awesomeApiUrl,
+            AwesomeApiBudget budget, BcbSgsClient sgs, CoinGeckoSource coinGecko,
+            MarketSnapshotStore snapshotStore, @Lazy HistoricalDataService self) {
         this.webClient = webClient;
         this.awesomeApiUrl = awesomeApiUrl;
         this.budget = budget;
         this.sgs = sgs;
         this.coinGecko = coinGecko;
         this.snapshotStore = snapshotStore;
+        this.self = self != null ? self : this;
     }
 
-    @Cacheable("historical")
-    public Mono<List<HistoricalDataPoint>> getHistoricalData(String currencyCode, int days) {
-        if (currencyCode == null || currencyCode.length() < 3) {
-            return Mono.error(new IllegalArgumentException("Código de moeda inválido"));
+    /** Sem os prefixos de id do app ({@code currency_}/{@code crypto_}), em caixa alta. */
+    public static String normalizeCode(String raw) {
+        if (raw == null) {
+            return "";
         }
-        String code = currencyCode.replace("currency_", "").replace("crypto_", "").toUpperCase(Locale.ROOT);
-        boolean crypto = currencyCode.startsWith("crypto_") || CoinGeckoSource.supports(code);
-        String snapshotKey = MarketSnapshotStore.DATA_PREFIX + "historical:" + code + ":" + days;
+        return raw.trim().replace("currency_", "").replace("crypto_", "").toUpperCase(Locale.ROOT);
+    }
 
+    /** Código no formato do catálogo E na lista de moedas/cripto que a API conhece. */
+    public static boolean isSupportedCode(String code) {
+        return code != null && CODE.matcher(code).matches()
+                && (CurrencyNames.isKnown(code) || CoinGeckoSource.supports(code));
+    }
+
+    /**
+     * Série para o gráfico: a viva (do cache, quando houver) ou, sem ela, o
+     * snapshot persistido; sem nenhum dos dois, lista vazia. O fallback fica
+     * aqui, FORA do cache, para a próxima chamada tentar a rede de novo.
+     */
+    public Mono<List<HistoricalDataPoint>> getHistoricalData(String currencyCode, int days) {
+        String code = normalizeCode(currencyCode);
+        if (!isSupportedCode(code) || !ALLOWED_DAYS.contains(days)) {
+            return Mono.error(new IllegalArgumentException("Moeda ou janela não suportada no histórico"));
+        }
+        String snapshotKey = snapshotKey(code, days);
+        return self.liveHistory(code, days)
+                .onErrorResume(NoLiveDataException.class, e -> snapshotStore.lookupPayload(snapshotKey, POINTS)
+                        .map(snapshot -> {
+                            log.warn("Histórico {} ({}d): fontes indisponíveis; servindo snapshot de {} ({})",
+                                    LogSafe.value(code), days, snapshot.savedAt(), snapshot.source());
+                            return snapshot.payload();
+                        })
+                        .defaultIfEmpty(Collections.emptyList()));
+    }
+
+    /**
+     * Só a série VIVA (AwesomeAPI ou a fonte alternativa), cacheada por 1h.
+     * Sem nenhuma das duas, termina com {@link NoLiveDataException} — nunca
+     * vazio: erro não entra no cache reativo, e vazio entraria como nulo pelo
+     * prazo inteiro. Público só para o proxy de cache; quem quer a série chama
+     * {@link #getHistoricalData}. {@code code} já normalizado e validado.
+     */
+    @Cacheable("historical")
+    public Mono<List<HistoricalDataPoint>> liveHistory(String code, int days) {
+        boolean crypto = CoinGeckoSource.supports(code);
+        String snapshotKey = snapshotKey(code, days);
         return fromAwesome(code, days)
                 .doOnNext(points -> snapshotStore.savePayload(snapshotKey, points, AWESOME_SOURCE))
                 .switchIfEmpty(Mono.defer(() -> fromAlternative(code, days, crypto)
                         .doOnNext(points -> snapshotStore.savePayload(snapshotKey, points,
                                 crypto ? CoinGeckoSource.SOURCE : BcbSgsClient.SOURCE))))
-                .switchIfEmpty(Mono.defer(() -> snapshotStore.lookupPayload(snapshotKey, POINTS)
-                        .map(snapshot -> {
-                            log.warn("Histórico {} ({}d): fontes indisponíveis; servindo snapshot de {} ({})",
-                                    LogSafe.value(code), days, snapshot.savedAt(), snapshot.source());
-                            return snapshot.payload();
-                        })))
-                .defaultIfEmpty(Collections.emptyList());
+                .switchIfEmpty(Mono.error(() -> new NoLiveDataException("histórico " + code)));
+    }
+
+    private static String snapshotKey(String code, int days) {
+        return MarketSnapshotStore.DATA_PREFIX + "historical:" + code + ":" + days;
     }
 
     /** AwesomeAPI, dentro do orçamento diário; vazio quando não deu (já logado). */
     private Mono<List<HistoricalDataPoint>> fromAwesome(String code, int days) {
         return Mono.defer(() -> {
-            if (!budget.tryAcquire()) {
+            // fatia própria do histórico: a reserva da Home fica intocada
+            if (!budget.tryAcquire(AwesomeApiBudget.Purpose.HISTORICAL)) {
                 log.warn("Histórico {} ({}d): orçamento diário da AwesomeAPI esgotado; fonte alternativa",
                             LogSafe.value(code),
                         days);
