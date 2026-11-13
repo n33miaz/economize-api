@@ -704,7 +704,25 @@ public class PluggySyncService {
                     item.setStatusDetail("A conexao nao existe mais no provedor. E preciso conectar de novo.");
                     continue;
                 }
+                boolean aguardandoReconexao = "NEEDS_USER_ACTION".equalsIgnoreCase(item.getStatus());
+                OffsetDateTime pedidoQueExigiuReconexao = item.getUpdateRequestedAt();
                 aplicarEstado(item, detalhe);
+
+                // O GET do item pode devolver o ultimo retrato que o Pluggy
+                // guardou ANTES da recusa do PATCH. Esse UPDATED velho nao e
+                // prova de que a pessoa reconectou e nao pode apagar o selo do
+                // app. updateRequestedAt e o marco que ja temos no modelo:
+                // ele e gravado imediatamente antes da recusa.
+                if (aguardandoReconexao && !houveColetaDepoisDoPedido(item, pedidoQueExigiuReconexao)) {
+                    item.setStatus("NEEDS_USER_ACTION");
+                    item.setStatusDetail("O provedor nao consegue atualizar sozinho. "
+                            + "Reconecte esta instituicao pelo app.");
+                    continue;
+                }
+
+                // Um estado equivalente informado pelo proprio provedor tambem
+                // nao deve disparar novos PATCHes enquanto a pessoa nao agir.
+                if ("NEEDS_USER_ACTION".equalsIgnoreCase(item.getStatus())) continue;
 
                 boolean velho = item.horasDesdeAColeta().orElse(Long.MAX_VALUE) >= HORAS_ATE_PEDIR_COLETA;
                 boolean pedidoRecente = item.getUpdateRequestedAt() != null
@@ -739,6 +757,13 @@ public class PluggySyncService {
                         e.getClass().getSimpleName());
             }
         }
+    }
+
+    /** A coleta precisa ser posterior ao PATCH recusado, nao apenas existir. */
+    private static boolean houveColetaDepoisDoPedido(PluggyItem item, OffsetDateTime pedido) {
+        return pedido != null
+                && item.getProviderUpdatedAt() != null
+                && item.getProviderUpdatedAt().isAfter(pedido);
     }
 
     /** Copia o estado declarado pelo provedor para o nosso registro. */

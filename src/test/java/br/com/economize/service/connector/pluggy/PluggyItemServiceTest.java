@@ -123,6 +123,29 @@ class PluggyItemServiceTest {
     }
 
     @Test
+    @DisplayName("registro apos reconexao do Connect limpa a marca pendente do mesmo item")
+    void registerShouldClearNeedsUserActionForExistingOwnItem() {
+        PluggyItem existente = PluggyItem.builder()
+                .id(UUID.randomUUID()).user(user).itemId(ITEM_ID).connectorName("Banco Inter")
+                .status("NEEDS_USER_ACTION").statusDetail("Reconecte").build();
+        existente.setUpdateRequestedAt(java.time.OffsetDateTime.now().minusHours(1));
+        existente.setProviderUpdatedAt(java.time.OffsetDateTime.now().minusDays(2));
+        when(userRepository.findByEmail(EMAIL)).thenReturn(Optional.of(user));
+        when(pluggyClient.isConfigured()).thenReturn(true);
+        when(pluggyItemRepository.findByItemIdAndUserId(ITEM_ID, user.getId())).thenReturn(Optional.of(existente));
+        when(pluggyItemRepository.saveAndFlush(existente)).thenReturn(existente);
+
+        PluggyItemResponse response = service.register(EMAIL, ITEM_ID);
+
+        assertThat(response.status()).isEqualTo("UPDATED");
+        assertThat(existente.getStatusDetail()).isNull();
+        assertThat(existente.getProviderUpdatedAt()).isNull();
+        assertThat(existente.getUpdateRequestedAt()).isNull();
+        verify(pluggyItemRepository).saveAndFlush(existente);
+        verify(pluggyClient, never()).authenticate();
+    }
+
+    @Test
     @DisplayName("registro de item SEM clientUserId é NEGADO (falha fechada), com o mesmo 404")
     void registerShouldRejectItemWithoutStamp() {
         when(userRepository.findByEmail(EMAIL)).thenReturn(Optional.of(user));
@@ -198,7 +221,7 @@ class PluggyItemServiceTest {
     }
 
     @Test
-    @DisplayName("registro de itemId já vinculado responde 409 sem sequer consultar o Pluggy")
+    @DisplayName("registro de itemId vinculado a outra conta responde 409 sem consultar o Pluggy")
     void registerShouldRejectDuplicatedItem() {
         when(userRepository.findByEmail(EMAIL)).thenReturn(Optional.of(user));
         when(pluggyClient.isConfigured()).thenReturn(true);
