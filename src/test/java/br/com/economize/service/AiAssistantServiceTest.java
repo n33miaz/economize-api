@@ -199,6 +199,25 @@ class AiAssistantServiceTest {
     }
 
     @Test
+    @DisplayName("Historico que comeca pelo assistente perde as falas iniciais para manter a alternancia")
+    void shouldDiscardLeadingAssistantTurnsFromHistory() {
+        when(caller.complete(anyString(), anyList(), anyString())).thenReturn("ok");
+        when(factory.resolve(eq(user), eq(true))).thenReturn(Optional.of(caller));
+        List<ChatTurn> conversa = List.of(
+                new ChatTurn("assistant", "Resposta que ficou no corte."),
+                new ChatTurn("assistant", "Outra resposta que ficou no corte."),
+                new ChatTurn("user", "Quanto tenho em acoes?"));
+
+        service.askAssistant(EMAIL, "E em renda fixa?", conversa).block();
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<ChatTurn>> historico = ArgumentCaptor.forClass(List.class);
+        verify(caller).complete(anyString(), historico.capture(), eq("E em renda fixa?"));
+        assertThat(historico.getValue()).hasSize(3);
+        assertThat(historico.getValue().get(2)).isEqualTo(conversa.get(2));
+    }
+
+    @Test
     @DisplayName("Sem histórico, a chamada é a de sempre: lista vazia, nunca nula")
     void shouldDefaultToAnEmptyHistory() {
         when(caller.complete(anyString(), anyList(), anyString())).thenReturn("ok");

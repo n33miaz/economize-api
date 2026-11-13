@@ -85,7 +85,8 @@ public class AiAssistantService {
             User user = userRepository.findByEmail(email)
                     .orElseThrow(() -> new IllegalArgumentException("Usuário não encontrado"));
 
-            String context = buildFinancialContext(user, investmentService.summaryForAssistant(email)).render();
+            String context = buildFinancialContext(user, investmentService.summaryForAssistant(email),
+                    investmentService.list(email)).render();
 
             String systemPromptText = """
                     Você é Nino, o assistente financeiro virtual do aplicativo Economize!.
@@ -98,13 +99,13 @@ public class AiAssistantService {
                       telas do app mostram; se você disser um número diferente, o usuário vê a
                       contradição na mesma sessão e perde a confiança nos dois.
                     - Toda afirmação sobre valor tem de vir acompanhada dos LANÇAMENTOS que a
-                      sustentam (data, descrição e valor), tirados da lista acima.
+                      sustentam (data, descrição e valor), tirados do bloco de dados do usuário.
                     - Se a resposta não estiver nos dados, diga exatamente o que faltou e em que
                       período você procurou. NUNCA invente número, categoria ou lançamento.
                     - NUNCA peça ao usuário para conectar contas ou importar extrato quando já
                       houver lançamentos no contexto: ele já fez isso, e repetir o pedido é a
                       forma mais rápida de parecer que o app não leu os próprios dados.
-                    - Se perguntarem sobre período fora da janela declarada acima, diga que a
+                    - Se perguntarem sobre período fora da janela declarada no bloco de dados do usuário, diga que a
                       janela é essa em vez de responder com o que tem.
                     - Se o usuário perguntar algo fora do escopo financeiro, recuse educadamente.
                     - Não recomende compra/venda direta de ativos específicos, apenas dê
@@ -140,7 +141,7 @@ public class AiAssistantService {
             // alternando (usuário, assistente, usuário…): o histórico e a pergunta
             // começam com fala do usuário, e há provedor que recusa duas seguidas
             turns.add(new ChatTurn("assistant", "Entendido. Uso esses dados só como referência."));
-            turns.addAll(history);
+            turns.addAll(history.stream().dropWhile(turn -> "assistant".equalsIgnoreCase(turn.role())).toList());
             return caller.complete(systemPrompt, turns, userQuestion);
 
         }).subscribeOn(Schedulers.boundedElastic());
@@ -158,6 +159,12 @@ public class AiAssistantService {
      */
     AssistantContext buildFinancialContext(User user,
             br.com.economize.dto.investment.InvestmentResponses.Summary investmentSummary) {
+        return buildFinancialContext(user, investmentSummary, List.of());
+    }
+
+    AssistantContext buildFinancialContext(User user,
+            br.com.economize.dto.investment.InvestmentResponses.Summary investmentSummary,
+            List<br.com.economize.dto.investment.InvestmentResponses.PositionItem> positions) {
         LocalDate hoje = LocalDate.now(clock);
         LocalDate inicio = hoje.minusDays(CONTEXT_DAYS);
         OffsetDateTime de = inicio.atStartOfDay().atOffset(ZoneOffset.UTC);
@@ -179,6 +186,6 @@ public class AiAssistantService {
                 .collect(Collectors.toMap(Category::getId, Function.identity(), (a, b) -> a));
 
         return AssistantContext.of(inicio, hoje, contam, naJanela.size() - contam.size(),
-                categorias, investmentSummary);
+                categorias, investmentSummary, positions);
     }
 }
