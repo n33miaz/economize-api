@@ -35,8 +35,11 @@ import java.util.List;
  * desenvolvimento, sem a atualização automática do próprio Pluggy (só existe em
  * produção); sem esse pedido o retrato nunca muda. Uma vez por dia por conexão
  * fica muito abaixo do limite documentado (20 PATCH por minuto). A coleta é
- * assíncrona do lado deles: o que ela trouxer entra na sync seguinte (a do dia
- * seguinte ou a do botão).
+ * assíncrona do lado deles, então a primeira passada (06:00) lê o retrato
+ * anterior. Por isso há uma SEGUNDA passada (07:00,
+ * {@code economize.pluggy.auto-sync.read-cron}) que só LÊ o retrato já
+ * coletado, sem pedir coleta nova: o que foi pedido às 06:00 entra no mesmo
+ * dia, sem gastar outro pedido.
  *
  * <p><b>Reinício perto do horário.</b> O Render reinicia a instância no deploy.
  * Não guardamos "já rodou hoje" (seria coluna nova ou tabela sem semântica
@@ -74,8 +77,19 @@ public class PluggyAutoSyncScheduler {
     @Scheduled(cron = "${economize.pluggy.auto-sync.cron:0 0 6 * * *}",
             zone = "${economize.finance.zone:America/Sao_Paulo}")
     public void scheduledSync() {
+        runSafely(true);
+    }
+
+    /** Segunda passada: colhe a coleta pedida na primeira, sem pedir outra. */
+    @Scheduled(cron = "${economize.pluggy.auto-sync.read-cron:0 0 7 * * *}",
+            zone = "${economize.finance.zone:America/Sao_Paulo}")
+    public void scheduledRead() {
+        runSafely(false);
+    }
+
+    private void runSafely(boolean pedirColeta) {
         try {
-            runOnce();
+            runOnce(pedirColeta);
         } catch (RuntimeException e) {
             // nunca deixar a exceção subir: o agendador seguiria, mas o log
             // ficaria com a pilha e sem o resumo
@@ -83,15 +97,20 @@ public class PluggyAutoSyncScheduler {
         }
     }
 
-    /** Uma rodada completa. Devolve o resumo para os testes e para o log. */
+    /** Primeira passada (pede coleta nova quando o retrato está velho). */
     Summary runOnce() {
+        return runOnce(true);
+    }
+
+    /** Uma rodada completa. Devolve o resumo para os testes e para o log. */
+    Summary runOnce(boolean pedirColeta) {
         if (!enabled) {
             log.info("Sincronização automática desligada (economize.pluggy.auto-sync.enabled=false).");
             return new Summary(0, 0, 0, 0);
         }
         List<User> users = pluggyItemRepository.findUsersWithReadableItems();
-        log.info("Sincronização automática: {} usuário(s) com conexão ativa, janela de {} dias.",
-                users.size(), days);
+        log.info("Sincronização automática ({}): {} usuário(s) com conexão ativa, janela de {} dias.",
+                pedirColeta ? "com pedido de coleta" : "só leitura", users.size(), days);
         int ok = 0;
         int busy = 0;
         int failed = 0;
@@ -99,7 +118,7 @@ public class PluggyAutoSyncScheduler {
             // id curto basta para achar a linha; e-mail e banco são dados da pessoa
             String quem = idCurto(user);
             try {
-                PluggySyncService.SyncResult result = syncService.sync(user.getEmail(), days);
+                PluggySyncService.SyncResult result = syncService.sync(user.getEmail(), days, pedirColeta);
                 ok++;
                 log.info("Auto-sync {}: {} conexão(ões) lida(s), {} pulada(s), {} lançamento(s) novo(s).",
                         quem, result.itemsSynced(), result.skippedConnections().size(),

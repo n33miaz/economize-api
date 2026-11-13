@@ -18,6 +18,7 @@ import java.util.List;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.inOrder;
@@ -53,13 +54,13 @@ class PluggyAutoSyncSchedulerTest {
         User a = user("a@x.com");
         User b = user("b@x.com");
         when(pluggyItemRepository.findUsersWithReadableItems()).thenReturn(List.of(a, b));
-        when(syncService.sync(anyString(), anyInt())).thenReturn(ok(3));
+        when(syncService.sync(anyString(), anyInt(), anyBoolean())).thenReturn(ok(3));
 
         PluggyAutoSyncScheduler.Summary s = scheduler(true).runOnce();
 
         InOrder ordem = inOrder(syncService);
-        ordem.verify(syncService).sync("a@x.com", 90);
-        ordem.verify(syncService).sync("b@x.com", 90);
+        ordem.verify(syncService).sync("a@x.com", 90, true);
+        ordem.verify(syncService).sync("b@x.com", 90, true);
         assertEquals(new PluggyAutoSyncScheduler.Summary(2, 2, 0, 0), s);
     }
 
@@ -81,12 +82,12 @@ class PluggyAutoSyncSchedulerTest {
         User a = user("a@x.com");
         User b = user("b@x.com");
         when(pluggyItemRepository.findUsersWithReadableItems()).thenReturn(List.of(a, b));
-        when(syncService.sync("a@x.com", 90)).thenThrow(new ResourceConflictException("em andamento"));
-        when(syncService.sync("b@x.com", 90)).thenReturn(ok(1));
+        when(syncService.sync("a@x.com", 90, true)).thenThrow(new ResourceConflictException("em andamento"));
+        when(syncService.sync("b@x.com", 90, true)).thenReturn(ok(1));
 
         PluggyAutoSyncScheduler.Summary s = scheduler(true).runOnce();
 
-        verify(syncService).sync("b@x.com", 90);
+        verify(syncService).sync("b@x.com", 90, true);
         assertEquals(new PluggyAutoSyncScheduler.Summary(2, 1, 1, 0), s);
     }
 
@@ -97,13 +98,13 @@ class PluggyAutoSyncSchedulerTest {
         User b = user("b@x.com");
         User c = user("c@x.com");
         when(pluggyItemRepository.findUsersWithReadableItems()).thenReturn(List.of(a, b, c));
-        when(syncService.sync("a@x.com", 90)).thenThrow(new ServiceUnavailableException("banco fora"));
-        when(syncService.sync("b@x.com", 90)).thenThrow(new IllegalArgumentException("nada a ler"));
-        when(syncService.sync("c@x.com", 90)).thenReturn(ok(2));
+        when(syncService.sync("a@x.com", 90, true)).thenThrow(new ServiceUnavailableException("banco fora"));
+        when(syncService.sync("b@x.com", 90, true)).thenThrow(new IllegalArgumentException("nada a ler"));
+        when(syncService.sync("c@x.com", 90, true)).thenReturn(ok(2));
 
         PluggyAutoSyncScheduler.Summary s = scheduler(true).runOnce();
 
-        verify(syncService).sync("c@x.com", 90);
+        verify(syncService).sync("c@x.com", 90, true);
         assertEquals(new PluggyAutoSyncScheduler.Summary(3, 1, 0, 2), s);
     }
 
@@ -123,7 +124,38 @@ class PluggyAutoSyncSchedulerTest {
 
         scheduler(true).scheduledSync();
 
-        verify(syncService, never()).sync(anyString(), anyInt());
+        verify(syncService, never()).sync(anyString(), anyInt(), anyBoolean());
+    }
+
+    @Test
+    @DisplayName("segunda passada so le: mesma sync, sem pedir coleta, para cada usuario")
+    void segundaPassadaSoLe() {
+        User a = user("a@x.com");
+        User b = user("b@x.com");
+        when(pluggyItemRepository.findUsersWithReadableItems()).thenReturn(List.of(a, b));
+        when(syncService.sync("a@x.com", 90, false)).thenThrow(new ResourceConflictException("em andamento"));
+        when(syncService.sync("b@x.com", 90, false)).thenReturn(ok(4));
+
+        scheduler(true).scheduledRead();
+
+        verify(syncService).sync("b@x.com", 90, false);
+        verify(syncService, never()).sync(anyString(), anyInt(), org.mockito.ArgumentMatchers.eq(true));
+    }
+
+    @Test
+    @DisplayName("segunda passada: falha de um nao para os outros, e enabled=false nao roda")
+    void segundaPassadaProtecoes() {
+        User a = user("a@x.com");
+        User b = user("b@x.com");
+        when(pluggyItemRepository.findUsersWithReadableItems()).thenReturn(List.of(a, b));
+        when(syncService.sync("a@x.com", 90, false)).thenThrow(new ServiceUnavailableException("fora"));
+        when(syncService.sync("b@x.com", 90, false)).thenReturn(ok(0));
+
+        assertEquals(new PluggyAutoSyncScheduler.Summary(2, 1, 0, 1), scheduler(true).runOnce(false));
+
+        org.mockito.Mockito.clearInvocations(pluggyItemRepository, syncService);
+        scheduler(false).scheduledRead();
+        verifyNoInteractions(pluggyItemRepository, syncService);
     }
 
     @Test
@@ -132,6 +164,9 @@ class PluggyAutoSyncSchedulerTest {
         Scheduled scheduled = PluggyAutoSyncScheduler.class.getMethod("scheduledSync").getAnnotation(Scheduled.class);
         assertEquals("${economize.pluggy.auto-sync.cron:0 0 6 * * *}", scheduled.cron());
         assertEquals("${economize.finance.zone:America/Sao_Paulo}", scheduled.zone());
+        Scheduled leitura = PluggyAutoSyncScheduler.class.getMethod("scheduledRead").getAnnotation(Scheduled.class);
+        assertEquals("${economize.pluggy.auto-sync.read-cron:0 0 7 * * *}", leitura.cron());
+        assertEquals("${economize.finance.zone:America/Sao_Paulo}", leitura.zone());
 
         ConditionalOnProperty cond = PluggyAutoSyncScheduler.class.getAnnotation(ConditionalOnProperty.class);
         assertEquals("economize.pluggy.enabled", cond.name()[0]);

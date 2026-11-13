@@ -1149,6 +1149,54 @@ class PluggySyncServiceTest {
     }
 
     @Test
+    @DisplayName("modo sem coleta: retrato velho é lido sem pedir atualização ao provedor")
+    void readOnlyModeNeverRequestsUpdate() {
+        PluggyItem velho = item("item-velho", "Banco Velho");
+        stubAuth(List.of(velho));
+        // retrato de dois dias: no modo do botão isso dispararia o requestUpdate
+        when(pluggyClient.item("api-key", "item-velho")).thenReturn(Map.of(
+                "status", "UPDATED", "lastUpdatedAt", OffsetDateTime.now().minusDays(2).toString()));
+        stubBankAccount("item-velho", "acc-velho");
+        stubImport();
+
+        PluggySyncService.SyncResult sync = service.sync(EMAIL, 90, false);
+
+        verify(pluggyClient, never()).requestUpdate(anyString(), anyString());
+        assertThat(velho.getUpdateRequestedAt()).isNull();
+        assertThat(sync.itemsSynced()).isEqualTo(1);
+        assertThat(importedBatch()).extracting(ParsedTransaction::getExternalId)
+                .containsExactly("PLUGGY-t-acc-velho");
+    }
+
+    @Test
+    @DisplayName("modo sem coleta respeita a mesma trava por usuário do botão")
+    void readOnlyModeHonoursUserLock() throws Exception {
+        java.util.concurrent.CountDownLatch dentro = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch solta = new java.util.concurrent.CountDownLatch(1);
+        when(userRepository.findByEmail(EMAIL)).thenReturn(Optional.of(user));
+        when(pluggyClient.isConfigured()).thenAnswer(inv -> {
+            dentro.countDown();
+            solta.await(5, java.util.concurrent.TimeUnit.SECONDS);
+            return false;
+        });
+        Thread primeira = new Thread(() -> {
+            try {
+                service.sync(EMAIL, 90);
+            } catch (RuntimeException ignorada) {
+                // sem credencial: só interessa que ela segurou a trava
+            }
+        });
+        primeira.start();
+        assertThat(dentro.await(5, java.util.concurrent.TimeUnit.SECONDS)).isTrue();
+
+        assertThatThrownBy(() -> service.sync(EMAIL, 90, false))
+                .isInstanceOf(br.com.economize.exception.ResourceConflictException.class);
+
+        solta.countDown();
+        primeira.join(5000);
+    }
+
+    @Test
     @DisplayName("importação que falha não carimba, mas a saúde já foi gravada")
     void importFailureKeepsHealthSaved() {
         PluggyItem ok = item("item-ok", "Banco Ok");
