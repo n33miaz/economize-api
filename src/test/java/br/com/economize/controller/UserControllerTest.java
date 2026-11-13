@@ -12,6 +12,8 @@ import br.com.economize.security.JwtAuthenticationFilter;
 import br.com.economize.security.JwtUtil;
 import br.com.economize.security.SecurityConfig;
 import br.com.economize.service.PasswordService;
+import br.com.economize.service.privacy.AccountDataExporter;
+import br.com.economize.service.privacy.AccountPrivacyService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -59,6 +61,13 @@ class UserControllerTest {
 
     @MockitoBean
     private ReportRepository reportRepository;
+
+    // exportar e excluir têm suíte própria, com o banco de verdade (AccountPrivacyIntegrationTest)
+    @MockitoBean
+    private AccountDataExporter accountDataExporter;
+
+    @MockitoBean
+    private AccountPrivacyService accountPrivacyService;
 
     @Test
     @DisplayName("GET /me - Conta FREE vê anúncios: adsEnabled=true, plan=FREE, planUntil nulo")

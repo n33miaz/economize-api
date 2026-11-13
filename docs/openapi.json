@@ -1751,6 +1751,21 @@
         },
         "type": "object"
       },
+      "DeleteAccountRequest": {
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "password": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "password"
+        ],
+        "type": "object"
+      },
       "DerivedFrom": {
         "properties": {
           "manualInterests": {
@@ -10803,6 +10818,29 @@
       }
     },
     "/api/v1/users/me": {
+      "delete": {
+        "description": "Permanente. Exige a senha e, com o segundo fator ligado, o código (`code`); senha ou código errado: 400. Quem criou uma casa com outros membros recebe 409 (remova os membros ou desfaça a casa antes). Apaga todos os dados numa transação, derruba todas as sessões e, depois, remove as conexões bancárias no Pluggy (sem falhar a exclusão se o agregador estiver fora).",
+        "operationId": "deleteMyAccount",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeleteAccountRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "No Content"
+          }
+        },
+        "summary": "Excluir a própria conta (LGPD)",
+        "tags": [
+          "Usuário"
+        ]
+      },
       "get": {
         "operationId": "me",
         "responses": {
@@ -10901,6 +10939,33 @@
           }
         },
         "summary": "Como a API enxergou a conexão desta requisição",
+        "tags": [
+          "Usuário"
+        ]
+      }
+    },
+    "/api/v1/users/me/export": {
+      "get": {
+        "description": "ZIP com um CSV por tipo de dado (UTF-8 com BOM, separador `;`, datas ISO-8601, ponto decimal) e um `LEIA-ME.txt` que explica cada arquivo. Ficam de fora só segredos: hash da senha, chave de IA, segredo e códigos do segundo fator, hashes de convites, chaves de integração e aparelhos. Gerado em streaming; conta no limite de uso caro.",
+        "operationId": "exportMyData",
+        "responses": {
+          "200": {
+            "content": {
+              "application/zip": {
+                "schema": {
+                  "additionalProperties": {
+                    "default": ""
+                  },
+                  "default": "",
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "O ZIP, como anexo"
+          }
+        },
+        "summary": "Baixar todos os meus dados (LGPD)",
         "tags": [
           "Usuário"
         ]

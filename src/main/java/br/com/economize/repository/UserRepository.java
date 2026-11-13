@@ -7,6 +7,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
+import java.time.OffsetDateTime;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -20,6 +21,20 @@ public interface UserRepository extends JpaRepository<User, UUID> {
      */
     @Query("select u.sessionVersion from User u where u.email = :email")
     Optional<Integer> findSessionVersionByEmail(@Param("email") String email);
+
+    /** O que o filtro confere num token: a versão da sessão e quando a conta nasceu. */
+    interface SessionStampView {
+        int getVersion();
+
+        OffsetDateTime getCreatedAt();
+    }
+
+    /**
+     * A consulta do filtro de autenticação quando o cache não sabe: versão e
+     * criação da conta numa linha só, sem carregar a entidade.
+     */
+    @Query("select u.sessionVersion as version, u.createdAt as createdAt from User u where u.email = :email")
+    Optional<SessionStampView> findSessionStampByEmail(@Param("email") String email);
 
     /**
      * Soma 1 na versão da sessão no próprio banco. SQL nativo e atômico de

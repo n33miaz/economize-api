@@ -12,6 +12,7 @@ import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.Duration;
+import java.util.Date;
 import java.util.Optional;
 
 /**
@@ -40,7 +41,33 @@ public class SessionVersionService {
 
     private final UserRepository userRepository;
     private final TrustedDeviceRepository deviceRepository;
-    private final Cache<String, Integer> versions = Caffeine.newBuilder()
+    /**
+     * O que o filtro precisa saber de uma conta para aceitar um token: a versão
+     * da sessão e o segundo em que a conta foi criada.
+     *
+     * <p><b>Por que a criação.</b> O token diz de quem é pelo E-MAIL. Excluída a
+     * conta, alguém pode se cadastrar de novo com o mesmo e-mail — e a conta
+     * nova nasce na versão 0, a mesma de um token antigo nunca revogado. Sem
+     * esta data, o token da conta apagada abriria a conta nova. Token emitido
+     * antes de a conta existir não pode ser dela.
+     *
+     * <p><b>Precisão.</b> O {@code iat} do JWT é em segundos; a criação tem
+     * fração. Comparar os dois truncados em segundos: o cadastro devolve o
+     * token no mesmo segundo em que grava a conta, e esse token tem de valer.
+     */
+    public record SessionStamp(int version, Long createdAtEpochSecond) {
+
+        /** O token (versão e emissão) pertence à sessão atual desta conta? */
+        public boolean accepts(int tokenVersion, Date issuedAt) {
+            if (version != tokenVersion) return false;
+            // conta sem data de criação (não acontece pelo schema): só a versão decide
+            if (createdAtEpochSecond == null) return true;
+            // todo token emitido pelo servidor tem iat; sem ele, falha fechada
+            return issuedAt != null && issuedAt.toInstant().getEpochSecond() >= createdAtEpochSecond;
+        }
+    }
+
+    private final Cache<String, SessionStamp> versions = Caffeine.newBuilder()
             .maximumSize(MAX_ENTRIES)
             .expireAfterWrite(TTL)
             .build();
@@ -51,7 +78,7 @@ public class SessionVersionService {
     }
 
     /** Versão em cache, sem tocar no banco; {@code null} se não estiver lá. */
-    public Integer cachedVersion(String email) {
+    public SessionStamp cachedStamp(String email) {
         return versions.getIfPresent(email);
     }
 
@@ -62,12 +89,22 @@ public class SessionVersionService {
      * Ausência não é guardada: não há o que revogar nela, e guardar "não existe"
      * atrasaria o primeiro acesso de quem acabou de se cadastrar.
      */
-    public Optional<Integer> currentVersion(String email) {
-        Integer cached = versions.getIfPresent(email);
+    public Optional<SessionStamp> currentStamp(String email) {
+        SessionStamp cached = versions.getIfPresent(email);
         if (cached != null) return Optional.of(cached);
-        Optional<Integer> found = userRepository.findSessionVersionByEmail(email);
-        found.ifPresent(v -> versions.put(email, v));
+        Optional<SessionStamp> found = userRepository.findSessionStampByEmail(email)
+                .map(view -> new SessionStamp(view.getVersion(),
+                        view.getCreatedAt() == null ? null : view.getCreatedAt().toEpochSecond()));
+        found.ifPresent(stamp -> versions.put(email, stamp));
         return found;
+    }
+
+    /**
+     * Esquece a conta no cache depois do commit — a exclusão da conta chama:
+     * sem isto, por até {@link #TTL} o token da conta apagada seguiria aceito.
+     */
+    public void forget(String email) {
+        evictAfterCommit(email);
     }
 
     /**

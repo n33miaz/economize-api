@@ -13,6 +13,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpMethod;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.http.MediaType;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.web.reactive.server.WebTestClient;
@@ -59,6 +61,9 @@ class SessionVersionRevocationAuthTest {
 
     @Autowired
     private TrustedDeviceService deviceService;
+
+    @Autowired
+    private JdbcTemplate jdbc;
 
     @Value("${jwt.secret}")
     private String secret;
@@ -180,6 +185,54 @@ class SessionVersionRevocationAuthTest {
         logoutAll(login(user.getEmail(), PASSWORD));
 
         assertThat(deviceService.isTrusted(user, hint)).isFalse();
+    }
+
+    @Test
+    @DisplayName("conta excluída e recriada com o mesmo e-mail: o token antigo não entra; o do cadastro entra")
+    void tokenOfDeletedAccountDoesNotOpenNewAccountWithSameEmail() {
+        // conta antiga, criada há uma hora, com um token emitido há um minuto
+        User old = userRepository.save(User.builder()
+                .name("Antiga")
+                .email("recriada-" + UUID.randomUUID() + "@economize.test")
+                .password(passwordEncoder.encode(PASSWORD))
+                .build());
+        // o @PrePersist carimba "agora"; a conta antiga precisa ser de antes do token
+        jdbc.update("update users set created_at = ? where id = ?", OffsetDateTime.now().minusHours(1), old.getId());
+        String oldToken = tokenIssuedAt(old.getEmail(), 0, new Date(System.currentTimeMillis() - 60_000));
+        me(oldToken).expectStatus().isOk(); // token normal, da conta dele: vale
+
+        client.method(HttpMethod.DELETE).uri("/api/v1/users/me")
+                .header(HttpHeaders.AUTHORIZATION, "Bearer " + oldToken)
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of("password", PASSWORD))
+                .exchange()
+                .expectStatus().isNoContent();
+
+        // a mesma pessoa (ou outra) se cadastra de novo com o mesmo e-mail: versão 0 outra vez
+        Object fresh = client.post().uri("/api/v1/auth/register")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of("name", "Nova", "email", old.getEmail(), "password", "senha-nova-456"))
+                .exchange()
+                .expectStatus().is2xxSuccessful()
+                .expectBody(Map.class)
+                .returnResult().getResponseBody()
+                .get("token");
+
+        me(oldToken).expectStatus().isUnauthorized();
+        // emitido no mesmo instante do cadastro (mesmo segundo da criação): vale
+        me(fresh.toString()).expectStatus().isOk();
+    }
+
+    /** Token com a versão e a emissão escolhidas, assinado como o servidor assina. */
+    private String tokenIssuedAt(String email, int sessionVersion, Date issuedAt) {
+        return Jwts.builder()
+                .issuer(issuer)
+                .subject(email)
+                .claims(Map.of(JwtUtil.SESSION_VERSION_CLAIM, sessionVersion))
+                .issuedAt(issuedAt)
+                .expiration(new Date(System.currentTimeMillis() + 600_000))
+                .signWith(Keys.hmacShaKeyFor(secret.getBytes()))
+                .compact();
     }
 
     private User newUser() {

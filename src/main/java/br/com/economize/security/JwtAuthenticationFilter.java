@@ -14,6 +14,7 @@ import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
 import java.util.Collections;
+import java.util.Date;
 import java.util.Optional;
 
 @Component
@@ -50,7 +51,7 @@ public class JwtAuthenticationFilter implements WebFilter {
                 String email = claims.getSubject();
                 int tokenVersion = JwtUtil.sessionVersionOf(claims);
 
-                return isCurrentSession(email, tokenVersion).flatMap(current -> {
+                return isCurrentSession(email, tokenVersion, claims.getIssuedAt()).flatMap(current -> {
                     // Sessão revogada segue como anônima, igual a token inválido:
                     // a rota protegida responde 401 e a pública nem percebe
                     if (!current) return chain.filter(exchange);
@@ -69,15 +70,19 @@ public class JwtAuthenticationFilter implements WebFilter {
      * sai na hora, sem trocar de thread; sem ele, a consulta ao banco (JPA,
      * bloqueante) vai para o boundedElastic, longe do event loop.
      */
-    private Mono<Boolean> isCurrentSession(String email, int tokenVersion) {
+    private Mono<Boolean> isCurrentSession(String email, int tokenVersion, Date issuedAt) {
         SessionVersionService service = sessionVersions.getIfAvailable();
         if (service == null) return Mono.just(true);
 
-        Integer cached = service.cachedVersion(email);
-        if (cached != null) return Mono.just(cached == tokenVersion);
+        // mesma consulta (e mesmo cache) da versão: a data de criação da conta
+        // vem junto, e token emitido antes dela é de uma conta anterior com o
+        // mesmo e-mail (ver SessionVersionService.SessionStamp)
+        SessionVersionService.SessionStamp cached = service.cachedStamp(email);
+        if (cached != null) return Mono.just(cached.accepts(tokenVersion, issuedAt));
 
-        return Mono.fromCallable(() -> service.currentVersion(email))
+        return Mono.fromCallable(() -> service.currentStamp(email))
                 .subscribeOn(Schedulers.boundedElastic())
-                .map((Optional<Integer> current) -> current.map(v -> v == tokenVersion).orElse(false));
+                .map((Optional<SessionVersionService.SessionStamp> current) ->
+                        current.map(stamp -> stamp.accepts(tokenVersion, issuedAt)).orElse(false));
     }
 }
