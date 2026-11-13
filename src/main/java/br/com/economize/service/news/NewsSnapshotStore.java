@@ -42,21 +42,28 @@ public class NewsSnapshotStore {
 
     private final Map<String, FeedSnapshot> feeds = new ConcurrentHashMap<>();
     private final Duration maxAge;
+    private final Duration coldStartRetry;
     private final Clock clock;
 
     // trocados por inteiro a cada rebuild: leitor vê ou o agregado antigo ou o
     // novo, nunca um meio-termo — e a lista é imutável
     private volatile List<NewsArticle> aggregate = List.of();
     private volatile Instant updatedAt;
+    private volatile Instant lastAttemptAt;
 
     @Autowired
     public NewsSnapshotStore(NewsFeedsProperties properties) {
-        this(properties.getMaxAge(), Clock.systemUTC());
+        this(properties.getMaxAge(), properties.getColdStartRetry(), Clock.systemUTC());
     }
 
     /** Relógio injetável: os testes precisam envelhecer artigos sem esperar três dias. */
     public NewsSnapshotStore(Duration maxAge, Clock clock) {
+        this(maxAge, Duration.ofMinutes(2), clock);
+    }
+
+    public NewsSnapshotStore(Duration maxAge, Duration coldStartRetry, Clock clock) {
         this.maxAge = maxAge;
+        this.coldStartRetry = coldStartRetry;
         this.clock = clock;
     }
 
@@ -116,6 +123,26 @@ public class NewsSnapshotStore {
      */
     public Instant updatedAt() {
         return updatedAt;
+    }
+
+    /**
+     * Reserva a próxima tentativa no boot frio. A reserva é atômica para duas
+     * requisições concorrentes não iniciarem ciclos caros enquanto feeds caem.
+     */
+    public synchronized boolean claimColdStartAttempt() {
+        Instant now = clock.instant();
+        if (lastAttemptAt != null && now.isBefore(lastAttemptAt.plus(coldStartRetry))) return false;
+        lastAttemptAt = now;
+        return true;
+    }
+
+    /** Também registra ciclos agendados, mesmo quando todos os feeds falham. */
+    public synchronized void markAttempted() {
+        lastAttemptAt = clock.instant();
+    }
+
+    public Instant lastAttemptAt() {
+        return lastAttemptAt;
     }
 
     private static boolean isRecentEnough(NewsArticle article, Instant cutoff) {

@@ -20,6 +20,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
+import org.springframework.web.reactive.function.client.WebClientException;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -116,21 +117,31 @@ public class InvestmentService {
                     "Nenhuma conexão Pluggy registrada — conecte uma instituição pelo app antes de sincronizar");
         }
 
-        String apiKey = client.authenticate();
         int created = 0, updated = 0, itemsRead = 0, skippedItems = 0, skippedPositions = 0;
-        WebClientResponseException lastFailure = null;
+        WebClientException lastFailure = null;
+        String apiKey;
+        try {
+            apiKey = client.authenticate();
+        } catch (WebClientException e) {
+            // Sem autenticação não há item consultável; contar todos como
+            // pulados preserva o contrato parcial em vez de abortar o sync.
+            log.warn("Pluggy indisponível ao autenticar investimentos; {} conexão(ões) pulada(s)", items.size());
+            return new InvestmentResponses.SyncResult(0, 0, 0, 0, items.size(), 0);
+        }
 
         for (PluggyItem item : items) {
             List<Map<String, Object>> raw;
             try {
                 raw = client.investments(apiKey, item.getItemId());
-            } catch (WebClientResponseException e) {
+            } catch (WebClientException e) {
                 // uma conexão quebrada (credencial expirada, MFA pendente) não
                 // pode impedir as outras de sincronizar; nada dela é apagado
                 skippedItems++;
                 lastFailure = e;
-                log.warn("Pluggy recusou a leitura de investimentos de uma conexão (conector=\"{}\", status={}); "
-                        + "as demais seguem", item.getConnectorName(), e.getStatusCode().value());
+                String detail = e instanceof WebClientResponseException response
+                        ? "status=" + response.getStatusCode().value() : "falha de conexão";
+                log.warn("Pluggy não leu investimentos de uma conexão (conector=\"{}\", {}); as demais seguem",
+                        item.getConnectorName(), detail);
                 continue;
             }
             itemsRead++;
@@ -307,6 +318,18 @@ public class InvestmentService {
     // ---------------------------------------------------------------- resumo
 
     public InvestmentResponses.Summary summary(String email) {
+        return summary(email, true);
+    }
+
+    /**
+     * Contexto da IA precisa do patrimônio atual, não dos movimentos. Reutiliza
+     * exatamente a conta do painel sem ler transações antigas só para descartá-las.
+     */
+    public InvestmentResponses.Summary summaryForAssistant(String email) {
+        return summary(email, false);
+    }
+
+    private InvestmentResponses.Summary summary(String email, boolean includeMovements) {
         User user = requireUser(email);
         LocalDate today = LocalDate.now(clock);
         List<InvestmentPosition> positions = positionRepository.findAllByUserIdOrderByNameAsc(user.getId());
@@ -398,8 +421,16 @@ public class InvestmentService {
                 ? profit.multiply(BigDecimal.valueOf(100)).divide(pricedInvested, 2, RoundingMode.HALF_UP)
                 : null;
 
-        InvestmentResponses.Movements movements = movementService.movements(user, 12);
-        InvestmentResponses.MovementTotals totals = movements.totals();
+        InvestmentResponses.MovementTotals12m movements12m;
+        if (includeMovements) {
+            InvestmentResponses.Movements movements = movementService.movements(user, 12);
+            InvestmentResponses.MovementTotals totals = movements.totals();
+            movements12m = new InvestmentResponses.MovementTotals12m(totals.applied(), totals.redeemed(),
+                    totals.yield(), movements.netInvested());
+        } else {
+            movements12m = new InvestmentResponses.MovementTotals12m(BigDecimal.ZERO, BigDecimal.ZERO,
+                    BigDecimal.ZERO, BigDecimal.ZERO);
+        }
 
         return new InvestmentResponses.Summary(
                 totalInvested,
@@ -415,8 +446,7 @@ public class InvestmentService {
                 updatedAt,
                 stale,
                 sources.stream().map(Enum::name).toList(),
-                new InvestmentResponses.MovementTotals12m(totals.applied(), totals.redeemed(), totals.yield(),
-                        movements.netInvested()),
+                movements12m,
                 new ArrayList<>(needsQuote),
                 unconverted,
                 usedRates.entrySet().stream()

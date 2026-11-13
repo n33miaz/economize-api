@@ -55,6 +55,9 @@ public class NewsService {
         if (store.updatedAt() != null) {
             return Mono.fromSupplier(() -> filter(query));
         }
+        if (!refresher.isRefreshInFlight() && !store.claimColdStartAttempt()) {
+            return Mono.fromSupplier(() -> filter(query));
+        }
         log.info("Agregado de notícias ainda vazio (boot frio); aguardando até {} s pelo primeiro ciclo",
                 COLD_START_WAIT.toSeconds());
         return refresher.refreshNow()

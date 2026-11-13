@@ -88,11 +88,21 @@ public class NewsRefreshScheduler {
         inFlight = null;
     }
 
+    /** Indica se um ciclo ainda pode fornecer o primeiro agregado do processo. */
+    public synchronized boolean isRefreshInFlight() {
+        return inFlight != null;
+    }
+
     private Mono<Void> refreshAll() {
         List<NewsProvider> providers = registry.getAll();
         return Flux.fromIterable(providers)
+                // updatedAt só prova resposta boa; esta marca prova que a rede
+                // foi tentada e impede GETs frios de reiniciarem o ciclo caro.
                 .flatMap(this::refreshFeed, concurrency)
                 .then(Mono.<Void>fromRunnable(store::rebuild))
+                // A tentativa só fica visível ao terminar. Assim, um GET que
+                // chegar durante o primeiro ciclo ainda se junta a ele.
+                .doFinally(signal -> store.markAttempted())
                 .doOnSubscribe(s -> log.info("Atualizando {} feeds de notícias, {} por vez", providers.size(),
                         concurrency))
                 .doOnSuccess(v -> log.info("Radar de notícias atualizado: {} artigos no agregado",
