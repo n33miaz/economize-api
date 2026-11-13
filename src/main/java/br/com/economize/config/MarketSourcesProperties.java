@@ -26,6 +26,13 @@ public class MarketSourcesProperties {
      */
     private int awesomeDailyBudget = 120;
 
+    /**
+     * Parte do teto da AwesomeAPI que o histórico ({@code /daily}) não pode
+     * tocar: é a da Home ({@code /all}), cujo pior caso é fixo — cache de 30 min
+     * = 48 recargas/dia. O histórico fica com {@code teto - reserva} (72).
+     */
+    private int awesomeHomeReserve = 48;
+
     /** Frankfurter: câmbio de referência do BCE, sem chave. */
     private String frankfurterUrl = "https://api.frankfurter.app";
 
