@@ -1386,6 +1386,19 @@
         ],
         "type": "object"
       },
+      "CreateIntegrationKey": {
+        "properties": {
+          "name": {
+            "maxLength": 60,
+            "minLength": 0,
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
       "CreateInterest": {
         "properties": {
           "code": {
@@ -2082,6 +2095,38 @@
         ],
         "type": "object"
       },
+      "FreeAfterSalary": {
+        "properties": {
+          "committedAfterSalaryCents": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "committedBeforeSalaryCents": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "daysUntilSalary": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "expectedSalaryCents": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "freeCents": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "salaryDate": {
+            "format": "date",
+            "type": "string"
+          },
+          "salaryKnown": {
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
       "HistoricalDataPoint": {
         "properties": {
           "high": {
@@ -2328,6 +2373,202 @@
           },
           "share": {
             "type": "number"
+          }
+        },
+        "type": "object"
+      },
+      "IntegrationAdvice": {
+        "properties": {
+          "free": {
+            "$ref": "#/components/schemas/FreeAfterSalary"
+          },
+          "generatedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "incomePattern": {
+            "$ref": "#/components/schemas/IncomePatternResponse"
+          }
+        },
+        "type": "object"
+      },
+      "IntegrationKeyCreated": {
+        "properties": {
+          "key": {
+            "$ref": "#/components/schemas/IntegrationKeyItem"
+          },
+          "secret": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "IntegrationKeyItem": {
+        "properties": {
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "lastUsedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "prefix": {
+            "type": "string"
+          },
+          "revoked": {
+            "type": "boolean"
+          },
+          "revokedAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "IntegrationTrip": {
+        "properties": {
+          "budgetCents": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "clientId": {
+            "type": "string"
+          },
+          "closedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/IntegrationTripItem"
+            },
+            "type": "array"
+          },
+          "itemsTotalCents": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "notes": {
+            "type": "string"
+          },
+          "own": {
+            "type": "boolean"
+          },
+          "ownerId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "paidTotalCents": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "receiptIssuerCnpj": {
+            "type": "string"
+          },
+          "receiptKey": {
+            "type": "string"
+          },
+          "receiptTotalCents": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "reconciledTransactionId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "startedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "storeName": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "IntegrationTripItem": {
+        "properties": {
+          "addedBy": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "checked": {
+            "type": "boolean"
+          },
+          "clientId": {
+            "type": "string"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "lineTotalCents": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "normalizedName": {
+            "type": "string"
+          },
+          "promoNote": {
+            "type": "string"
+          },
+          "quantity": {
+            "type": "number"
+          },
+          "unitPriceCents": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "IntegrationTripPage": {
+        "properties": {
+          "hasMore": {
+            "type": "boolean"
+          },
+          "nextCursor": {
+            "type": "string"
+          },
+          "trips": {
+            "items": {
+              "$ref": "#/components/schemas/IntegrationTrip"
+            },
+            "type": "array"
           }
         },
         "type": "object"
@@ -5603,6 +5844,12 @@
         "bearerFormat": "JWT",
         "scheme": "bearer",
         "type": "http"
+      },
+      "integrationKey": {
+        "bearerFormat": "eco_...",
+        "description": "Chave de integração criada em /api/v1/integration-keys. Vale só nas rotas /api/v1/integration/**.",
+        "scheme": "bearer",
+        "type": "http"
       }
     }
   },
@@ -8395,6 +8642,160 @@
         ]
       }
     },
+    "/api/v1/integration-keys": {
+      "get": {
+        "description": "Da mais nova para a mais antiga, revogadas inclusive, sem o segredo: nome, começo do segredo (`prefix`), criação, último uso (aproximado — atualizado no máximo a cada cinco minutos) e revogação.",
+        "operationId": "listIntegrationKeys",
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/IntegrationKeyItem"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "summary": "Minhas chaves",
+        "tags": [
+          "Chaves de integração"
+        ]
+      },
+      "post": {
+        "description": "Devolve o segredo (`eco_...`) em `secret` — é a ÚNICA vez em que ele aparece: o servidor guarda só o hash, e não há como recuperá-lo depois. No máximo 5 chaves ativas por pessoa; a sexta responde 409.",
+        "operationId": "createIntegrationKey",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateIntegrationKey"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntegrationKeyCreated"
+                }
+              }
+            },
+            "description": "Created"
+          }
+        },
+        "summary": "Criar uma chave",
+        "tags": [
+          "Chaves de integração"
+        ]
+      }
+    },
+    "/api/v1/integration-keys/{id}": {
+      "delete": {
+        "description": "A chave deixa de autenticar na hora e não volta. Revogar de novo é inofensivo. Chave de outra pessoa responde 404.",
+        "operationId": "revokeIntegrationKey",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          }
+        },
+        "summary": "Revogar uma chave",
+        "tags": [
+          "Chaves de integração"
+        ]
+      }
+    },
+    "/api/v1/integration/shopping/advice": {
+      "get": {
+        "description": "`incomePattern` é exatamente a resposta de `/api/v1/analytics/income-pattern` (valores em reais). `free` é o que sobra do próximo salário, como `/api/v1/income/committed` calcula, em centavos; sem salário confirmado com dia de pagamento, `salaryKnown` é falso e `freeCents` vem nulo. `generatedAt` é a hora desta resposta, em UTC. Responde com `ETag` calculado sobre o conteúdo (sem `generatedAt`): mandando-o de volta em `If-None-Match`, a resposta é 304 sem corpo enquanto nada mudou.",
+        "operationId": "integrationShoppingAdvice",
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntegrationAdvice"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "security": [
+          {
+            "integrationKey": []
+          }
+        ],
+        "summary": "Melhor dia de compra, padrão de renda e quanto está livre",
+        "tags": [
+          "Integração — compras"
+        ]
+      }
+    },
+    "/api/v1/integration/shopping/trips": {
+      "get": {
+        "description": "As compras do dono da chave e as que a casa dele compartilhou (`own` diz qual é qual), da mais antiga para a mais nova, com os itens vivos — item removido não vem. `limit` vale 50 por padrão e 200 no máximo. Para a página seguinte, mande em `cursor` o `nextCursor` recebido; `hasMore` diz se há mais agora. O `nextCursor` vem também na última página: guardado, ele traz depois só as compras criadas desde então. Datas em UTC (ISO-8601) e dinheiro em centavos inteiros. `paidTotalCents` é a nota quando informada, senão a soma dos itens pegos. Cursor ilegível responde 400.",
+        "operationId": "integrationShoppingTrips",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntegrationTripPage"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "security": [
+          {
+            "integrationKey": []
+          }
+        ],
+        "summary": "Histórico de compras, página a página",
+        "tags": [
+          "Integração — compras"
+        ]
+      }
+    },
     "/api/v1/investments/interests": {
       "post": {
         "description": "kind: RATE, INDEX, CURRENCY, TICKER ou TOPIC; code maiúsculo (TOPIC: slug do vocabulário de notícias); market só para TICKER (US, BR). Idempotente: repetir devolve o existente.",
@@ -11003,6 +11404,14 @@
     {
       "description": "Open Finance sem nome de provedor: status, widget, conexões e sincronização do usuário autenticado",
       "name": "Conexão bancária"
+    },
+    {
+      "description": "As chaves com que outro sistema do dono lê as rotas de integração: criar (o segredo aparece uma única vez), listar e revogar",
+      "name": "Chaves de integração"
+    },
+    {
+      "description": "Leituras para outro sistema do dono, autenticadas pela chave de integração (Bearer eco_...): o conselho de melhor dia de compra e o histórico de compras para migração. O JWT de sessão não vale aqui, e a chave não vale em nenhuma outra rota",
+      "name": "Integração — compras"
     },
     {
       "description": "Fontes de renda com calendário próprio (salário, VR, VA) e a jornada de trabalho que converte dinheiro em horas",

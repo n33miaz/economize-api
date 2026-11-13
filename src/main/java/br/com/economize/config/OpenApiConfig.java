@@ -28,6 +28,13 @@ public class OpenApiConfig {
 
     private static final String BEARER = "bearerAuth";
 
+    /**
+     * O esquema das rotas de integração (V44). Separado do {@code bearerAuth}
+     * porque NÃO é a mesma credencial: quem lê o contrato precisa ver que
+     * {@code /api/v1/integration/**} pede a chave do dono, e não o JWT.
+     */
+    public static final String INTEGRATION_KEY = "integrationKey";
+
     @Bean
     public OpenAPI openApi() {
         return new OpenAPI()
@@ -40,7 +47,14 @@ public class OpenApiConfig {
                         new SecurityScheme()
                                 .type(SecurityScheme.Type.HTTP)
                                 .scheme("bearer")
-                                .bearerFormat("JWT")))
+                                .bearerFormat("JWT"))
+                        .addSecuritySchemes(INTEGRATION_KEY,
+                                new SecurityScheme()
+                                        .type(SecurityScheme.Type.HTTP)
+                                        .scheme("bearer")
+                                        .bearerFormat("eco_...")
+                                        .description("Chave de integração criada em /api/v1/integration-keys. "
+                                                + "Vale só nas rotas /api/v1/integration/**.")))
                 .addSecurityItem(new SecurityRequirement().addList(BEARER));
     }
 }
