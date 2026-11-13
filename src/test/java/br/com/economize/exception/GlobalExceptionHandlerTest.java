@@ -4,6 +4,7 @@ import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
+import java.net.URI;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
@@ -122,5 +123,28 @@ class GlobalExceptionHandlerTest {
                 .doesNotContain("uk_invoice_reserves_card_ref")
                 .doesNotContain("insert into");
         assertThat(problem.getProperties()).containsKey("timestamp");
+    }
+
+    @Test
+    @DisplayName("provedor que não respondeu é 503, sem URL nem host no detalhe")
+    void provedorSemRespostaE503() {
+        var ex = new org.springframework.web.reactive.function.client.WebClientRequestException(
+                new java.net.ConnectException("Connection refused"), org.springframework.http.HttpMethod.POST,
+                URI.create("https://api.pluggy.ai/auth?x=1"), new org.springframework.http.HttpHeaders());
+
+        ProblemDetail problem = handler.handleWebClientRequestException(ex);
+
+        assertThat(problem.getStatus()).isEqualTo(503);
+        assertThat(problem.getDetail()).contains("não respondeu").doesNotContain("pluggy");
+    }
+
+    @Test
+    @DisplayName("provedor fora do contrato é 502, sem a mensagem interna")
+    void provedorForaDoContratoE502() {
+        ProblemDetail problem = handler.handleUpstreamProviderException(
+                new UpstreamProviderException("Pluggy não devolveu apiKey — confira PLUGGY_CLIENT_ID/SECRET"));
+
+        assertThat(problem.getStatus()).isEqualTo(502);
+        assertThat(problem.getDetail()).doesNotContain("PLUGGY");
     }
 }
