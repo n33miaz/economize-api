@@ -3,12 +3,13 @@
 # com tudo daqui e passa a redeployar a cada push.
 #
 # SÃO DOIS AMBIENTES, e a diferença entre eles é o branch:
-#   economize-api          ← main      — o que o dono usa
+#   economize-api          ← develop   — o que o dono usa (desde 13/11/2026)
 #   economize-api-homolog  ← homolog   — onde a migration estreia
 #
-# O fluxo é develop → homolog → main. `main` é protegido no GitHub e só recebe
-# merge com a esteira verde, então o autoDeploy dela já nasce filtrado — não há
-# como um commit que quebrou o teste chegar em produção pelo caminho normal.
+# Desde 13/11/2026 produção publica o develop (a homologação está suspensa).
+# O develop é protegido no GitHub e só recebe merge com a esteira verde, então
+# o autoDeploy já nasce filtrado — um commit que quebrou o teste não chega em
+# produção pelo caminho normal.
 #
 # Os segredos NÃO ficam neste arquivo: `sync: false` faz o Render pedir o valor
 # na criação e guardá-lo no painel. O JWT_SECRET é gerado lá — assim ele nasce
@@ -25,7 +26,12 @@ services:
     healthCheckPath: /actuator/health
     # Explicito de propósito: com dois serviços no mesmo arquivo, o branch
     # deixa de ser detalhe e passa a ser a única coisa que os separa
-    branch: main
+    # Produção publica o develop desde 13/11/2026, por decisão do dono (o mesmo
+    # modelo do UniOver): todo PR juntado no develop vai ao ar. O develop é
+    # protegido no GitHub com os mesmos checks obrigatórios da main. A main fica
+    # parada como cópia de segurança; para desfazer, Rollback no painel ou
+    # voltar este campo (e o do painel) para main.
+    branch: develop
     autoDeploy: true
     envVars:
       # Postgres do Supabase
