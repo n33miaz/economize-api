@@ -10,6 +10,7 @@ import java.time.OffsetDateTime;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class OfxParserTest {
 
@@ -50,6 +51,20 @@ class OfxParserTest {
         String ofx = "<OFX></OFX>";
         List<ParsedTransaction> result = parser.parse(new ByteArrayInputStream(ofx.getBytes(StandardCharsets.UTF_8)));
         assertThat(result).isEmpty();
+    }
+
+    @Test
+    void descartaLancamentosComDtpostedInvalidoOuAusente() {
+        String ofx = """
+                <OFX>
+                <STMTTRN><TRNAMT>-10.00<FITID>DATA-INVALIDA<DTPOSTED>20261340<MEMO>COMPRA</STMTTRN>
+                <STMTTRN><TRNAMT>-20.00<FITID>SEM-DATA<MEMO>OUTRA COMPRA</STMTTRN>
+                </OFX>
+                """;
+
+        assertThatThrownBy(() -> parser.parse(new ByteArrayInputStream(ofx.getBytes(StandardCharsets.UTF_8))))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("As datas das transações do arquivo são inválidas; nenhuma pôde ser importada");
     }
 
     // Cabeçalho sintético no formato do banco que mente: declara 1252 e grava
@@ -214,6 +229,19 @@ class OfxParserTest {
                 """;
 
         assertThat(parser.parseBalance(new ByteArrayInputStream(ofx.getBytes(StandardCharsets.UTF_8)))).isNull();
+    }
+
+    @Test
+    void saldoSemDtasofValidoNaoGanhaDataInventada() {
+        String ofx = """
+                <OFX><LEDGERBAL><BALAMT>120.00<DTASOF>20261340</LEDGERBAL></OFX>
+                """;
+        String semData = """
+                <OFX><LEDGERBAL><BALAMT>120.00</LEDGERBAL></OFX>
+                """;
+
+        assertThat(parser.parseBalance(new ByteArrayInputStream(ofx.getBytes(StandardCharsets.UTF_8)))).isNull();
+        assertThat(parser.parseBalance(new ByteArrayInputStream(semData.getBytes(StandardCharsets.UTF_8)))).isNull();
     }
 
     /** Fatura de cartão declara o DEVIDO no mesmo bloco, e ele vem negativo. */

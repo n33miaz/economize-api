@@ -1,0 +1,22 @@
+-- VERSÃO DA SESSÃO: o que faz um token emitido deixar de valer antes das 24 h.
+--
+-- O DEFEITO. O JWT era aceito só por assinatura e validade. Sair do app apagava
+-- o token do aparelho, mas uma cópia dele continuava abrindo a conta; e trocar
+-- ou redefinir a senha não mudava nada para quem já tinha um token na mão. A
+-- vítima redefinia a senha e o invasor seguia dentro por até um dia.
+--
+-- O DESENHO. Cada token leva a versão da sessão do dono no momento em que foi
+-- emitido (claim "sv"). Trocar a senha, redefini-la pelo e-mail ou pedir
+-- "sair de todos os aparelhos" soma 1 aqui, e todo token com a versão antiga
+-- passa a ser recusado. Uma coluna inteira, e não uma lista de tokens
+-- revogados: a pergunta é sempre "derrubar tudo desta conta", e um número
+-- responde isso sem tabela crescendo para sempre.
+--
+-- DEFAULT 0 para as contas que já existem: os tokens emitidos antes deste
+-- deploy não têm a claim e são aceitos enquanto a conta estiver na versão 0
+-- (nunca revogou). Ninguém é deslogado pelo deploy; a primeira revogação de
+-- cada conta derruba também esses tokens antigos.
+--
+-- V45 E NÃO V44: a V44 está reservada para integration_keys (outro PR ainda
+-- não juntado). Sem flyway out-of-order, a V44 precisa entrar ANTES desta.
+ALTER TABLE users ADD COLUMN session_version INTEGER NOT NULL DEFAULT 0;

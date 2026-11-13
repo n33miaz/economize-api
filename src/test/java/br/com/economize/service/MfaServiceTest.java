@@ -4,6 +4,8 @@ import br.com.economize.dto.auth.MfaRecoveryCodesResponse;
 import br.com.economize.dto.auth.MfaSetupResponse;
 import br.com.economize.dto.auth.MfaStatusResponse;
 import br.com.economize.model.User;
+import br.com.economize.model.MfaRecoveryCode;
+import br.com.economize.model.UserMfa;
 import br.com.economize.repository.MfaRecoveryCodeRepository;
 import br.com.economize.repository.TrustedDeviceRepository;
 import br.com.economize.repository.UserMfaRepository;
@@ -21,6 +23,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 
 import java.time.Clock;
 import java.time.Instant;
+import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.List;
@@ -191,6 +194,40 @@ class MfaServiceTest {
     }
 
     @Test
+    @DisplayName("duas tentativas de consumir o mesmo código deixam só a primeira riscar a linha")
+    void consumesRecoveryCodeOnlyOnceInDatabase() {
+        MfaRecoveryCode code = recoveryCodeRepository.save(MfaRecoveryCode.builder()
+                .user(ana).codeHash(encoder.encode("ABCDEFGHJK")).build());
+        entityManager.flush();
+
+        int primeira = recoveryCodeRepository.consumeIfUnused(code.getId(), OffsetDateTime.now(relogio));
+        int segunda = recoveryCodeRepository.consumeIfUnused(code.getId(), OffsetDateTime.now(relogio));
+
+        assertThat(primeira).isOne();
+        assertThat(segunda).isZero();
+        entityManager.clear();
+        assertThat(recoveryCodeRepository.findById(code.getId()).orElseThrow().getUsedAt()).isNotNull();
+    }
+
+    @Test
+    @DisplayName("O mesmo passo TOTP só é consumido uma vez; um passo posterior entra")
+    void consumesTotpStepOnlyOnceAndAcceptsNewerStep() {
+        UserMfa mfa = mfaRepository.save(UserMfa.builder()
+                .user(ana).secretCipher("envelope-de-teste").enabled(true).build());
+        entityManager.flush();
+
+        int primeira = mfaRepository.consumeStepIfNewer(mfa.getId(), 100L);
+        int repetida = mfaRepository.consumeStepIfNewer(mfa.getId(), 100L);
+        int posterior = mfaRepository.consumeStepIfNewer(mfa.getId(), 101L);
+
+        assertThat(primeira).isOne();
+        assertThat(repetida).isZero();
+        assertThat(posterior).isOne();
+        entityManager.clear();
+        assertThat(mfaRepository.findById(mfa.getId()).orElseThrow().getLastUsedStep()).isEqualTo(101L);
+    }
+
+    @Test
     @DisplayName("hífen e caixa no código de recuperação são cosmética")
     void recoveryCodeIsCaseAndDashInsensitive() {
         String secret = service.startSetup(ana.getEmail()).secret();
@@ -317,5 +354,19 @@ class MfaServiceTest {
         public Clock withZone(ZoneId zone) {
             return this;
         }
+    }
+
+    @Test
+    @DisplayName("chave trocada entre o setup e a ativação é 400 pedindo para refazer, e não 500")
+    void activateWithUnreadableSecretAsksToRedoSetup() {
+        String secret = service.startSetup(ana.getEmail()).secret();
+        entityManager.flush();
+        MfaService outraChave = new MfaService(userRepository, mfaRepository, recoveryCodeRepository,
+                new MfaSecretCipher(JWT_SECRET + "-trocada"), deviceRepository, encoder, relogio);
+
+        assertThatThrownBy(() -> outraChave.activate(ana.getEmail(), codeFor(secret)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Refaça o cadastro do autenticador");
+        assertThat(service.isEnabledFor(ana)).isFalse();
     }
 }

@@ -1,5 +1,6 @@
 package br.com.economize.service.connector.pluggy;
 
+import br.com.economize.exception.UpstreamProviderException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
@@ -61,7 +62,7 @@ public class PluggyClient {
                 })
                 .block();
         if (body == null || body.get("apiKey") == null) {
-            throw new IllegalStateException("Pluggy não devolveu apiKey — confira PLUGGY_CLIENT_ID/SECRET");
+            throw new UpstreamProviderException("Pluggy não devolveu apiKey — confira PLUGGY_CLIENT_ID/SECRET");
         }
         return String.valueOf(body.get("apiKey"));
     }
@@ -87,7 +88,7 @@ public class PluggyClient {
                 })
                 .block();
         if (body == null || body.get("accessToken") == null) {
-            throw new IllegalStateException("Pluggy não devolveu accessToken do Connect");
+            throw new UpstreamProviderException("Pluggy não devolveu accessToken do Connect");
         }
         return String.valueOf(body.get("accessToken"));
     }
@@ -129,10 +130,11 @@ public class PluggyClient {
      * container de 512 MB.
      *
      * <p>Devolve null quando o item não existe mais (404) ou quando o provedor
-     * recusa a atualização (por exemplo, conexão que exige segundo fator e só
-     * pode ser refeita pela pessoa). Recusa é resposta legítima, não falha
-     * nossa: quem trata é o chamador, marcando a conexão como precisando de
-     * atenção.
+     * recusa a atualização por credencial ou consentimento (conexão que exige
+     * segundo fator e só pode ser refeita pela pessoa). Recusa é resposta
+     * legítima, não falha nossa: quem trata é o chamador, marcando a conexão
+     * como precisando de atenção. "Agora não" (429, coleta em andamento, 5xx)
+     * sai como {@link UpdateNotNowException}: a conexão segue sendo lida.
      */
     public Map<String, Object> requestUpdate(String apiKey, String itemId) {
         try {
@@ -147,12 +149,50 @@ public class PluggyClient {
         } catch (WebClientResponseException.NotFound e) {
             return null;
         } catch (WebClientResponseException e) {
-            // 400/403 aqui significa "esta conexão não pode ser atualizada
-            // sozinha" — credencial vencida, segundo fator, consentimento
-            // revogado. Sem itemId no log: é identificador de terceiro.
+            if (!exigeAcaoDaPessoa(e)) {
+                // 429, coleta já em andamento, 5xx: o provedor disse "agora
+                // não", não "reconecte". Antes tudo isso virava null e a conexão
+                // deixava de ser lida até a pessoa refazer um consentimento que
+                // estava perfeitamente válido
+                throw new UpdateNotNowException(e.getStatusCode().value(), e);
+            }
+            // 400/401/403 que não seja "já atualizando": credencial vencida,
+            // segundo fator, consentimento revogado. Sem itemId no log: é
+            // identificador de terceiro.
             log.warn("Pluggy recusou atualizar uma conexão ({}). Ela será marcada como precisando de atenção.",
                     e.getStatusCode());
             return null;
+        }
+    }
+
+    // O corpo do erro do Pluggy traz um código; "já atualizando" chega como
+    // 4xx comum e precisa ser separado da recusa por credencial
+    private static final java.util.regex.Pattern JA_ATUALIZANDO =
+            java.util.regex.Pattern.compile("(?i)already.?updating|is.?updating|in.?progress");
+
+    /**
+     * A recusa do PATCH significa que só a pessoa destrava a conexão? Só para
+     * 400/401/403 sem sinal de "coleta já em andamento". 409, 429 e 5xx são
+     * "agora não".
+     */
+    static boolean exigeAcaoDaPessoa(WebClientResponseException e) {
+        int status = e.getStatusCode().value();
+        if (status != 400 && status != 401 && status != 403) return false;
+        String corpo = e.getResponseBodyAsString();
+        return corpo == null || !JA_ATUALIZANDO.matcher(corpo).find();
+    }
+
+    /** O provedor adiou a coleta (limite, coleta em andamento, instabilidade). */
+    public static class UpdateNotNowException extends RuntimeException {
+        private final int status;
+
+        public UpdateNotNowException(int status, Throwable cause) {
+            super("Pluggy adiou a coleta (HTTP " + status + ")", cause);
+            this.status = status;
+        }
+
+        public int getStatus() {
+            return status;
         }
     }
 

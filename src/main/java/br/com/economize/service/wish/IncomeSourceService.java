@@ -165,7 +165,7 @@ public class IncomeSourceService {
      */
     @Transactional
     public WishResponses.IncomeSourceItem acceptSuggestion(String email, UUID seriesId,
-                                                           WishRequests.CreateIncomeSource request) {
+                                                           WishRequests.AcceptIncomeSuggestion request) {
         User user = requireUser(email);
         RecurringSeries series = recurringSeriesRepository.findByIdAndUserId(seriesId, user.getId())
                 .orElseThrow(() -> new ResourceNotFoundException("Série recorrente não encontrada"));
@@ -182,10 +182,13 @@ public class IncomeSourceService {
 
         // Colisão de nome com uma fonte que o usuário já cadastrou à mão: o
         // sufixo mantém o aceite funcionando em vez de travar a tela num 409
-        String finalName = name;
+        // sufixo mantém o aceite funcionando em vez de travar a tela num 409.
+        // O rótulo da série vai até 160 caracteres e a coluna aceita 120 (V18):
+        // o corte conta o sufixo, senão o banco recusava e o app via "conflito"
+        String finalName = fitName(name, "");
         int suffix = 2;
         while (incomeSourceRepository.findByUserIdAndKindAndName(user.getId(), kind, finalName).isPresent()) {
-            finalName = name + " (" + suffix++ + ")";
+            finalName = fitName(name, " (" + suffix++ + ")");
         }
 
         BigDecimal amount = request != null && request.expectedAmount() != null
@@ -205,6 +208,24 @@ public class IncomeSourceService {
                 .seriesId(seriesId)
                 .build();
         return WishResponses.IncomeSourceItem.from(incomeSourceRepository.save(source));
+    }
+
+    /** Tamanho de {@code income_sources.name} (V18). */
+    private static final int NAME_MAX = 120;
+
+    /**
+     * Corta {@code base} para que {@code base + suffix} caiba em
+     * {@link #NAME_MAX}, sem partir um par substituto (emoji) ao meio — metade
+     * de um par não é UTF-8 válido e o Postgres recusaria do mesmo jeito.
+     */
+    static String fitName(String base, String suffix) {
+        int room = NAME_MAX - suffix.length();
+        String cut = base;
+        if (cut.length() > room) {
+            int end = Character.isHighSurrogate(cut.charAt(room - 1)) ? room - 1 : room;
+            cut = cut.substring(0, end).stripTrailing();
+        }
+        return cut + suffix;
     }
 
     @Transactional

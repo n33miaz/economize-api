@@ -63,9 +63,19 @@ final class MercadoPagoPdfLayout {
      *
      * <p>O id tem 11 dígitos ou mais em toda amostra real; exigir o tamanho
      * evita que um número solto dentro da descrição seja confundido com ele.
+     *
+     * <p>Aceita as mesmas linhas, com os mesmos grupos, da forma antiga
+     * "(data)\s+(.*?)\s*(\d{11,})\s+...", mas sem a volta atrás que a fazia
+     * explodir num PDF hostil: brancos disputados por {@code \s+}, descrição e
+     * {@code \s*} davam custo cúbico numa corrida de espaços, e o id tentado a
+     * partir de cada dígito de uma corrida longa, quadrático. Por isso:
+     * brancos possessivos (devolvê-los nunca mudava o resultado), descrição
+     * vazia ou terminada em não branco, e o id só começando onde não há dígito
+     * logo antes — terminar a descrição no meio de uma corrida de brancos ou de
+     * dígitos só repetia, mais tarde, uma tentativa que já tinha sido feita.
      */
     private static final Pattern LINHA = Pattern.compile(
-            "^(\\d{2}-\\d{2}-\\d{4})\\s+(.*?)\\s*(\\d{11,})\\s+"
+            "^(\\d{2}-\\d{2}-\\d{4})\\s++((?:.*?\\S)??)\\s*+(?<!\\d)(\\d{11,}+)\\s+"
                     + "R\\$\\s*(-?[\\d.]+,\\d{2})\\s+R\\$\\s*(-?[\\d.]+,\\d{2})\\s*$");
 
     /** Cabeçalho que se repete a cada página, e o rodapé de paginação. */

@@ -27,7 +27,12 @@ import org.springframework.test.web.reactive.server.WebTestClient;
  * nada) e que o IP escolhido é o do cliente.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
-        properties = "server.forward-headers-strategy=native")
+        properties = {
+                "server.forward-headers-strategy=native",
+                // Banco H2 próprio: o testdb é compartilhado e o create-drop de
+                // outro contexto, ao fechar, apaga a tabela users que o token exige
+                "spring.datasource.url=jdbc:h2:mem:clientipforwarded;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE"
+        })
 @DisplayName("IP do cliente com cabeçalhos encaminhados em modo nativo")
 class ClientIpForwardedHeadersTest {
 
@@ -76,7 +81,16 @@ class ClientIpForwardedHeadersTest {
                 .jsonPath("$.resolvedClientIp").isEqualTo(CLIENT);
     }
 
+    @Autowired
+    private br.com.economize.repository.UserRepository userRepository;
+
     private WebTestClient.BodyContentSpec connection(String forwardedFor) {
+        // Desde a V45 o filtro confere a versão da sessão no banco: token de
+        // conta que não existe não autentica mais, então a conta precisa existir
+        if (userRepository.findByEmail("teste@economize.app").isEmpty()) {
+            userRepository.save(br.com.economize.model.User.builder()
+                    .name("Teste").email("teste@economize.app").password("x").build());
+        }
         return client.get().uri("/api/v1/users/me/connection")
                 .header(HttpHeaders.AUTHORIZATION, "Bearer " + jwtUtil.generateToken("teste@economize.app"))
                 .header("X-Forwarded-For", forwardedFor)

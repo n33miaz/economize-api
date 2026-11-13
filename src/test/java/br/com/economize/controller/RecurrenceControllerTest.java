@@ -484,6 +484,36 @@ class RecurrenceControllerTest {
     }
 
     @Test
+    @DisplayName("POST - Valor esperado com mais de quatro casas deve retornar 400 sem chamar o service")
+    void createShouldRejectExpectedAmountWithTooManyFractionDigits() {
+        webTestClient.post()
+                .uri("/api/v1/recurrences")
+                .header(HttpHeaders.AUTHORIZATION, bearerToken())
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(new CreateRecurringSeriesRequest("Aluguel", "EXPENSE", "MONTHLY",
+                        5, new BigDecimal("0.00001"), null, null, null, null, null))
+                .exchange()
+                .expectStatus().isBadRequest();
+
+        verifyNoInteractions(seriesService);
+    }
+
+    @Test
+    @DisplayName("PATCH /{id} - Valor esperado com mais de quatro casas deve retornar 400 sem chamar o service")
+    void updateShouldRejectExpectedAmountWithTooManyFractionDigits() {
+        webTestClient.patch()
+                .uri("/api/v1/recurrences/" + UUID.randomUUID())
+                .header(HttpHeaders.AUTHORIZATION, bearerToken())
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(new UpdateRecurringSeriesRequest(null, null, null, null, new BigDecimal("0.00001"),
+                        null, null, null, null))
+                .exchange()
+                .expectStatus().isBadRequest();
+
+        verifyNoInteractions(seriesService);
+    }
+
+    @Test
     @DisplayName("DELETE /{id} - Série detectada é desativada, não apagada")
     void deleteShouldReportDeactivationForDetectedSeries() {
         UUID id = UUID.randomUUID();

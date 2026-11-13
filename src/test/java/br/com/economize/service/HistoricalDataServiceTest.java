@@ -58,10 +58,17 @@ class HistoricalDataServiceTest {
 
     private HistoricalDataService service(int awesomeBudget) {
         properties.setAwesomeDailyBudget(awesomeBudget);
+        // sem reserva da Home nestes testes: o teto inteiro é do histórico, e o
+        // que se testa aqui é a cadeia de fontes (a reserva tem teste próprio)
+        properties.setAwesomeHomeReserve(0);
+        return service(new AwesomeApiBudget(properties));
+    }
+
+    private HistoricalDataService service(AwesomeApiBudget budget) {
         properties.setBcbSgsUrl("https://example.test/sgs");
         properties.setCoingeckoUrl("https://example.test/coingecko");
         WebClient webClient = StubWebClient.respondingWith(urls, this::respond);
-        return new HistoricalDataService(webClient, "https://example.test/awesome", new AwesomeApiBudget(properties),
+        return new HistoricalDataService(webClient, "https://example.test/awesome", budget,
                 new BcbSgsClient(webClient, properties), new CoinGeckoSource(webClient, properties), snapshotStore);
     }
 
@@ -165,7 +172,7 @@ class HistoricalDataServiceTest {
                 .assertNext(points -> assertEquals(new BigDecimal("5.00"), points.get(0).getHigh()))
                 .verifyComplete();
 
-        StepVerifier.create(service(10).getHistoricalData("EUR", 30))
+        StepVerifier.create(service(10).getHistoricalData("EUR", 7))
                 .assertNext(points -> assertTrue(points.isEmpty()))
                 .verifyComplete();
     }
@@ -188,5 +195,36 @@ class HistoricalDataServiceTest {
         StepVerifier.create(service(10).getHistoricalData("US", 7))
                 .expectError(IllegalArgumentException.class)
                 .verify();
+    }
+
+    @Test
+    @DisplayName("Código fora da lista suportada e janela fora das aceitas são erro, sem rede")
+    void unsupportedCodeOrWindowShouldErrorWithoutNetwork() {
+        HistoricalDataService service = service(10);
+
+        StepVerifier.create(service.getHistoricalData("XYZ", 7)).expectError(IllegalArgumentException.class).verify();
+        StepVerifier.create(service.getHistoricalData("USD", 8)).expectError(IllegalArgumentException.class).verify();
+        StepVerifier.create(service.getHistoricalData("USD-BRL", 7))
+                .expectError(IllegalArgumentException.class).verify();
+
+        assertTrue(urls.isEmpty(), "validação vem antes de qualquer chamada");
+    }
+
+    @Test
+    @DisplayName("Histórico esgota a fatia dele e a reserva da Home continua intacta")
+    void historicalShouldNotEatHomeReserve() {
+        properties.setAwesomeDailyBudget(3);
+        properties.setAwesomeHomeReserve(2);
+        AwesomeApiBudget budget = new AwesomeApiBudget(properties);
+        HistoricalDataService service = service(budget);
+
+        StepVerifier.create(service.getHistoricalData("USD", 7)).expectNextCount(1).verifyComplete();
+        StepVerifier.create(service.getHistoricalData("EUR", 7)).expectNextCount(1).verifyComplete();
+
+        assertEquals(1, count("/awesome/"), "só a fatia do histórico (3 - 2 = 1) vai à AwesomeAPI");
+        assertEquals(1, count("/sgs/"), "o segundo gráfico vai à fonte alternativa");
+        assertEquals(2, budget.remaining(AwesomeApiBudget.Purpose.HOME), "a Home ainda tem a reserva inteira");
+        assertTrue(budget.tryAcquire());
+        assertTrue(budget.tryAcquire());
     }
 }

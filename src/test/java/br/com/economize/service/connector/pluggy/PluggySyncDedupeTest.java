@@ -124,7 +124,8 @@ class PluggySyncDedupeTest {
         BankStatementService bankStatementService = new BankStatementService(
                 bankTransactionRepository, statementUploadRepository, userRepository, parserFactory,
                 categorizationEngine, categoryRepository, importWriter, accountService, eventPublisher,
-                aiSuggester);
+                aiSuggester,
+                new br.com.economize.config.StatementImportProperties());
         // A fatura do provedor é enriquecimento e nunca derruba o extrato: o
         // dublê devolve zero e este teste segue sendo sobre a dedupe
         var cardBillService = mock(CardBillService.class);

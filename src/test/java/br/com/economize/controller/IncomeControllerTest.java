@@ -1,5 +1,6 @@
 package br.com.economize.controller;
 
+import static org.hamcrest.Matchers.containsString;
 import br.com.economize.config.CorsConfig;
 import br.com.economize.dto.wish.WishRequests;
 import br.com.economize.dto.wish.WishResponses;
@@ -203,5 +204,53 @@ class IncomeControllerTest {
                 .expectStatus().isUnauthorized();
 
         verify(incomeSourceService, never()).overview(any());
+    }
+
+    // ---------------------------------------------- aceite de sugestão
+
+    private WebTestClient.ResponseSpec aceitar(UUID serie, Map<String, Object> corpo) {
+        return webTestClient.post().uri("/api/v1/income/suggestions/{id}/accept", serie)
+                .header(HttpHeaders.AUTHORIZATION, bearer())
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(corpo)
+                .exchange();
+    }
+
+    @Test
+    @DisplayName("POST /suggestions/{id}/accept com {} aceita a sugestão como veio")
+    void aceiteSemAjusteSegueValendo() {
+        // é o que o app manda quando a pessoa só toca em "aceitar": o @Valid
+        // não pode transformar isso em 400 por falta de tipo e nome
+        UUID serie = UUID.randomUUID();
+        when(incomeSourceService.acceptSuggestion(eq(EMAIL), eq(serie), any()))
+                .thenReturn(fonte("Salário", (short) 5));
+
+        aceitar(serie, Map.of()).expectStatus().isCreated();
+    }
+
+    @Test
+    @DisplayName("POST /suggestions/{id}/accept com dia fora de 1–31 é 400 (70000 virava 4464)")
+    void aceiteComDiaForaDaFaixaE400() {
+        UUID serie = UUID.randomUUID();
+
+        for (int dia : new int[] { 0, 32, 70000 }) {
+            aceitar(serie, Map.of("anchorDay", dia))
+                    .expectStatus().isBadRequest()
+                    .expectBody()
+                    .jsonPath("$.detail").value(containsString("entre 1 e 31"));
+        }
+
+        verify(incomeSourceService, never()).acceptSuggestion(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("POST /suggestions/{id}/accept com nome acima de 120 caracteres é 400")
+    void aceiteComNomeLongoE400() {
+        aceitar(UUID.randomUUID(), Map.of("name", "n".repeat(121)))
+                .expectStatus().isBadRequest()
+                .expectBody()
+                .jsonPath("$.detail").value(containsString("120 caracteres"));
+
+        verify(incomeSourceService, never()).acceptSuggestion(any(), any(), any());
     }
 }

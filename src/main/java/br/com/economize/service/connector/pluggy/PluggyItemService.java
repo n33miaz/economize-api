@@ -74,6 +74,26 @@ public class PluggyItemService {
         User user = requireUser(email);
         requireCredentials();
         String itemId = rawItemId.trim();
+        var existenteDoDono = pluggyItemRepository.findByItemIdAndUserId(itemId, user.getId());
+        if (existenteDoDono.isPresent()) {
+            // O app chega aqui somente depois de o Pluggy Connect voltar com
+            // sucesso. No modo de atualizacao ele devolve o mesmo itemId: esse
+            // POST e, portanto, a confirmacao local de que a pessoa refez a
+            // conexao, e nao uma tentativa de criar uma segunda linha.
+            PluggyItem existente = existenteDoDono.get();
+            existente.setStatus("UPDATED");
+            existente.setExecutionStatus(null);
+            existente.setStatusDetail(null);
+            // Nao inventamos uma coleta do banco: o proximo GET do Pluggy vai
+            // preencher este carimbo. Limpar o pedido antigo tambem evita que
+            // ele seja usado como prova para uma coleta de antes da reconexao.
+            existente.setProviderUpdatedAt(null);
+            existente.setUpdateRequestedAt(null);
+            PluggyItem saved = pluggyItemRepository.saveAndFlush(existente);
+            log.info("Item Pluggy reconectado: conector \"{}\" para user={}",
+                    saved.getConnectorName(), user.getId());
+            return PluggyItemResponse.from(saved);
+        }
         if (pluggyItemRepository.existsByItemId(itemId)) {
             // mesma mensagem para "já é meu" e "é de outro usuário": o conflito
             // não pode servir de oráculo sobre contas alheias

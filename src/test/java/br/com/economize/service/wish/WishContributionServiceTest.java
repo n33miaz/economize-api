@@ -15,8 +15,10 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.DataIntegrityViolationException;
 
 import java.math.BigDecimal;
+import java.time.YearMonth;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -24,6 +26,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -43,6 +46,7 @@ class WishContributionServiceTest {
     @Mock private WishContributionRepository contributionRepository;
     @Mock private WishRepository wishRepository;
     @Mock private UserRepository userRepository;
+    @Mock private WishProjectionService projectionService;
 
     @InjectMocks private WishContributionService service;
 
@@ -66,11 +70,22 @@ class WishContributionServiceTest {
         when(userRepository.findByEmail(EMAIL)).thenReturn(Optional.of(user));
         when(wishRepository.findByIdAndUserId(wish.getId(), user.getId()))
                 .thenReturn(Optional.of(wish));
+        // lenient: os testes que recusam antes do UPDATE não chegam a ele
+        lenient().when(wishRepository.adjustSavedAmount(any(), any(), any(), any(), any()))
+                .thenAnswer(invocation -> {
+                    BigDecimal saldo = wish.getSavedAmount() == null ? BigDecimal.ZERO : wish.getSavedAmount();
+                    wish.setSavedAmount(saldo.add(invocation.getArgument(2, BigDecimal.class)));
+                    return 1;
+                });
     }
 
     private void gravaOQueChega() {
-        when(contributionRepository.save(any(WishContribution.class)))
+        when(contributionRepository.saveAndFlush(any(WishContribution.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
+    }
+
+    private void cicloFechado(String cycleMonth) {
+        when(projectionService.isCycleClosed(user.getId(), YearMonth.parse(cycleMonth))).thenReturn(true);
     }
 
     @Test
@@ -84,8 +99,8 @@ class WishContributionServiceTest {
 
         assertThat(r.savedAmount()).isEqualByComparingTo("1500.00");
         assertThat(wish.getSavedAmount()).isEqualByComparingTo("1500.00");
-        verify(contributionRepository).save(any(WishContribution.class));
-        verify(wishRepository).save(wish);
+        verify(contributionRepository).saveAndFlush(any(WishContribution.class));
+        verify(wishRepository, never()).save(wish);
     }
 
     @Test
@@ -93,6 +108,7 @@ class WishContributionServiceTest {
     void origemSeparaMedidoDeDeclarado() {
         comUsuarioEMeta();
         gravaOQueChega();
+        cicloFechado("2026-09");
 
         assertThat(service.contribute(EMAIL, wish.getId(), new BigDecimal("100"), "2026-09", null)
                 .contribution().origin()).isEqualTo(WishContribution.Origin.MEASURED);
@@ -105,6 +121,7 @@ class WishContributionServiceTest {
     @DisplayName("A sobra do mesmo ciclo não entra duas vezes")
     void sobraDoCicloEntraUmaVezSo() {
         comUsuarioEMeta();
+        cicloFechado("2026-09");
         when(contributionRepository.findByWishIdAndCycleMonth(wish.getId(), "2026-09"))
                 .thenReturn(Optional.of(WishContribution.builder()
                         .amount(new BigDecimal("420.00")).cycleMonth("2026-09").build()));
@@ -118,7 +135,44 @@ class WishContributionServiceTest {
 
         // E o saldo fica exatamente como estava
         assertThat(wish.getSavedAmount()).isEqualByComparingTo("1200.00");
-        verify(contributionRepository, never()).save(any());
+        verify(contributionRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    @DisplayName("Último ciclo fechado é aceito uma vez e depois fica travado")
+    void cicloFechadoEntraUmaVezSo() {
+        comUsuarioEMeta();
+        cicloFechado("2026-10");
+        gravaOQueChega();
+        when(contributionRepository.findByWishIdAndCycleMonth(wish.getId(), "2026-10"))
+                .thenReturn(Optional.empty(), Optional.of(WishContribution.builder()
+                        .cycleMonth("2026-10").build()));
+
+        WishContributionService.Result primeiro = service.contribute(
+                EMAIL, wish.getId(), new BigDecimal("300.00"), "2026-10", null);
+
+        assertThat(primeiro.contribution().origin()).isEqualTo(WishContribution.Origin.MEASURED);
+        assertThatThrownBy(() -> service.contribute(
+                EMAIL, wish.getId(), new BigDecimal("300.00"), "2026-10", null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("já foi guardada");
+        // a gravação é saveAndFlush desde que a corrida pela sobra virou
+        // mensagem de negócio (índice único da V33)
+        verify(contributionRepository).saveAndFlush(any(WishContribution.class));
+    }
+
+    @Test
+    @DisplayName("Ciclo corrente não pode virar sobra medida")
+    void cicloAindaAbertoRecusaAporteMedido() {
+        comUsuarioEMeta();
+        when(projectionService.isCycleClosed(user.getId(), YearMonth.of(2026, 11))).thenReturn(false);
+
+        assertThatThrownBy(() -> service.contribute(
+                EMAIL, wish.getId(), new BigDecimal("420.00"), "2026-11", null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("depois que o ciclo fechar");
+
+        verify(contributionRepository, never()).saveAndFlush(any());
     }
 
     @Test
@@ -132,7 +186,7 @@ class WishContributionServiceTest {
 
         assertThat(r.savedAmount()).isEqualByComparingTo("1000.00");
         ArgumentCaptor<WishContribution> captor = ArgumentCaptor.forClass(WishContribution.class);
-        verify(contributionRepository).save(captor.capture());
+        verify(contributionRepository).saveAndFlush(captor.capture());
         assertThat(captor.getValue().getAmount()).isEqualByComparingTo("-200.00");
         assertThat(captor.getValue().getNote()).isEqualTo("errei o dedo");
     }
@@ -167,7 +221,7 @@ class WishContributionServiceTest {
                 .hasMessageContaining("maior valor que uma meta comporta");
 
         assertThat(wish.getSavedAmount()).isEqualByComparingTo("1200.00");
-        verify(contributionRepository, never()).save(any());
+        verify(contributionRepository, never()).saveAndFlush(any());
     }
 
     @Test
@@ -213,7 +267,22 @@ class WishContributionServiceTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("YYYY-MM");
 
-        verify(contributionRepository, never()).save(any());
+        verify(contributionRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    @DisplayName("Corrida pela sobra do ciclo responde que ela já foi guardada")
+    void corridaDaSobraDoCicloViraMensagemDeNegocio() {
+        comUsuarioEMeta();
+        // setembro já fechou: a recusa que se quer provar é a da corrida, não a do ciclo aberto
+        cicloFechado("2026-09");
+        when(contributionRepository.saveAndFlush(any(WishContribution.class)))
+                .thenThrow(new DataIntegrityViolationException("uq_wish_contributions_cycle"));
+
+        assertThatThrownBy(() ->
+                service.contribute(EMAIL, wish.getId(), new BigDecimal("100"), "2026-09", null))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("A sobra de 2026-09 já foi guardada nesta meta");
     }
 
     @Test

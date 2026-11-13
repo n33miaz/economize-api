@@ -1,5 +1,7 @@
 package br.com.economize.service;
 
+import br.com.economize.config.StatementImportProperties;
+import br.com.economize.exception.PayloadTooLargeException;
 import br.com.economize.exception.ResourceNotFoundException;
 import br.com.economize.model.BankTransaction;
 import br.com.economize.model.Category;
@@ -25,6 +27,7 @@ import br.com.economize.service.statement.parser.StatementParserStrategy;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.core.io.buffer.DataBufferLimitException;
 import org.springframework.core.io.buffer.DataBufferUtils;
 import org.springframework.http.codec.multipart.FilePart;
 import org.springframework.stereotype.Service;
@@ -100,6 +103,8 @@ public class BankStatementService {
     // mas a indireção segura o acoplamento fraco e mantém de pé os testes que
     // montam este serviço sem o módulo de IA
     private final ObjectProvider<AiCategorySuggester> aiSuggester;
+    // tetos do arquivo (tamanho, linhas): ver StatementImportProperties
+    private final StatementImportProperties limits;
 
     public Mono<ImportResult> processFile(String email, FilePart filePart) {
         return processFile(email, filePart, null);
@@ -121,7 +126,13 @@ public class BankStatementService {
         return Mono.fromCallable(() -> userRepository.findByEmail(email)
                         .orElseThrow(() -> new IllegalArgumentException("Usuário não encontrado")))
                 .subscribeOn(Schedulers.boundedElastic())
-                .flatMap(user -> DataBufferUtils.join(filePart.content())
+                // O join COM teto conta os bytes enquanto junta e, ao passar do
+                // limite, aborta e libera os buffers já recebidos — o arquivo
+                // gigante nunca chega inteiro ao heap. O multipart já corta antes
+                // (spring.webflux.multipart.max-disk-usage-per-part); esta é a
+                // segunda trava, que não depende de configuração externa.
+                .flatMap(user -> DataBufferUtils.join(filePart.content(), maxUploadBytes())
+                        .onErrorMap(DataBufferLimitException.class, ex -> tooLarge())
                         .map(buffer -> {
                             byte[] bytes = new byte[buffer.readableByteCount()];
                             buffer.read(bytes);
@@ -129,6 +140,15 @@ public class BankStatementService {
                             return bytes;
                         })
                         .flatMap(bytes -> processBytes(user, filePart.filename(), bytes, accountId)));
+    }
+
+    private int maxUploadBytes() {
+        // DataBufferUtils.join conta em int; teto acima de 2 GB não faz sentido aqui
+        return (int) Math.min(Integer.MAX_VALUE, limits.getMaxUploadSize().toBytes());
+    }
+
+    private PayloadTooLargeException tooLarge() {
+        return PayloadTooLargeException.forLimit(limits.getMaxUploadSize());
     }
 
     /**
@@ -191,6 +211,14 @@ public class BankStatementService {
         List<ParsedTransaction> parsed = parser.parse(new ByteArrayInputStream(bytes));
         if (parsed.isEmpty()) {
             throw new IllegalArgumentException("Nenhuma transação encontrada no arquivo");
+        }
+        // Teto de lançamentos ANTES da categorização e da gravação, que é onde o
+        // custo por linha se multiplica (regras, IA, banco). Recusa em vez de
+        // cortar: importar só o começo gravaria o hash e o reenvio do arquivo
+        // inteiro passaria a responder "já importado" com dados faltando.
+        if (parsed.size() > limits.getMaxRows()) {
+            throw new IllegalArgumentException("O arquivo tem mais de " + limits.getMaxRows()
+                    + " lançamentos. Exporte um período menor do extrato.");
         }
         if (accountId != null) {
             // a origem viaja com a linha ate a gravacao, do mesmo jeito que no
@@ -501,9 +529,9 @@ public class BankStatementService {
         log.info("Importadas {} novas transações ({}) em {} upload(s): {} sugeridas, {} sem categoria, "
                         + "{} reconciliadas, user={}",
                 toSave.size(), format, uploads.size(), suggested, uncategorized, reconciled, user.getId());
-        // A resposta tem lugar para UM upload ("revisar esta importação"). Com
-        // várias conexões vai o que mais trouxe novidade — o primeiro, no empate;
-        // os outros continuam alcançáveis pela lista de fontes.
+        // uploadId preserva o contrato publicado e aponta o que mais trouxe
+        // novidade; uploadIds reúne cada fonte com lançamento novo para a
+        // revisão multi-banco.
         StatementUpload principal = uploads.get(0);
         for (StatementUpload upload : uploads) {
             if (upload.getTransactionsImported() > principal.getTransactionsImported()) principal = upload;
@@ -520,8 +548,12 @@ public class BankStatementService {
         OffsetDateTime maisNova = datasTocadas.isEmpty() ? null : java.util.Collections.max(datasTocadas);
         eventPublisher.publish(new StatementImportedEvent(user.getId(), format, toSave.size(), principal.getId(),
                 maisAntiga, maisNova));
+        List<UUID> uploadIds = uploads.stream()
+                .filter(upload -> upload.getTransactionsImported() > 0)
+                .map(StatementUpload::getId)
+                .toList();
         return new ImportResult(principal.getId(), toSave.size(), suggested, uncategorized, reconciled, false,
-                format.name());
+                format.name(), uploadIds);
     }
 
     /**
@@ -867,6 +899,18 @@ public class BankStatementService {
     }
 
     public record ImportResult(UUID uploadId, int transactionsImported, int suggested,
-                               int uncategorized, int reconciled, boolean duplicated, String format) {
+                               int uncategorized, int reconciled, boolean duplicated, String format,
+                               List<UUID> uploadIds) {
+
+        /** Mantém os chamadores antigos e associa o upload único à nova lista. */
+        public ImportResult(UUID uploadId, int transactionsImported, int suggested,
+                            int uncategorized, int reconciled, boolean duplicated, String format) {
+            this(uploadId, transactionsImported, suggested, uncategorized, reconciled, duplicated, format,
+                    uploadId == null ? List.of() : List.of(uploadId));
+        }
+
+        public ImportResult {
+            uploadIds = List.copyOf(uploadIds);
+        }
     }
 }

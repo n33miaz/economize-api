@@ -26,6 +26,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.regex.Pattern;
 
 /**
  * Provedor de ações da B3 (Brapi) e <b>único ponto por onde a cota diária dela é
@@ -45,6 +46,15 @@ public class BrapiProvider implements MarketDataProvider {
     private final String brapiToken;
     private final MarketSnapshotStore snapshotStore;
     private final QuoteBudget quoteBudget;
+
+    /**
+     * Forma de um código da B3 aceito na entrada: letras, dígitos, o {@code ^}
+     * dos índices ({@code ^BVSP}) e ponto, até 12. Cobre ação (PETR4), FII
+     * (MXRF11), BDR (AAPL34), ETF e índice. Existe porque o código vai para a
+     * URL da Brapi e para a chave do snapshot: {@code PETR4?X=1} contornava o
+     * cache e a quarentena e gravava linha nova a cada variação.
+     */
+    public static final Pattern TICKER = Pattern.compile("^[A-Z0-9^.]{1,12}$");
 
     // Uma requisição por ticker: a Brapi devolve 400 para o lote (o plano limita
     // a quantidade de ativos por chamada) e o "^BVSP" percent-encodado (%5EBVSP)
@@ -71,6 +81,22 @@ public class BrapiProvider implements MarketDataProvider {
     private final Cache<String, Boolean> unknownTickers = Caffeine.newBuilder()
             .expireAfterWrite(UNKNOWN_TTL)
             .maximumSize(600)
+            .build();
+
+    /**
+     * Detalhe VIVO por símbolo. Sem ele, cada abertura da folha do ativo gastava
+     * uma requisição do teto sob demanda (500/dia, o mesmo da busca e do
+     * catálogo) — abrir e fechar o mesmo papel algumas vezes já pesava no dia.
+     * Vinte minutos é o frescor que a busca e o catálogo já aceitam para cotação
+     * de cauda; série diária e faixa de 52 semanas não mudam nesse intervalo.
+     * Só entra o que veio da rede: detalhe stale (sem orçamento ou provedor
+     * fora) não é guardado, para a próxima abertura tentar de novo.
+     */
+    static final Duration DETAIL_TTL = Duration.ofMinutes(20);
+
+    private final Cache<String, AssetDetail> detailCache = Caffeine.newBuilder()
+            .expireAfterWrite(DETAIL_TTL)
+            .maximumSize(300)
             .build();
 
     public BrapiProvider(WebClient webClient,
@@ -158,6 +184,12 @@ public class BrapiProvider implements MarketDataProvider {
         String symbol = ticker == null ? "" : ticker.trim().toUpperCase();
         if (symbol.isEmpty()) return Mono.empty();
 
+        // o cache vem ANTES do orçamento: o que já está guardado não custa cota
+        AssetDetail cached = detailCache.getIfPresent(symbol);
+        if (cached != null) {
+            return Mono.just(cached);
+        }
+
         if (unknownTickers.getIfPresent(symbol) != null
                 || quoteBudget.tryAcquire(1, QuoteBudget.Purpose.ON_DEMAND) < 1) {
             return Mono.just(staleDetail(symbol));
@@ -170,6 +202,11 @@ public class BrapiProvider implements MarketDataProvider {
                 .bodyToMono(new ParameterizedTypeReference<Map<String, Object>>() {
                 })
                 .map(response -> parseDetail(symbol, response))
+                .doOnNext(detail -> {
+                    if (!detail.stale()) {
+                        detailCache.put(symbol, detail);
+                    }
+                })
                 .onErrorResume(e -> {
                     if (isNotFound(e)) {
                         unknownTickers.put(symbol, Boolean.TRUE);
@@ -266,7 +303,7 @@ public class BrapiProvider implements MarketDataProvider {
                     if (isNotFound(e)) {
                         // resposta EXPLÍCITA de que o ativo não existe: é o único
                         // caso em que repetir a pergunta seria desperdício certo
-                        log.info("Brapi não conhece o ticker [{}]; em quarentena por {}h", ticker,
+                        log.info("Brapi não conhece o ticker [{}]; em quarentena por {}h", LogSafe.value(ticker),
                                 UNKNOWN_TTL.toHours());
                         unknownTickers.put(ticker, Boolean.TRUE);
                         return Mono.just(Collections.<Indicator>emptyList());
@@ -279,10 +316,12 @@ public class BrapiProvider implements MarketDataProvider {
     private List<Indicator> staleOrEmpty(String ticker, String reason) {
         Optional<List<Indicator>> stale = snapshotStore.find(snapshotKey(ticker));
         if (stale.isPresent()) {
-            log.warn("Cotação viva indisponível para [{}] ({}); servindo snapshot stale", ticker, reason);
+            log.warn("Cotação viva indisponível para [{}] ({}); servindo snapshot stale", LogSafe.value(ticker),
+                    LogSafe.value(reason));
             return stale.get();
         }
-        log.error("Cotação indisponível para [{}] ({}) e sem snapshot stale", ticker, reason);
+        log.error("Cotação indisponível para [{}] ({}) e sem snapshot stale", LogSafe.value(ticker),
+                LogSafe.value(reason));
         return Collections.emptyList();
     }
 

@@ -1,5 +1,6 @@
 package br.com.economize.service;
 
+import br.com.economize.exception.ResourceConflictException;
 import br.com.economize.model.SweepRun;
 import br.com.economize.model.User;
 import br.com.economize.repository.BankTransactionRepository;
@@ -27,6 +28,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
@@ -157,12 +159,15 @@ class WatchmanServiceTest {
         when(sweepRunRepository.findByIdAndUserId(run.getId(), user.getId()))
                 .thenReturn(Optional.of(run));
         when(sweepRunRepository.findItemIds(run.getId())).thenReturn(ids);
+        reivindica(run, 1);
 
         WatchmanService.Note recado = service.undo(EMAIL, run.getId());
 
         verify(bankTransactionRepository).clearInternalTransfer(user.getId(), ids);
         assertThat(recado.undone()).isTrue();
-        assertThat(run.getUndoneAt()).isNotNull();
+        // a marca agora é o UPDATE condicional, não um save da entidade lida
+        verify(sweepRunRepository).markUndone(eq(run.getId()), eq(user.getId()), any(OffsetDateTime.class));
+        verify(sweepRunRepository, never()).save(any(SweepRun.class));
     }
 
     @Test
@@ -189,9 +194,27 @@ class WatchmanServiceTest {
                 .thenReturn(Optional.of(run));
 
         assertThatThrownBy(() -> service.undo(EMAIL, run.getId()))
-                .isInstanceOf(IllegalStateException.class)
+                .isInstanceOf(ResourceConflictException.class)
                 .hasMessageContaining("já foi desfeita");
         verify(bankTransactionRepository, never()).clearIgnored(any(), anyList());
+        verify(sweepRunRepository, never()).markUndone(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("Dois desfazer simultâneos: quem perde a corrida no UPDATE recebe 409 e não solta nada")
+    void desfazerConcorrenteSoltaUmaVezSo() {
+        // Os dois leram undoneAt nulo; o banco decide o vencedor. O perdedor vê
+        // 0 linha alterada e não pode liberar as linhas de novo
+        SweepRun run = passada(SweepRun.Kind.DUPLICATE, 5, null);
+        when(sweepRunRepository.findByIdAndUserId(run.getId(), user.getId()))
+                .thenReturn(Optional.of(run));
+        reivindica(run, 0);
+
+        assertThatThrownBy(() -> service.undo(EMAIL, run.getId()))
+                .isInstanceOf(ResourceConflictException.class)
+                .hasMessageContaining("já foi desfeita");
+        verifyNoInteractions(bankTransactionRepository);
+        verify(sweepRunRepository, never()).findItemIds(any());
     }
 
     @Test
@@ -202,7 +225,9 @@ class WatchmanServiceTest {
                 .thenReturn(Optional.of(run));
 
         assertThatThrownBy(() -> service.undo(EMAIL, run.getId()))
+                .isInstanceOf(ResourceConflictException.class)
                 .hasMessageContaining("Recorrências");
+        verify(sweepRunRepository, never()).markUndone(any(), any(), any());
     }
 
     @Test
@@ -223,6 +248,7 @@ class WatchmanServiceTest {
         when(sweepRunRepository.findByIdAndUserId(run.getId(), user.getId()))
                 .thenReturn(Optional.of(run));
         when(sweepRunRepository.findItemIds(run.getId())).thenReturn(List.of());
+        reivindica(run, 1);
 
         assertThat(service.undo(EMAIL, run.getId()).undone()).isTrue();
         verify(bankTransactionRepository, never()).clearIgnored(any(), anyList());
@@ -247,7 +273,14 @@ class WatchmanServiceTest {
         when(sweepRunRepository.findByIdAndUserId(run.getId(), user.getId()))
                 .thenReturn(Optional.of(run));
         when(sweepRunRepository.findItemIds(run.getId())).thenReturn(ids);
+        reivindica(run, 1);
         service.undo(EMAIL, run.getId());
+    }
+
+    /** Quantas linhas o UPDATE condicional "mudou": 1 vence, 0 perdeu a corrida. */
+    private void reivindica(SweepRun run, int linhas) {
+        when(sweepRunRepository.markUndone(eq(run.getId()), eq(user.getId()), any(OffsetDateTime.class)))
+                .thenReturn(linhas);
     }
 
     private SweepRun passada(SweepRun.Kind kind, int afetados, BigDecimal volume) {

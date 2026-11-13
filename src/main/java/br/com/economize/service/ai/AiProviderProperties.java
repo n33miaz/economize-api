@@ -73,7 +73,11 @@ import java.util.stream.Collectors;
  *   economize.ai.providers.openai.models=gpt-4o-mini,gpt-4.1
  *   economize.ai.providers.gemini.endpoint=https://.../chat/completions
  *   economize.ai.providers.anthropic.max-tokens=8192
+ *   economize.ai.providers.gemini.retired-models=gemini-1.5-flash
  * </pre>
+ * {@code retired-models} ACRESCENTA aos aposentados do provedor: quem tinha
+ * salvo um deles passa a usar o padrão, sem migration (ver
+ * {@link ProviderConfig#modelOrDefault}).
  * {@code extra-models} ACRESCENTA ao fim da lista curada e é o caminho para o
  * caso comum (saiu modelo novo); {@code models} SUBSTITUI a lista inteira e é
  * para quando se quer restringir o que a instalação oferece. Nenhum dos dois
@@ -221,13 +225,27 @@ public class AiProviderProperties {
             maxTokens = over.getMaxTokens();
         }
 
+        List<String> retired = base.retiredModels();
+        if (over.getRetiredModels() != null) {
+            List<String> appended = new ArrayList<>(retired);
+            appended.addAll(cleanModels(provider, "retired-models", over.getRetiredModels()));
+            retired = appended;
+        }
+
         ProviderConfig merged = new ProviderConfig(
                 text(provider, "label", over.getLabel(), base.label()),
                 text(provider, "endpoint", over.getEndpoint(), base.endpoint()),
                 text(provider, "api-key-url", over.getApiKeyUrl(), base.apiKeyUrl()),
                 dedupe(models),
-                maxTokens);
+                maxTokens,
+                dedupe(retired));
         requireAbsoluteUrl(provider, merged.endpoint());
+        if (merged.retiredModels().contains(merged.defaultModel())) {
+            // o padrão é para onde o aposentado cai; aposentar o próprio padrão
+            // mandaria todo mundo para um modelo que o provedor já recusa
+            throw new IllegalStateException(field(provider, "retired-models")
+                    + ": não pode conter o modelo padrão (" + merged.defaultModel() + ")");
+        }
         return merged;
     }
 
@@ -303,6 +321,13 @@ public class AiProviderProperties {
         /** Acrescenta ao fim da lista curada — o caminho para "saiu modelo novo". */
         private List<String> extraModels;
 
+        /**
+         * Acrescenta aos modelos APOSENTADOS do provedor: quem tinha salvo um
+         * deles passa a usar o padrão. Tirar um modelo de {@code models} só o
+         * esconde de novas escolhas; aposentar é dizer que o provedor o recusa.
+         */
+        private List<String> retiredModels;
+
         private Integer maxTokens;
     }
 
@@ -313,7 +338,7 @@ public class AiProviderProperties {
      * runtime, mesmo que alguém acrescente um caminho de construção novo depois.
      */
     public record ProviderConfig(String label, String endpoint, String apiKeyUrl,
-                                 List<String> models, Integer maxTokens) {
+                                 List<String> models, Integer maxTokens, List<String> retiredModels) {
 
         public ProviderConfig {
             Objects.requireNonNull(label, "label do provedor");
@@ -323,11 +348,33 @@ public class AiProviderProperties {
             if (models.isEmpty()) {
                 throw new IllegalArgumentException("provedor sem nenhum modelo declarado");
             }
+            retiredModels = retiredModels == null ? List.of() : List.copyOf(retiredModels);
+        }
+
+        /** Provedor sem nenhum modelo aposentado conhecido. */
+        public ProviderConfig(String label, String endpoint, String apiKeyUrl,
+                              List<String> models, Integer maxTokens) {
+            this(label, endpoint, apiKeyUrl, models, maxTokens, List.of());
         }
 
         /** O primeiro da lista é o sugerido quando o usuário não escolhe. */
         public String defaultModel() {
             return models.get(0);
+        }
+
+        /**
+         * O modelo salvo pelo usuário, a menos que esteja APOSENTADO — aí, o
+         * padrão do provedor. Existe porque o Google aposentou o gemini-2.0-flash
+         * em 12/11/2026 e quem o tinha salvo passaria a receber 404 em todo chat.
+         *
+         * <p>A régua é a lista explícita de aposentados, e não "fora do
+         * catálogo": modelo tirado da lista só para novas escolhas (como o
+         * claude-sonnet-4-5) pode seguir ativo no provedor, e trocá-lo em
+         * silêncio por outro seria rebaixar quem o escolheu. A troca vale só na
+         * LEITURA — ao usar e ao mostrar — e a linha do banco fica como está.
+         */
+        public String modelOrDefault(String saved) {
+            return saved == null || retiredModels.contains(saved.trim()) ? defaultModel() : saved;
         }
     }
 
@@ -336,8 +383,14 @@ public class AiProviderProperties {
         map.put(AiProvider.GEMINI, new ProviderConfig("Google Gemini",
                 "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
                 "https://aistudio.google.com/apikey",
-                List.of("gemini-2.0-flash", "gemini-2.5-flash", "gemini-2.5-pro"),
-                null));
+                // Medido em 12/11/2026: o modelo fixo 3.5 respondeu o prompt
+                // real em 6,6 s; o alias -latest apontava ao 3.8 sobrecarregado.
+                // O primeiro é o padrão; 2.5 não aceita mais novos usuários.
+                List.of("gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-flash-latest", "gemini-pro-latest"),
+                null,
+                // Só o 2.0 é aposentado: modelos 2.5 já salvos continuam sendo
+                // usados e, se falharem, o usuário recebe o erro MODEL claro.
+                List.of("gemini-2.0-flash")));
         map.put(AiProvider.OPENAI, new ProviderConfig("OpenAI",
                 "https://api.openai.com/v1/chat/completions",
                 "https://platform.openai.com/api-keys",

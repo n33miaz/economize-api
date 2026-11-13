@@ -1,6 +1,7 @@
 package br.com.economize.controller;
 
 import br.com.economize.config.CorsConfig;
+import br.com.economize.config.StatementImportProperties;
 import br.com.economize.model.BankTransaction;
 import br.com.economize.security.JwtAuthenticationFilter;
 import br.com.economize.security.JwtUtil;
@@ -26,7 +27,8 @@ import java.util.stream.IntStream;
 import static org.mockito.Mockito.when;
 
 @WebFluxTest(BankStatementController.class)
-@Import({ CorsConfig.class, SecurityConfig.class, JwtUtil.class, JwtAuthenticationFilter.class })
+@Import({ CorsConfig.class, SecurityConfig.class, JwtUtil.class, JwtAuthenticationFilter.class,
+        StatementImportProperties.class })
 class BankStatementControllerTest {
 
     private static final String EMAIL = "teste@economize.app";

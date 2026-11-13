@@ -1,6 +1,7 @@
 package br.com.economize.controller;
 
 import br.com.economize.config.ClientIpResolver;
+import br.com.economize.dto.auth.AuthResponse;
 import br.com.economize.dto.user.ChangePasswordRequest;
 import br.com.economize.dto.user.ConnectionInfoResponse;
 import br.com.economize.dto.user.UpdateUserRequest;
@@ -11,6 +12,7 @@ import br.com.economize.repository.BankTransactionRepository;
 import br.com.economize.repository.ReportRepository;
 import br.com.economize.repository.TransactionRepository;
 import br.com.economize.repository.UserRepository;
+import br.com.economize.security.JwtUtil;
 import br.com.economize.service.PasswordService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -38,6 +40,7 @@ public class UserController {
 
     private final UserRepository userRepository;
     private final PasswordService passwordService;
+    private final JwtUtil jwtUtil;
     // Só para contar: o hub do Perfil mostra três números, e antes disso a tela
     // baixava as três listas inteiras para chegar a eles
     private final BankTransactionRepository bankTransactionRepository;
@@ -120,14 +123,18 @@ public class UserController {
     }
 
     @Operation(operationId = "changePassword", summary = "Alterar senha do usuário autenticado",
-            description = "Exige a senha atual; se não conferir, retorna 400.")
+            description = "Exige a senha atual; se não conferir, retorna 400. A troca derruba todas as "
+                    + "sessões da conta, e a resposta traz um `token` NOVO (mesmo formato do login: token e "
+                    + "nome) para este aparelho continuar logado; os outros aparelhos precisam entrar de novo.")
     @PostMapping("/me/change-password")
-    public Mono<ResponseEntity<Void>> changePassword(
+    public Mono<ResponseEntity<AuthResponse>> changePassword(
             @AuthenticationPrincipal String email,
             @Valid @RequestBody ChangePasswordRequest request) {
         return Mono.fromCallable(() -> {
-            passwordService.changePassword(email, request.currentPassword(), request.newPassword());
-            return ResponseEntity.noContent().<Void>build();
+            User user = passwordService.changePassword(email, request.currentPassword(), request.newPassword());
+            // Era 204 sem corpo; o app publicado só confere o sucesso (2xx) e
+            // ignora o corpo, então 200 com o token não quebra quem não o lê
+            return ResponseEntity.ok(new AuthResponse(jwtUtil.generateToken(user), user.getName()));
         }).subscribeOn(Schedulers.boundedElastic());
     }
 

@@ -311,4 +311,29 @@ class IncomeSourceServiceTest {
                 .source(RecurringSeries.Source.DETECTED)
                 .build();
     }
+
+    @Test
+    void aceiteComRotuloLongoCabeNaColunaMesmoComSufixo() {
+        // o rótulo da série vai até 160; income_sources.name é VARCHAR(120)
+        String rotulo = "P".repeat(160);
+        RecurringSeries salario = series(RecurringSeries.Flow.INCOME, "salario", rotulo, (short) 5);
+        when(recurringSeriesRepository.findByIdAndUserId(salario.getId(), USER_ID))
+                .thenReturn(Optional.of(salario));
+        when(incomeSourceRepository.findByUserIdAndKindAndName(any(), any(), org.mockito.ArgumentMatchers.eq("P".repeat(120))))
+                .thenReturn(Optional.of(IncomeSource.builder().id(UUID.randomUUID()).build()));
+
+        WishResponses.IncomeSourceItem item = service.acceptSuggestion(EMAIL, salario.getId(), null);
+
+        assertThat(item.name()).hasSize(120).endsWith(" (2)").startsWith("P".repeat(116));
+    }
+
+    @Test
+    void corteDoNomeNaoParteEmojiAoMeio() {
+        // 119 letras + um emoji (2 unidades UTF-16): cortar em 120 deixaria
+        // meio par substituto, que o Postgres recusa como UTF-8 inválido
+        String nome = "a".repeat(119) + "\uD83D\uDE00";
+
+        assertThat(IncomeSourceService.fitName(nome, "")).isEqualTo("a".repeat(119));
+        assertThat(IncomeSourceService.fitName("curto", " (2)")).isEqualTo("curto (2)");
+    }
 }

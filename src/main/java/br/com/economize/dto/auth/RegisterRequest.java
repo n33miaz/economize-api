@@ -1,5 +1,6 @@
 package br.com.economize.dto.auth;
 
+import br.com.economize.validation.MaxUtf8Bytes;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
@@ -30,17 +31,20 @@ public class RegisterRequest {
 
     @Schema(description = "Como a pessoa quer ser chamada no app", example = "Alice")
     @NotBlank(message = "Diga seu nome")
-    @Size(max = 120, message = "O nome não pode passar de 120 caracteres")
+    // users.name é VARCHAR(100) (V1): passar disso estourava no banco e voltava 409
+    @Size(max = 100, message = "O nome não pode passar de 100 caracteres")
     private String name;
 
     @Schema(example = "alice@exemplo.com")
     @NotBlank(message = "Informe seu e-mail")
     @Email(message = "E-mail inválido")
-    @Size(max = 180, message = "O e-mail não pode passar de 180 caracteres")
+    // users.email é VARCHAR(150) (V1)
+    @Size(max = 150, message = "O e-mail não pode passar de 150 caracteres")
     private String email;
 
     @Schema(description = "Mínimo de 8 caracteres — o mesmo piso da troca e da recuperação de senha")
     @NotBlank(message = "Escolha uma senha")
     @Size(min = 8, max = 100, message = "A senha precisa ter de 8 a 100 caracteres")
+    @MaxUtf8Bytes(value = 72, message = MaxUtf8Bytes.SENHA)
     private String password;
 }

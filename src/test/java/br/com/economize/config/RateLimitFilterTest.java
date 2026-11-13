@@ -335,6 +335,29 @@ class RateLimitFilterTest {
         }
     }
 
+    @Test
+    @DisplayName("Rota de integração também tem limite, e o balde é por chave (V44)")
+    void integracaoTemLimitePorChave() {
+        String rota = "/api/v1/integration/shopping/trips";
+        String chave = "Bearer eco_" + "A".repeat(43);
+        for (int i = 0; i < 60; i++) {
+            filter.filter(MockServerWebExchange.from(
+                    MockServerHttpRequest.get(rota).header(HttpHeaders.AUTHORIZATION, chave)), chain).block();
+        }
+        assertEquals(60, chainCalls.get());
+
+        ServerWebExchange barrada = MockServerWebExchange.from(
+                MockServerHttpRequest.get(rota).header(HttpHeaders.AUTHORIZATION, chave));
+        filter.filter(barrada, chain).block();
+        assertEquals(HttpStatus.TOO_MANY_REQUESTS, barrada.getResponse().getStatusCode());
+        assertEquals(60, chainCalls.get());
+
+        // Outra chave tem o balde dela: uma integração que exagera não derruba a outra
+        filter.filter(MockServerWebExchange.from(MockServerHttpRequest.get(rota)
+                .header(HttpHeaders.AUTHORIZATION, "Bearer eco_" + "B".repeat(43))), chain).block();
+        assertEquals(61, chainCalls.get());
+    }
+
     private ServerWebExchange get(String origin) {
         return get(origin, "/api/v1/indicators/all");
     }

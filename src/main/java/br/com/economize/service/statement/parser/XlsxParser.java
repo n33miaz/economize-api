@@ -1,14 +1,18 @@
 package br.com.economize.service.statement.parser;
 
+import br.com.economize.config.StatementImportProperties;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.poi.openxml4j.util.ZipSecureFile;
 import org.apache.poi.ss.usermodel.Cell;
 import org.apache.poi.ss.usermodel.DateUtil;
 import org.apache.poi.ss.usermodel.Row;
 import org.apache.poi.ss.usermodel.Sheet;
 import org.apache.poi.ss.usermodel.Workbook;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.math.BigDecimal;
@@ -20,10 +24,39 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.zip.ZipInputStream;
 
 @Slf4j
 @Component
 public class XlsxParser implements StatementParserStrategy {
+
+    /** Usado pelos testes que montam o parser à mão; o Spring injeta o outro. */
+    public XlsxParser() {
+        this(new StatementImportProperties());
+    }
+
+    /**
+     * Entradas por XLSX. Uma planilha real tem de 10 a 20 (XML da planilha,
+     * estilos, strings, relações); o POI aceitaria até 1000.
+     */
+    private static final int MAX_ENTRIES = 100;
+
+    private final StatementImportProperties limits;
+
+    /**
+     * XLSX é um ZIP de XML, e o XSSF monta a planilha inteira no heap: o que
+     * custa memória é o tamanho EXPANDIDO. O POI já recusa razão de compressão
+     * acima de 100:1 (padrão de {@code ZipSecureFile}), mas o teto por entrada
+     * vinha em 4 GB — um arquivo de 10 MB comprimido "honestamente" a 1:90
+     * viraria quase 1 GB de XML. O teto do POI é estático (vale para a JVM
+     * inteira), por isso é aplicado uma vez aqui, no bean; a soma de todas as
+     * entradas, que o POI não confere, é medida em {@link #checkExpansion}.
+     */
+    @Autowired
+    public XlsxParser(StatementImportProperties limits) {
+        this.limits = limits;
+        ZipSecureFile.setMaxEntrySize(limits.getMaxXlsxEntrySize().toBytes());
+    }
 
     @Override
     public StatementFormat format() {
@@ -33,7 +66,14 @@ public class XlsxParser implements StatementParserStrategy {
     @Override
     public List<ParsedTransaction> parse(InputStream input) {
         List<ParsedTransaction> out = new ArrayList<>();
-        try (Workbook wb = new XSSFWorkbook(input)) {
+        byte[] bytes;
+        try {
+            bytes = input.readAllBytes();
+        } catch (IOException e) {
+            throw new IllegalStateException("Falha ao ler XLSX", e);
+        }
+        checkExpansion(bytes);
+        try (Workbook wb = new XSSFWorkbook(new ByteArrayInputStream(bytes))) {
             Sheet sheet = wb.getSheetAt(0);
             if (sheet == null) return out;
             Map<String, Integer> header = readHeader(sheet.getRow(sheet.getFirstRowNum()));
@@ -75,10 +115,58 @@ public class XlsxParser implements StatementParserStrategy {
             // .xls (formato OLE2 antigo) cai aqui — a mensagem crua do POI é indecifrável
             throw new IllegalArgumentException(
                     "Planilhas .xls antigas não são suportadas — exporte o extrato como .xlsx");
-        } catch (IOException e) {
+        } catch (IOException | RuntimeException e) {
+            // As travas de ZIP do POI (razão de compressão, tamanho expandido)
+            // chegam como IOException ou embrulhadas em runtime; sem esta
+            // conversão a recusa sairia como 500 e mandaria procurar bug
+            if (isZipLimit(e)) throw tooExpanded();
+            if (e instanceof RuntimeException runtime) throw runtime;
             throw new IllegalStateException("Falha ao ler XLSX", e);
         }
         return out;
+    }
+
+    /**
+     * Descomprime o ZIP inteiro num buffer descartável, só contando bytes, antes
+     * de o POI montar qualquer coisa. O POI confere razão e tamanho POR
+     * ENTRADA; um arquivo com dezenas de entradas, cada uma logo abaixo dos
+     * tetos, passaria por ele e somaria centenas de MB. A conta usa o que foi
+     * de fato descomprimido, nunca o tamanho declarado no ZIP, que é texto do
+     * cliente. Um .xls (OLE2) não é ZIP: não tem entradas e segue para o POI,
+     * que dá a mensagem própria de formato antigo.
+     */
+    private void checkExpansion(byte[] bytes) {
+        long max = limits.getMaxXlsxExpandedSize().toBytes();
+        long total = 0;
+        int entries = 0;
+        byte[] scratch = new byte[8192];
+        try (ZipInputStream zip = new ZipInputStream(new ByteArrayInputStream(bytes))) {
+            while (zip.getNextEntry() != null) {
+                if (++entries > MAX_ENTRIES) throw tooExpanded();
+                int n;
+                while ((n = zip.read(scratch)) > 0) {
+                    total += n;
+                    if (total > max) throw tooExpanded();
+                }
+            }
+        } catch (IOException e) {
+            // ZIP corrompido: o POI vai recusar com a mensagem dele
+            log.debug("XLSX: pré-checagem do ZIP falhou, seguindo para o POI: {}", e.getMessage());
+        }
+    }
+
+    private static IllegalArgumentException tooExpanded() {
+        return new IllegalArgumentException(
+                "A planilha se expande além do limite aceito para um extrato. "
+                        + "Exporte um período menor ou use OFX/CSV.");
+    }
+
+    private static boolean isZipLimit(Throwable e) {
+        for (Throwable t = e; t != null; t = t.getCause()) {
+            String msg = t.getMessage();
+            if (msg != null && (msg.contains("Zip bomb") || msg.contains("ZipSecureFile"))) return true;
+        }
+        return false;
     }
 
     private Map<String, Integer> readHeader(Row row) {

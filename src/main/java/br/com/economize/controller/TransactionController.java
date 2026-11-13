@@ -91,22 +91,29 @@ public class TransactionController {
 
     @Operation(summary = "Fila de revisão agrupada",
             description = "Transações aguardando aprovação (sugeridas) ou ajuda (sem categoria), "
-                    + "agrupadas por estabelecimento normalizado. uploadId restringe a uma importação.")
+                    + "agrupadas por estabelecimento normalizado. uploadId pode se repetir para restringir "
+                    + "a várias importações (ex.: ?uploadId=a&uploadId=b); um uploadId continua válido.")
     @GetMapping("/review")
     public Mono<List<ReviewGroupResponse>> reviewQueue(
             @AuthenticationPrincipal String email,
-            @RequestParam(required = false) UUID uploadId) {
-        return Mono.fromCallable(() -> ReviewGroupResponse.groupsFrom(reviewService.reviewQueue(email, uploadId)))
+            // Mantém ?uploadId=a e aceita ?uploadId=a&uploadId=b.
+            @RequestParam(name = "uploadId", required = false) List<UUID> uploadIds) {
+        return Mono.fromCallable(() -> ReviewGroupResponse.groupsFrom(
+                        reviewService.reviewQueue(email, uploadIds == null ? List.of() : uploadIds)))
                 .subscribeOn(Schedulers.boundedElastic());
     }
 
     @Operation(summary = "Quantas transações aguardam revisão",
             description = "Só o número. A Home e a Análise mostravam \"N transações esperando você\" baixando "
                     + "a fila inteira agrupada (92 KB para 1.656 pendentes) a cada abertura, quando a única "
-                    + "coisa desenhada era a contagem.")
+                    + "coisa desenhada era a contagem. uploadId pode se repetir para contar várias importações.")
     @GetMapping("/review/count")
-    public Mono<Map<String, Object>> reviewCount(@AuthenticationPrincipal String email) {
-        return Mono.fromCallable(() -> Map.<String, Object>of("count", reviewService.pendingCount(email)))
+    public Mono<Map<String, Object>> reviewCount(
+            @AuthenticationPrincipal String email,
+            // Mesmo contrato da fila, para o número e as linhas terem o mesmo escopo.
+            @RequestParam(name = "uploadId", required = false) List<UUID> uploadIds) {
+        return Mono.fromCallable(() -> Map.<String, Object>of("count",
+                        reviewService.pendingCount(email, uploadIds == null ? List.of() : uploadIds)))
                 .subscribeOn(Schedulers.boundedElastic());
     }
 
@@ -249,12 +256,13 @@ public class TransactionController {
     }
 
     @Operation(summary = "Aprovar todas as sugestões pendentes",
-            description = "Confirma tudo que o motor sugeriu (não toca as sem categoria). uploadId restringe a uma importação.")
+            description = "Confirma tudo que o motor sugeriu (não toca as sem categoria). uploadId pode se repetir para restringir a importações.")
     @PostMapping("/review/confirm-all")
     public Mono<Map<String, Object>> confirmAll(
             @AuthenticationPrincipal String email,
-            @RequestParam(required = false) UUID uploadId) {
-        return Mono.fromCallable(() -> reviewService.confirmAll(email, uploadId))
+            // Evita confirmar só o primeiro upload quando a revisão veio de uma sync multi-banco.
+            @RequestParam(name = "uploadId", required = false) List<UUID> uploadIds) {
+        return Mono.fromCallable(() -> reviewService.confirmAll(email, uploadIds == null ? List.of() : uploadIds))
                 .subscribeOn(Schedulers.boundedElastic())
                 .map(outcome -> Map.of(
                         "confirmed", outcome.confirmed(),
