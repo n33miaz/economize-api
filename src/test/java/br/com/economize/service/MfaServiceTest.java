@@ -355,4 +355,18 @@ class MfaServiceTest {
             return this;
         }
     }
+
+    @Test
+    @DisplayName("chave trocada entre o setup e a ativação é 400 pedindo para refazer, e não 500")
+    void activateWithUnreadableSecretAsksToRedoSetup() {
+        String secret = service.startSetup(ana.getEmail()).secret();
+        entityManager.flush();
+        MfaService outraChave = new MfaService(userRepository, mfaRepository, recoveryCodeRepository,
+                new MfaSecretCipher(JWT_SECRET + "-trocada"), deviceRepository, encoder, relogio);
+
+        assertThatThrownBy(() -> outraChave.activate(ana.getEmail(), codeFor(secret)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Refaça o cadastro do autenticador");
+        assertThat(service.isEnabledFor(ana)).isFalse();
+    }
 }
