@@ -12,6 +12,7 @@ import br.com.economize.service.statement.category.DebtClassifier;
 import br.com.economize.service.wish.IncomePatternService;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -102,6 +103,9 @@ public class CommitmentPanelService {
      * @param thresholdPct limite do aviso em % (acima de 0 e até 100; nulo = o
      *                     configurado)
      */
+    // Leitura numa sessão só, como os vizinhos (DebtInsightService,
+    // CommittedIncomeService): WebFlux não mantém sessão aberta entre consultas
+    @Transactional(readOnly = true)
     public CommitmentsResponse panel(String email, Integer months, BigDecimal thresholdPct) {
         int horizonte = months != null ? months : DEFAULT_MONTHS;
         if (horizonte < 1 || horizonte > MAX_MONTHS) {
