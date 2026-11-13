@@ -113,8 +113,15 @@ public class MarketSnapshotStore {
     private final Clock clock;
     private final Scheduler blockingScheduler;
 
+    /**
+     * Intervalo entre limpezas da tabela. A do boot já basta no Render grátis
+     * (reinicia várias vezes por dia); esta cobre o processo que fica de pé.
+     */
+    static final Duration CLEANUP_INTERVAL = Duration.ofHours(24);
+
     private volatile boolean hydrated;
     private Instant nextHydrationAttempt = Instant.EPOCH;
+    private volatile Instant nextCleanup = Instant.EPOCH;
 
     /** Só memória — sem banco. É o modo dos testes de unidade dos provedores. */
     public MarketSnapshotStore() {
@@ -150,16 +157,19 @@ public class MarketSnapshotStore {
     // ------------------------------------------------------------ boot
 
     /**
-     * Carrega do banco, fora da thread de boot, tudo que ainda vale. É o que faz
-     * o primeiro /all depois de um reinício encontrar snapshot em memória em vez
-     * de lista vazia.
+     * Limpa o que venceu e carrega do banco, fora da thread de boot, tudo que
+     * ainda vale. É o que faz o primeiro /all depois de um reinício encontrar
+     * snapshot em memória em vez de lista vazia.
      */
     @EventListener(ApplicationReadyEvent.class)
     public void warmUp() {
         if (repository == null) {
             return;
         }
-        Mono.fromRunnable(this::hydrateIfNeeded)
+        Mono.fromRunnable(() -> {
+            purgeExpired();
+            hydrateIfNeeded();
+        })
                 .subscribeOn(blockingScheduler)
                 .subscribe(ignored -> {
                 }, error -> log.warn("Snapshots não puderam ser carregados no boot: {}", error.toString()));
@@ -313,6 +323,10 @@ public class MarketSnapshotStore {
                 throw new IllegalStateException("payload não serializável: " + e.getMessage(), e);
             }
             repository.save(new MarketSnapshot(key, json, OffsetDateTime.ofInstant(savedAt, ZoneOffset.UTC), source));
+            // aproveita a thread que já está no banco; no máximo uma vez por dia
+            if (!clock.instant().isBefore(nextCleanup)) {
+                purgeExpired();
+            }
         })
                 .subscribeOn(blockingScheduler)
                 .subscribe(ignored -> {
@@ -359,9 +373,36 @@ public class MarketSnapshotStore {
     }
 
     /**
+     * Apaga as linhas com mais de {@link #MAX_AGE}: nada acima disso é servido,
+     * e sem a limpeza a tabela só crescia — cada ticker buscado uma vez virava
+     * linha eterna, e o boot pagava por todas. As linhas de orçamento
+     * ({@code data:budget:*}) do dia nunca caem aqui: são regravadas a cada
+     * uso, então o {@code saved_at} delas é sempre de hoje. Erro só vira WARN
+     * — limpar é higiene, não pode derrubar boot nem gravação.
+     */
+    void purgeExpired() {
+        if (repository == null) {
+            return;
+        }
+        Instant now = clock.instant();
+        nextCleanup = now.plus(CLEANUP_INTERVAL);
+        try {
+            int removed = repository.deleteSavedBefore(OffsetDateTime.ofInstant(now.minus(MAX_AGE), ZoneOffset.UTC));
+            if (removed > 0) {
+                log.info("{} snapshot(s) de mercado com mais de {} dias apagado(s)", removed, MAX_AGE.toDays());
+            }
+        } catch (RuntimeException e) {
+            log.warn("Limpeza de snapshots vencidos falhou ({}); nova tentativa em {} h", e.toString(),
+                    CLEANUP_INTERVAL.toHours());
+        }
+    }
+
+    /**
      * Povoa a memória com as listas de cotação do banco. Uma vez por processo
      * quando dá certo; com o banco fora do ar, tenta de novo depois de um
-     * intervalo em vez de desistir para sempre.
+     * intervalo em vez de desistir para sempre. Só pede ao banco o que ainda
+     * vale e não é {@code data:} — antes era um {@code findAll()} que trazia o
+     * JSON de todas as linhas para descartar a maioria em memória.
      */
     private synchronized void hydrateIfNeeded() {
         if (hydrated || repository == null || clock.instant().isBefore(nextHydrationAttempt)) {
@@ -369,7 +410,8 @@ public class MarketSnapshotStore {
         }
         try {
             int loaded = 0;
-            for (MarketSnapshot row : repository.findAll()) {
+            OffsetDateTime cutoff = OffsetDateTime.ofInstant(clock.instant().minus(MAX_AGE), ZoneOffset.UTC);
+            for (MarketSnapshot row : repository.findHydratable(cutoff, DATA_PREFIX + "%")) {
                 String key = row.getKey();
                 if (key.startsWith(DATA_PREFIX) || memory.getIfPresent(key) != null) {
                     continue;
