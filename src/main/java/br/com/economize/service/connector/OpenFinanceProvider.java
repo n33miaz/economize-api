@@ -68,7 +68,24 @@ public interface OpenFinanceProvider {
     record WidgetDescriptor(String scriptUrl, String kind) {
     }
 
-    /** Resultado da importação + quantas conexões foram percorridas. */
-    record SyncResult(BankStatementService.ImportResult result, int itemsSynced) {
+    /**
+     * Resultado da importação + quantas conexões foram percorridas + as que
+     * ficaram de fora por exigirem reconexão (vazia quando nenhuma).
+     */
+    record SyncResult(BankStatementService.ImportResult result, int itemsSynced,
+                      List<SkippedConnection> skippedConnections) {
+
+        public SyncResult(BankStatementService.ImportResult result, int itemsSynced) {
+            this(result, itemsSynced, List.of());
+        }
+    }
+
+    /**
+     * Conexão que a sincronização não leu porque só a pessoa destrava.
+     * {@code id} é o mesmo da lista de conexões; {@code name}, o nome do banco
+     * que o app já mostra; {@code reason}, o estado gravado (NOT_FOUND,
+     * NEEDS_USER_ACTION).
+     */
+    record SkippedConnection(java.util.UUID id, String name, String reason) {
     }
 }

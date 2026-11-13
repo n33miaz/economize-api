@@ -1,5 +1,6 @@
 package br.com.economize.service;
 
+import br.com.economize.exception.ResourceConflictException;
 import br.com.economize.exception.ResourceNotFoundException;
 import br.com.economize.model.SweepRun;
 import br.com.economize.model.User;
@@ -93,13 +94,25 @@ public class WatchmanService {
         User user = requireUser(email);
         SweepRun run = sweepRunRepository.findByIdAndUserId(runId, user.getId())
                 .orElseThrow(() -> new ResourceNotFoundException("Passada não encontrada"));
+        // 409, e não 500: é o estado da passada que impede, não falha nossa.
+        // IllegalStateException caía no handler genérico como erro interno
         if (run.getUndoneAt() != null) {
-            throw new IllegalStateException("Esta passada já foi desfeita");
+            throw new ResourceConflictException("Esta passada já foi desfeita");
         }
         if (!canUndo(run)) {
-            throw new IllegalStateException(
+            // Também 409: o pedido é bem formado, quem não aceita desfazer é o
+            // tipo da passada (estado do recurso), não a entrada do cliente
+            throw new ResourceConflictException(
                     "A detecção de recorrência não se desfaz por aqui: apague a série na tela de "
                             + "Recorrências, que é onde ela vive");
+        }
+
+        // Reivindica a passada ANTES de soltar as linhas. Na ordem inversa, dois
+        // desfazer simultâneos soltavam os dois; aqui só quem mudou a linha
+        // segue. Tudo na mesma transação: se a liberação falhar, a marca volta
+        OffsetDateTime agora = OffsetDateTime.now();
+        if (sweepRunRepository.markUndone(runId, user.getId(), agora) != 1) {
+            throw new ResourceConflictException("Esta passada já foi desfeita");
         }
 
         List<UUID> ids = sweepRunRepository.findItemIds(runId);
@@ -116,8 +129,6 @@ public class WatchmanService {
                 default -> throw new IllegalStateException("Vigia sem desfazer: " + run.getKind());
             }
         }
-        run.setUndoneAt(OffsetDateTime.now());
-        sweepRunRepository.save(run);
         log.info("Passada desfeita: {} com {} linha(s), user={}",
                 run.getKind(), ids.size(), user.getId());
         return new Note(run.getId(), run.getKind(), nameOf(run.getKind()), roleOf(run.getKind()),

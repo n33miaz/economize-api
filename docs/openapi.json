@@ -1,6 +1,29 @@
 {
   "components": {
     "schemas": {
+      "AcceptIncomeSuggestion": {
+        "properties": {
+          "anchorDay": {
+            "format": "int32",
+            "maximum": 31,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "expectedAmount": {
+            "minimum": 0.0,
+            "type": "number"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 120,
+            "minLength": 0,
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "AccountMergeSuggestion": {
         "properties": {
           "digits": {
@@ -269,7 +292,7 @@
           "model": {
             "default": "",
             "description": "Modelo em vigor",
-            "example": "gemini-2.0-flash",
+            "example": "gemini-3.5-flash",
             "type": "string"
           },
           "provider": {
@@ -542,6 +565,9 @@
           },
           "hoursPerMonth": {
             "type": "number"
+          },
+          "lastClosedCycle": {
+            "$ref": "#/components/schemas/ClosedCycle"
           },
           "monthlyExpense": {
             "type": "number"
@@ -951,6 +977,25 @@
         },
         "type": "object"
       },
+      "ClosedCycle": {
+        "properties": {
+          "cycleMonth": {
+            "type": "string"
+          },
+          "end": {
+            "format": "date",
+            "type": "string"
+          },
+          "leftover": {
+            "type": "number"
+          },
+          "start": {
+            "format": "date",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "Combined": {
         "properties": {
           "categories": {
@@ -1119,6 +1164,12 @@
           "lastSyncedAt": {
             "format": "date-time",
             "type": "string"
+          },
+          "needsAttention": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": "string"
           }
         },
         "type": "object"
@@ -1157,6 +1208,12 @@
             "format": "int32",
             "type": "integer"
           },
+          "skippedConnections": {
+            "items": {
+              "$ref": "#/components/schemas/SkippedConnection"
+            },
+            "type": "array"
+          },
           "suggested": {
             "format": "int32",
             "type": "integer"
@@ -1172,6 +1229,13 @@
           "uploadId": {
             "format": "uuid",
             "type": "string"
+          },
+          "uploadIds": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "type": "array"
           }
         },
         "type": "object"
@@ -1318,6 +1382,19 @@
         },
         "required": [
           "kind",
+          "name"
+        ],
+        "type": "object"
+      },
+      "CreateIntegrationKey": {
+        "properties": {
+          "name": {
+            "maxLength": 60,
+            "minLength": 0,
+            "type": "string"
+          }
+        },
+        "required": [
           "name"
         ],
         "type": "object"
@@ -2018,6 +2095,38 @@
         ],
         "type": "object"
       },
+      "FreeAfterSalary": {
+        "properties": {
+          "committedAfterSalaryCents": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "committedBeforeSalaryCents": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "daysUntilSalary": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "expectedSalaryCents": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "freeCents": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "salaryDate": {
+            "format": "date",
+            "type": "string"
+          },
+          "salaryKnown": {
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
       "HistoricalDataPoint": {
         "properties": {
           "high": {
@@ -2264,6 +2373,202 @@
           },
           "share": {
             "type": "number"
+          }
+        },
+        "type": "object"
+      },
+      "IntegrationAdvice": {
+        "properties": {
+          "free": {
+            "$ref": "#/components/schemas/FreeAfterSalary"
+          },
+          "generatedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "incomePattern": {
+            "$ref": "#/components/schemas/IncomePatternResponse"
+          }
+        },
+        "type": "object"
+      },
+      "IntegrationKeyCreated": {
+        "properties": {
+          "key": {
+            "$ref": "#/components/schemas/IntegrationKeyItem"
+          },
+          "secret": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "IntegrationKeyItem": {
+        "properties": {
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "lastUsedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "prefix": {
+            "type": "string"
+          },
+          "revoked": {
+            "type": "boolean"
+          },
+          "revokedAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "IntegrationTrip": {
+        "properties": {
+          "budgetCents": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "clientId": {
+            "type": "string"
+          },
+          "closedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/IntegrationTripItem"
+            },
+            "type": "array"
+          },
+          "itemsTotalCents": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "notes": {
+            "type": "string"
+          },
+          "own": {
+            "type": "boolean"
+          },
+          "ownerId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "paidTotalCents": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "receiptIssuerCnpj": {
+            "type": "string"
+          },
+          "receiptKey": {
+            "type": "string"
+          },
+          "receiptTotalCents": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "reconciledTransactionId": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "startedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "storeName": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "IntegrationTripItem": {
+        "properties": {
+          "addedBy": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "checked": {
+            "type": "boolean"
+          },
+          "clientId": {
+            "type": "string"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "lineTotalCents": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "normalizedName": {
+            "type": "string"
+          },
+          "promoNote": {
+            "type": "string"
+          },
+          "quantity": {
+            "type": "number"
+          },
+          "unitPriceCents": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "IntegrationTripPage": {
+        "properties": {
+          "hasMore": {
+            "type": "boolean"
+          },
+          "nextCursor": {
+            "type": "string"
+          },
+          "trips": {
+            "items": {
+              "$ref": "#/components/schemas/IntegrationTrip"
+            },
+            "type": "array"
           }
         },
         "type": "object"
@@ -3927,7 +4232,7 @@
             "default": "",
             "example": "alice@exemplo.com",
             "format": "email",
-            "maxLength": 180,
+            "maxLength": 150,
             "minLength": 0,
             "type": "string"
           },
@@ -3935,7 +4240,7 @@
             "default": "",
             "description": "Como a pessoa quer ser chamada no app",
             "example": "Alice",
-            "maxLength": 120,
+            "maxLength": 100,
             "minLength": 0,
             "type": "string"
           },
@@ -4267,6 +4572,21 @@
           "openTrips": {
             "format": "int32",
             "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "SkippedConnection": {
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
           }
         },
         "type": "object"
@@ -5524,6 +5844,12 @@
         "bearerFormat": "JWT",
         "scheme": "bearer",
         "type": "http"
+      },
+      "integrationKey": {
+        "bearerFormat": "eco_...",
+        "description": "Chave de integração criada em /api/v1/integration-keys. Vale só nas rotas /api/v1/integration/**.",
+        "scheme": "bearer",
+        "type": "http"
       }
     }
   },
@@ -6536,6 +6862,21 @@
           }
         },
         "summary": "Segundo passo do login",
+        "tags": [
+          "Autenticação"
+        ]
+      }
+    },
+    "/api/v1/auth/logout-all": {
+      "post": {
+        "description": "Derruba TODAS as sessões da conta, inclusive a que fez o pedido: todo token emitido até agora passa a responder 401, e os aparelhos lembrados voltam a pedir o código do segundo fator. Para continuar usando o app é preciso entrar de novo.",
+        "operationId": "logoutAll",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        },
+        "summary": "Sair de todos os aparelhos",
         "tags": [
           "Autenticação"
         ]
@@ -7748,7 +8089,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/CreateIncomeSource"
+                "$ref": "#/components/schemas/AcceptIncomeSuggestion"
               }
             }
           }
@@ -8023,7 +8364,7 @@
     },
     "/api/v1/indicators/historical/{currencyCode}": {
       "get": {
-        "description": "Retorna o histórico de variação de uma moeda nos últimos dias.",
+        "description": "Retorna o histórico de variação de uma moeda nos últimos dias.\n\n`currencyCode`: código de moeda ou cripto da lista suportada (USD, EUR, BTC...), com ou sem o prefixo `currency_`/`crypto_`. `days`: só as janelas que o app usa (hoje, 7). Fora disso responde 400 — cada par novo (código, janela) custaria uma chamada à AwesomeAPI, do mesmo orçamento diário que sustenta a Home.",
         "operationId": "getHistoricalData",
         "parameters": [
           {
@@ -8057,7 +8398,21 @@
                 }
               }
             },
-            "description": "OK"
+            "description": "Série diária, mais recente primeiro"
+          },
+          "400": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail",
+                  "additionalProperties": {
+                    "default": ""
+                  },
+                  "default": ""
+                }
+              }
+            },
+            "description": "Código fora da lista suportada ou janela não aceita"
           }
         },
         "summary": "Dados Históricos",
@@ -8167,7 +8522,7 @@
     },
     "/api/v1/indicators/search": {
       "get": {
-        "description": "Busca cotação de um ativo específico (ex: PETR4, AAPL34).\n\nAceita mais de um ticker separado por vírgula, até o teto de 10 por chamada — acima disso responde 400. O teto existe porque o provedor de ações cobra UMA requisição por ticker contra a cota diária: sem ele, uma única chamada com centenas de códigos consumiria a cota do dia inteiro e deixaria todo mundo sem cotação. A chamada de ticker único, que é a do app publicado, não muda em nada.",
+        "description": "Busca cotação de um ativo específico (ex: PETR4, AAPL34).\n\nCada código: letras, dígitos, `^` e ponto, até 12 caracteres (PETR4, MXRF11, AAPL34, ^BVSP); fora disso responde 400.\n\nAceita mais de um ticker separado por vírgula, até o teto de 10 por chamada — acima disso responde 400. O teto existe porque o provedor de ações cobra UMA requisição por ticker contra a cota diária: sem ele, uma única chamada com centenas de códigos consumiria a cota do dia inteiro e deixaria todo mundo sem cotação. A chamada de ticker único, que é a do app publicado, não muda em nada.",
         "operationId": "searchIndicator",
         "parameters": [
           {
@@ -8205,7 +8560,7 @@
                 }
               }
             },
-            "description": "Busca vazia ou acima do teto de tickers"
+            "description": "Busca vazia, código fora do formato ou acima do teto de tickers"
           }
         },
         "summary": "Buscar ativo específico",
@@ -8267,6 +8622,20 @@
             },
             "description": "Detalhe do ativo"
           },
+          "400": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetail",
+                  "additionalProperties": {
+                    "default": ""
+                  },
+                  "default": ""
+                }
+              }
+            },
+            "description": "Código fora do formato de um papel da B3"
+          },
           "404": {
             "content": {
               "*/*": {
@@ -8285,6 +8654,160 @@
         "summary": "Detalhe enriquecido de um ativo",
         "tags": [
           "Indicadores Econômicos"
+        ]
+      }
+    },
+    "/api/v1/integration-keys": {
+      "get": {
+        "description": "Da mais nova para a mais antiga, revogadas inclusive, sem o segredo: nome, começo do segredo (`prefix`), criação, último uso (aproximado — atualizado no máximo a cada cinco minutos) e revogação.",
+        "operationId": "listIntegrationKeys",
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/IntegrationKeyItem"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "summary": "Minhas chaves",
+        "tags": [
+          "Chaves de integração"
+        ]
+      },
+      "post": {
+        "description": "Devolve o segredo (`eco_...`) em `secret` — é a ÚNICA vez em que ele aparece: o servidor guarda só o hash, e não há como recuperá-lo depois. No máximo 5 chaves ativas por pessoa; a sexta responde 409.",
+        "operationId": "createIntegrationKey",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateIntegrationKey"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntegrationKeyCreated"
+                }
+              }
+            },
+            "description": "Created"
+          }
+        },
+        "summary": "Criar uma chave",
+        "tags": [
+          "Chaves de integração"
+        ]
+      }
+    },
+    "/api/v1/integration-keys/{id}": {
+      "delete": {
+        "description": "A chave deixa de autenticar na hora e não volta. Revogar de novo é inofensivo. Chave de outra pessoa responde 404.",
+        "operationId": "revokeIntegrationKey",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          }
+        },
+        "summary": "Revogar uma chave",
+        "tags": [
+          "Chaves de integração"
+        ]
+      }
+    },
+    "/api/v1/integration/shopping/advice": {
+      "get": {
+        "description": "`incomePattern` é exatamente a resposta de `/api/v1/analytics/income-pattern` (valores em reais). `free` é o que sobra do próximo salário, como `/api/v1/income/committed` calcula, em centavos; sem salário confirmado com dia de pagamento, `salaryKnown` é falso e `freeCents` vem nulo. `generatedAt` é a hora desta resposta, em UTC. Responde com `ETag` calculado sobre o conteúdo (sem `generatedAt`): mandando-o de volta em `If-None-Match`, a resposta é 304 sem corpo enquanto nada mudou.",
+        "operationId": "integrationShoppingAdvice",
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntegrationAdvice"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "security": [
+          {
+            "integrationKey": []
+          }
+        ],
+        "summary": "Melhor dia de compra, padrão de renda e quanto está livre",
+        "tags": [
+          "Integração — compras"
+        ]
+      }
+    },
+    "/api/v1/integration/shopping/trips": {
+      "get": {
+        "description": "As compras do dono da chave e as que a casa dele compartilhou (`own` diz qual é qual), da mais antiga para a mais nova, com os itens vivos — item removido não vem. `limit` vale 50 por padrão e 200 no máximo. Para a página seguinte, mande em `cursor` o `nextCursor` recebido; `hasMore` diz se há mais agora. O `nextCursor` vem também na última página: guardado, ele traz depois só as compras criadas desde então. Datas em UTC (ISO-8601) e dinheiro em centavos inteiros. `paidTotalCents` é a nota quando informada, senão a soma dos itens pegos. Cursor ilegível responde 400.",
+        "operationId": "integrationShoppingTrips",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "format": "int32",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/IntegrationTripPage"
+                }
+              }
+            },
+            "description": "OK"
+          }
+        },
+        "security": [
+          {
+            "integrationKey": []
+          }
+        ],
+        "summary": "Histórico de compras, página a página",
+        "tags": [
+          "Integração — compras"
         ]
       }
     },
@@ -9921,7 +10444,7 @@
     },
     "/api/v1/transactions/review": {
       "get": {
-        "description": "Transações aguardando aprovação (sugeridas) ou ajuda (sem categoria), agrupadas por estabelecimento normalizado. uploadId restringe a uma importação.",
+        "description": "Transações aguardando aprovação (sugeridas) ou ajuda (sem categoria), agrupadas por estabelecimento normalizado. uploadId pode se repetir para restringir a várias importações (ex.: ?uploadId=a&uploadId=b); um uploadId continua válido.",
         "operationId": "reviewQueue",
         "parameters": [
           {
@@ -9929,8 +10452,11 @@
             "name": "uploadId",
             "required": false,
             "schema": {
-              "format": "uuid",
-              "type": "string"
+              "items": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "type": "array"
             }
           }
         ],
@@ -9988,7 +10514,7 @@
     },
     "/api/v1/transactions/review/confirm-all": {
       "post": {
-        "description": "Confirma tudo que o motor sugeriu (não toca as sem categoria). uploadId restringe a uma importação.",
+        "description": "Confirma tudo que o motor sugeriu (não toca as sem categoria). uploadId pode se repetir para restringir a importações.",
         "operationId": "confirmAll",
         "parameters": [
           {
@@ -9996,8 +10522,11 @@
             "name": "uploadId",
             "required": false,
             "schema": {
-              "format": "uuid",
-              "type": "string"
+              "items": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "type": "array"
             }
           }
         ],
@@ -10022,8 +10551,22 @@
     },
     "/api/v1/transactions/review/count": {
       "get": {
-        "description": "Só o número. A Home e a Análise mostravam \"N transações esperando você\" baixando a fila inteira agrupada (92 KB para 1.656 pendentes) a cada abertura, quando a única coisa desenhada era a contagem.",
+        "description": "Só o número. A Home e a Análise mostravam \"N transações esperando você\" baixando a fila inteira agrupada (92 KB para 1.656 pendentes) a cada abertura, quando a única coisa desenhada era a contagem. uploadId pode se repetir para contar várias importações.",
         "operationId": "reviewCount",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "uploadId",
+            "required": false,
+            "schema": {
+              "items": {
+                "format": "uuid",
+                "type": "string"
+              },
+              "type": "array"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
@@ -10311,7 +10854,7 @@
     },
     "/api/v1/users/me/change-password": {
       "post": {
-        "description": "Exige a senha atual; se não conferir, retorna 400.",
+        "description": "Exige a senha atual; se não conferir, retorna 400. A troca derruba todas as sessões da conta, e a resposta traz um `token` NOVO (mesmo formato do login: token e nome) para este aparelho continuar logado; os outros aparelhos precisam entrar de novo.",
         "operationId": "changePassword",
         "requestBody": {
           "content": {
@@ -10325,6 +10868,13 @@
         },
         "responses": {
           "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthResponse"
+                }
+              }
+            },
             "description": "OK"
           }
         },
@@ -10876,6 +11426,14 @@
     {
       "description": "Open Finance sem nome de provedor: status, widget, conexões e sincronização do usuário autenticado",
       "name": "Conexão bancária"
+    },
+    {
+      "description": "As chaves com que outro sistema do dono lê as rotas de integração: criar (o segredo aparece uma única vez), listar e revogar",
+      "name": "Chaves de integração"
+    },
+    {
+      "description": "Leituras para outro sistema do dono, autenticadas pela chave de integração (Bearer eco_...): o conselho de melhor dia de compra e o histórico de compras para migração. O JWT de sessão não vale aqui, e a chave não vale em nenhuma outra rota",
+      "name": "Integração — compras"
     },
     {
       "description": "Fontes de renda com calendário próprio (salário, VR, VA) e a jornada de trabalho que converte dinheiro em horas",

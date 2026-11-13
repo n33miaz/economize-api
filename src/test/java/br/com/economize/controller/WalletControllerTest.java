@@ -107,4 +107,34 @@ class WalletControllerTest {
                 .exchange()
                 .expectStatus().isUnauthorized();
     }
+
+    @Test
+    @DisplayName("Quantidade com mais de 8 casas ou 11 dígitos inteiros é 400 (coluna DECIMAL(19,8))")
+    void quantidadeForaDaColunaE400() {
+        post(Map.of("assetCode", "PETR4", "type", "BUY",
+                "quantity", new java.math.BigDecimal("1.123456789"), "priceAtTransaction", 38.42))
+                .expectStatus().isBadRequest()
+                .expectBody()
+                .jsonPath("$.detail").value(org.hamcrest.Matchers.containsString("8 casas"));
+        post(Map.of("assetCode", "PETR4", "type", "BUY",
+                "quantity", new java.math.BigDecimal("123456789012"), "priceAtTransaction", 38.42))
+                .expectStatus().isBadRequest();
+
+        verifyNoInteractions(walletService);
+    }
+
+    @Test
+    @DisplayName("Preço com mais de 4 casas ou 15 dígitos inteiros é 400 (coluna DECIMAL(19,4))")
+    void precoForaDaColunaE400() {
+        post(Map.of("assetCode", "PETR4", "type", "BUY",
+                "quantity", 1, "priceAtTransaction", new java.math.BigDecimal("38.12345")))
+                .expectStatus().isBadRequest()
+                .expectBody()
+                .jsonPath("$.detail").value(org.hamcrest.Matchers.containsString("4 casas"));
+        post(Map.of("assetCode", "PETR4", "type", "BUY",
+                "quantity", 1, "priceAtTransaction", new java.math.BigDecimal("1234567890123456")))
+                .expectStatus().isBadRequest();
+
+        verifyNoInteractions(walletService);
+    }
 }

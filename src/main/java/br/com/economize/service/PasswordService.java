@@ -4,6 +4,7 @@ import br.com.economize.model.PasswordResetToken;
 import br.com.economize.model.User;
 import br.com.economize.repository.PasswordResetTokenRepository;
 import br.com.economize.repository.UserRepository;
+import br.com.economize.security.SessionVersionService;
 import br.com.economize.service.mail.EmailSender;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -34,6 +35,7 @@ public class PasswordService {
     private final PasswordResetTokenRepository tokenRepository;
     private final PasswordEncoder passwordEncoder;
     private final EmailSender emailSender;
+    private final SessionVersionService sessionVersions;
     private final SecureRandom secureRandom = new SecureRandom();
     private final String resetUrlBase;
 
@@ -41,11 +43,13 @@ public class PasswordService {
                            PasswordResetTokenRepository tokenRepository,
                            PasswordEncoder passwordEncoder,
                            EmailSender emailSender,
+                           SessionVersionService sessionVersions,
                            @Value("${economize.app.reset-url-base:https://economize-web.onrender.com/reset-password}") String resetUrlBase) {
         this.userRepository = userRepository;
         this.tokenRepository = tokenRepository;
         this.passwordEncoder = passwordEncoder;
         this.emailSender = emailSender;
+        this.sessionVersions = sessionVersions;
         this.resetUrlBase = resetUrlBase;
     }
 
@@ -78,11 +82,21 @@ public class PasswordService {
 
         resetToken.setUsedAt(OffsetDateTime.now());
         tokenRepository.save(resetToken);
+
+        // Quem redefine pelo e-mail costuma estar desconfiado de alguém: todo
+        // token emitido com a senha antiga cai aqui, junto com os aparelhos
+        // que dispensavam o código. Vem por último para o UPDATE atômico da
+        // versão não ser sobrescrito por nenhum save desta transação
+        sessionVersions.revokeAll(user);
         log.info("Senha redefinida via token de recuperação para o usuário {}", user.getId());
     }
 
+    /**
+     * Troca a senha e devolve o usuário JÁ na versão de sessão nova, para quem
+     * chama emitir o token que mantém a pessoa logada neste aparelho.
+     */
     @Transactional
-    public void changePassword(String email, String currentPassword, String newPassword) {
+    public User changePassword(String email, String currentPassword, String newPassword) {
         User user = userRepository.findByEmail(email)
                 .orElseThrow(() -> new IllegalArgumentException("Usuário não encontrado"));
 
@@ -95,7 +109,17 @@ public class PasswordService {
         // a unica pessoa que sabe a senha e o dono da conta
         user.setMustChangePassword(false);
         userRepository.save(user);
+        // Trocar a senha derruba TODAS as sessões, inclusive a de quem trocou:
+        // não há como distinguir "o meu token" de "a cópia do meu token". Quem
+        // trocou não é expulso porque a resposta leva um token novo, emitido
+        // já na versão nova; os outros aparelhos ficam de fora
+        sessionVersions.revokeAll(user);
+        // A versão foi somada por UPDATE no banco e a entidade não grava a
+        // coluna: relê o valor (na mesma transação) só para o token sair certo
+        user.setSessionVersion(userRepository.findSessionVersionByEmail(email)
+                .orElseThrow(() -> new IllegalArgumentException("Usuário não encontrado")));
         log.info("Senha alterada pelo próprio usuário {}", user.getId());
+        return user;
     }
 
     private void issueResetToken(User user) {

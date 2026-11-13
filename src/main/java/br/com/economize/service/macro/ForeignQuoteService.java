@@ -6,11 +6,15 @@ import br.com.economize.dto.Indicator;
 import br.com.economize.dto.indicator.ForeignQuote;
 import br.com.economize.service.IndicatorService;
 import br.com.economize.service.provider.MarketSnapshotStore;
+import br.com.economize.service.provider.NoLiveDataException;
+import br.com.economize.service.provider.RecentFallbackCache;
 import br.com.economize.service.provider.fallback.FailureSummary;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.cache.annotation.Cacheable;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.http.HttpHeaders;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
@@ -24,6 +28,7 @@ import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.ZoneId;
 import java.util.Locale;
+import java.util.Optional;
 import java.util.regex.Pattern;
 
 /**
@@ -42,7 +47,10 @@ import java.util.regex.Pattern;
  * <p>
  * {@code priceBrl} usa o dólar do agregado da Home ({@code /all}, com cache e
  * snapshot próprios): é o mesmo dólar que o usuário vê na tela, e não custa
- * requisição nova. Cache de 30 min, como o resto do que é cotação.
+ * requisição nova. Cache de 30 min, como o resto do que é cotação — só da
+ * cotação VIVA e ainda sem o {@code priceBrl}: snapshot e conversão são
+ * aplicados fora do cache, para uma falha momentânea (ou um dólar ausente) não
+ * ficar servida pela meia hora inteira.
  */
 @Slf4j
 @Service
@@ -64,19 +72,63 @@ public class ForeignQuoteService {
     private final MarketSourcesProperties properties;
     private final MarketSnapshotStore snapshotStore;
     private final IndicatorService indicatorService;
+    /**
+     * O próprio bean, pelo proxy do Spring: o método {@code @Cacheable} só passa
+     * pelo cache quando chamado de fora — chamado em {@code this}, o proxy é
+     * pulado e nada seria cacheado. {@code @Lazy} resolve a auto-referência sem
+     * ciclo no boot. Nos testes de unidade (sem Spring) é o próprio objeto.
+     */
+    private final ForeignQuoteService self;
+    private final RecentFallbackCache recentFallback;
 
     public ForeignQuoteService(WebClient webClient, MarketSourcesProperties properties,
             MarketSnapshotStore snapshotStore, IndicatorService indicatorService) {
+        this(webClient, properties, snapshotStore, indicatorService, RecentFallbackCache.disabled(), null);
+    }
+
+    @Autowired
+    public ForeignQuoteService(WebClient webClient, MarketSourcesProperties properties,
+            MarketSnapshotStore snapshotStore, IndicatorService indicatorService,
+            RecentFallbackCache recentFallback, @Lazy ForeignQuoteService self) {
         this.webClient = webClient;
         this.properties = properties;
         this.snapshotStore = snapshotStore;
         this.indicatorService = indicatorService;
+        this.recentFallback = recentFallback;
+        this.self = self != null ? self : this;
     }
 
-    /** Símbolo e mercado já validados e normalizados pelo controller. Vazio = ninguém conhece o papel. */
-    @Cacheable("foreignQuote")
+    /**
+     * Símbolo e mercado já validados e normalizados pelo controller. Vazio =
+     * ninguém conhece o papel. O "ninguém conhece" vai como {@code Optional}
+     * vazio para caber na janela curta de falha ({@link RecentFallbackCache}):
+     * um símbolo desconhecido não volta ao Yahoo e ao Stooq a cada tela.
+     */
     public Mono<ForeignQuote> getQuote(String symbol, String market) {
-        String snapshotKey = MarketSnapshotStore.DATA_PREFIX + "quote:" + market + ":" + symbol;
+        String snapshotKey = snapshotKey(symbol, market);
+        return recentFallback.<Optional<ForeignQuote>>liveOrFallback("quote:" + market + ":" + symbol,
+                () -> self.liveQuote(symbol, market).map(Optional::of),
+                e -> snapshotStore.lookupPayload(snapshotKey, TYPE)
+                        .map(snapshot -> {
+                            log.warn("Cotação [{}]: fontes indisponíveis; servindo snapshot de {} ({})",
+                                    LogSafe.value(symbol), snapshot.savedAt(), snapshot.source());
+                            return Optional.of(snapshot.payload().asStale());
+                        })
+                        .defaultIfEmpty(Optional.empty()))
+                .flatMap(Mono::justOrEmpty)
+                .flatMap(this::withPriceBrl);
+    }
+
+    /**
+     * Só a cotação VIVA (Yahoo ou Stooq), cacheada por 30 min; sem nenhuma,
+     * {@link NoLiveDataException} — erro não entra no cache reativo, e o vazio
+     * entraria. Público só para o proxy de cache; quem quer a cotação chama
+     * {@link #getQuote}. {@code sync}: chamadas simultâneas esperam a mesma
+     * ida à rede.
+     */
+    @Cacheable(value = "foreignQuote", sync = true)
+    public Mono<ForeignQuote> liveQuote(String symbol, String market) {
+        String snapshotKey = snapshotKey(symbol, market);
         return yahoo(symbol, market)
                 .onErrorResume(e -> {
                     log.warn("Yahoo Finance indisponível para [{}]: {}", LogSafe.value(symbol), FailureSummary.of(e));
@@ -88,13 +140,11 @@ public class ForeignQuoteService {
                             return Mono.empty();
                         })))
                 .doOnNext(quote -> snapshotStore.savePayload(snapshotKey, quote, quote.source()))
-                .switchIfEmpty(Mono.defer(() -> snapshotStore.lookupPayload(snapshotKey, TYPE)
-                        .map(snapshot -> {
-                            log.warn("Cotação [{}]: fontes indisponíveis; servindo snapshot de {} ({})", LogSafe.value(symbol),
-                                    snapshot.savedAt(), snapshot.source());
-                            return snapshot.payload().asStale();
-                        })))
-                .flatMap(this::withPriceBrl);
+                .switchIfEmpty(Mono.error(() -> new NoLiveDataException("cotação " + symbol)));
+    }
+
+    private static String snapshotKey(String symbol, String market) {
+        return MarketSnapshotStore.DATA_PREFIX + "quote:" + market + ":" + symbol;
     }
 
     Mono<ForeignQuote> yahoo(String symbol, String market) {

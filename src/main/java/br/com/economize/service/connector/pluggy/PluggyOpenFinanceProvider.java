@@ -95,7 +95,7 @@ public class PluggyOpenFinanceProvider implements OpenFinanceProvider {
     @Override
     public SyncResult sync(String email, int days) {
         PluggySyncService.SyncResult sync = syncService.sync(email, days);
-        return new SyncResult(sync.result(), sync.itemsSynced());
+        return new SyncResult(sync.result(), sync.itemsSynced(), sync.skippedConnections());
     }
 
     @Override
@@ -105,6 +105,6 @@ public class PluggyOpenFinanceProvider implements OpenFinanceProvider {
 
     private static ConnectionResponse neutral(PluggyItemResponse item) {
         return ConnectionResponse.of(item.id(), item.itemId(), item.connectorId(), item.connectorName(),
-                item.createdAt(), item.lastSyncedAt());
+                item.createdAt(), item.lastSyncedAt(), item.status(), item.needsAttention());
     }
 }

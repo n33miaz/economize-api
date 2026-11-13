@@ -65,7 +65,7 @@ class MarketSnapshotStoreTest {
         store = new MarketSnapshotStore(repository, mapper, clock, Schedulers.immediate());
         when(repository.save(any())).thenAnswer(invocation -> invocation.getArgument(0));
         when(repository.findById(any())).thenReturn(Optional.empty());
-        when(repository.findAll()).thenReturn(List.of());
+        when(repository.findHydratable(any(), any())).thenReturn(List.of());
     }
 
     private Indicator usd(String price, Instant asOf, String source) {
@@ -207,7 +207,7 @@ class MarketSnapshotStoreTest {
         Indicator newer = usd("5.30", NOW.minus(Duration.ofHours(1)), "Frankfurter (BCE)");
         Indicator petr = usd("38.00", NOW.minus(Duration.ofHours(1)), "Brapi");
         petr.setId("stock_PETR4");
-        when(repository.findAll()).thenReturn(List.of(
+        when(repository.findHydratable(any(), any())).thenReturn(List.of(
                 row("awesome:all", List.of(older), NOW.minus(Duration.ofDays(2)), "AwesomeAPI"),
                 row("fallback:fiat", List.of(newer), NOW.minus(Duration.ofHours(1)), "Frankfurter (BCE)"),
                 row("brapi:PETR4", List.of(petr), NOW.minus(Duration.ofHours(1)), "Brapi"),
@@ -222,7 +222,35 @@ class MarketSnapshotStoreTest {
         assertTrue(all.stream().allMatch(Indicator::isStale));
 
         store.findAll();
-        verify(repository, times(1)).findAll();
+        // a consulta já pede ao banco só o que vale: sem data: e sem vencido
+        verify(repository, times(1)).findHydratable(
+                OffsetDateTime.ofInstant(NOW.minus(MarketSnapshotStore.MAX_AGE), ZoneOffset.UTC), "data:%");
+        verify(repository, never()).findAll();
+    }
+
+    @Test
+    @DisplayName("Boot apaga o que passou de 7 dias antes de hidratar")
+    void warmUpShouldPurgeExpiredRows() {
+        store.warmUp();
+
+        verify(repository).deleteSavedBefore(
+                OffsetDateTime.ofInstant(NOW.minus(MarketSnapshotStore.MAX_AGE), ZoneOffset.UTC));
+        verify(repository).findHydratable(any(), any());
+    }
+
+    @Test
+    @DisplayName("Gravação limpa a tabela no máximo uma vez por dia, e erro na limpeza não derruba nada")
+    void persistShouldPurgeAtMostDaily() {
+        when(repository.deleteSavedBefore(any())).thenThrow(new RuntimeException("connection refused"));
+
+        store.save("brapi:PETR4", List.of(usd("10.00", NOW, "Brapi")), "Brapi");
+        store.save("brapi:VALE3", List.of(usd("60.00", NOW, "Brapi")), "Brapi");
+        verify(repository, times(1)).deleteSavedBefore(any());
+        assertTrue(store.find("brapi:VALE3").isPresent(), "falha da limpeza não afeta a gravação");
+
+        clock.advance(MarketSnapshotStore.CLEANUP_INTERVAL);
+        store.save("brapi:PETR4", List.of(usd("10.10", NOW, "Brapi")), "Brapi");
+        verify(repository, times(2)).deleteSavedBefore(any());
     }
 
     // -------------------------------------------------- payloads genéricos

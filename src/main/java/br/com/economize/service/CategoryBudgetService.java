@@ -46,6 +46,10 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class CategoryBudgetService {
 
+    // Limites da coluna monthly_limit NUMERIC(19,4): 4 casas e 15 dígitos inteiros
+    private static final int MAX_CASAS_DO_TETO = 4;
+    private static final BigDecimal TETO_MAXIMO = new BigDecimal("999999999999999.9999");
+
     private final CategoryBudgetRepository budgetRepository;
     private final CategoryRepository categoryRepository;
     private final BankTransactionRepository bankTransactionRepository;
@@ -60,6 +64,15 @@ public class CategoryBudgetService {
         User user = requireUser(email);
         if (monthlyLimit == null || monthlyLimit.signum() <= 0) {
             throw new IllegalArgumentException("O teto precisa ser maior que zero");
+        }
+        // A coluna é NUMERIC(19,4) com CHECK > 0. Mais de 4 casas o banco
+        // arredonda: 0.00001 virava 0 e violava o CHECK (500). E mais de 15
+        // dígitos inteiros estoura a coluna. Os dois são erro do cliente: 400
+        if (monthlyLimit.stripTrailingZeros().scale() > MAX_CASAS_DO_TETO) {
+            throw new IllegalArgumentException("O teto pode ter no máximo 4 casas decimais");
+        }
+        if (monthlyLimit.compareTo(TETO_MAXIMO) > 0) {
+            throw new IllegalArgumentException("O teto passa do valor máximo aceito");
         }
         // Categoria do sistema ou do próprio usuário; a de outro dono responde
         // 404, e não 403, para não confirmar que ela existe
@@ -108,8 +121,14 @@ public class CategoryBudgetService {
         List<CategoryBudget> tetos = budgetRepository.findAllByUserId(user.getId());
         if (tetos.isEmpty()) return new Status(0, 0, List.of());
 
-        Map<UUID, String> nomes = nomesDasCategorias(user.getId());
-        Map<UUID, BigDecimal> gastoPorCategoria = new HashMap<>();
+        // Um catálogo só: dá o nome de cada teto e a raiz de cada lançamento
+        Map<UUID, Category> catalogo = catalogoDe(user.getId());
+        // Duas somas, porque o teto do pai e o da filha respondem perguntas
+        // diferentes. Somar só pelo id exato deixava o teto posto em "Casa"
+        // com gasto zero quando o extrato estava todo em "Casa › Luz" — nunca
+        // avisava estouro, enquanto a Análise mostrava o pai cheio
+        Map<UUID, BigDecimal> gastoExato = new HashMap<>();
+        Map<UUID, BigDecimal> gastoPelaRaiz = new HashMap<>();
         for (BankTransaction tx : bankTransactionRepository
                 .findAllByUserIdAndDateGreaterThanEqualAndDateLessThanOrderByDateDesc(
                         user.getId(), window.startInstant(), window.endExclusiveInstant())) {
@@ -118,7 +137,11 @@ public class CategoryBudgetService {
             if (tx.getAmount().signum() >= 0 || tx.getCategoryId() == null) continue;
             // O teto compara com o que a compra custou de fato: estorno parcial
             // abate (V40), como em toda soma do app
-            gastoPorCategoria.merge(tx.getCategoryId(), tx.getNetAmount().abs(), BigDecimal::add);
+            BigDecimal valor = tx.getNetAmount().abs();
+            gastoExato.merge(tx.getCategoryId(), valor, BigDecimal::add);
+            // A raiz pela MESMA regra da Análise, para os dois números baterem
+            gastoPelaRaiz.merge(AnalyticsService.rootIdOf(tx.getCategoryId(), catalogo),
+                    valor, BigDecimal::add);
         }
 
         // Dias já corridos DENTRO da janela: o gasto até hoje só se compara
@@ -129,7 +152,13 @@ public class CategoryBudgetService {
 
         List<Line> linhas = new ArrayList<>();
         for (CategoryBudget teto : tetos) {
-            BigDecimal gasto = gastoPorCategoria.getOrDefault(teto.getCategoryId(), BigDecimal.ZERO);
+            // Teto na raiz cobre ela e as filhas; teto numa filha continua só
+            // nela. Categoria fora do catálogo é tratada como raiz de si mesma,
+            // igual ao rootIdOf
+            Category categoria = catalogo.get(teto.getCategoryId());
+            boolean ehRaiz = categoria == null || categoria.isRoot();
+            BigDecimal gasto = (ehRaiz ? gastoPelaRaiz : gastoExato)
+                    .getOrDefault(teto.getCategoryId(), BigDecimal.ZERO);
             BigDecimal limite = teto.getMonthlyLimit();
             // Teto proporcional à janela: um limite mensal contra um ciclo de
             // 45 dias precisa crescer, e contra um de 20 precisa encolher
@@ -148,7 +177,7 @@ public class CategoryBudgetService {
             boolean noRitmoDeEstourar = !estourou
                     && Materiality.vale(acimaDoRitmo) && acimaDoRitmo.signum() > 0;
 
-            linhas.add(new Line(teto.getCategoryId(), nomes.get(teto.getCategoryId()),
+            linhas.add(new Line(teto.getCategoryId(), categoria == null ? null : categoria.getName(),
                     limite, limiteDaJanela, gasto, esperadoAteHoje,
                     estourou ? excedente : BigDecimal.ZERO, estourou, noRitmoDeEstourar));
         }
@@ -159,6 +188,13 @@ public class CategoryBudgetService {
         log.info("Tetos de categoria: {} teto(s), {} estourado(s), {} acima do ritmo, user={}",
                 linhas.size(), estourados, emRisco, user.getId());
         return new Status(estourados, emRisco, linhas);
+    }
+
+    private Map<UUID, Category> catalogoDe(UUID userId) {
+        Map<UUID, Category> catalogo = new HashMap<>();
+        categoryRepository.findVisibleTo(userId)
+                .forEach(categoria -> catalogo.put(categoria.getId(), categoria));
+        return catalogo;
     }
 
     private Map<UUID, String> nomesDasCategorias(UUID userId) {

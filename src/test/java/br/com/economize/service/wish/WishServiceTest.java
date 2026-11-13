@@ -5,6 +5,9 @@ import br.com.economize.dto.wish.WishResponses;
 import br.com.economize.exception.ResourceNotFoundException;
 import br.com.economize.model.User;
 import br.com.economize.model.Wish;
+import br.com.economize.model.Category;
+import br.com.economize.model.BankTransaction;
+import br.com.economize.repository.BankTransactionRepository;
 import br.com.economize.repository.CategoryRepository;
 import br.com.economize.repository.UserRepository;
 import br.com.economize.repository.WishRepository;
@@ -31,6 +34,8 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -49,6 +54,8 @@ class WishServiceTest {
     private UserRepository userRepository;
     @Mock
     private CategoryRepository categoryRepository;
+    @Mock
+    private BankTransactionRepository bankTransactionRepository;
     @Mock
     private WishProjectionService projectionService;
 
@@ -71,7 +78,7 @@ class WishServiceTest {
         when(userRepository.findByEmail(EMAIL)).thenReturn(Optional.of(user));
         when(wishRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
         when(wishRepository.countByUserId(USER_ID)).thenReturn(0L);
-        when(categoryRepository.existsById(any())).thenReturn(true);
+        when(categoryRepository.findAccessible(any(), any())).thenReturn(Optional.of(Category.builder().build()));
         when(projectionService.baselineFor(USER_ID)).thenReturn(emptyBaseline());
         when(projectionService.project(any(), any())).thenReturn(emptyProjection());
     }
@@ -97,11 +104,11 @@ class WishServiceTest {
 
     @Test
     void categoriaInexistenteNaoPassa() {
-        when(categoryRepository.existsById(any())).thenReturn(false);
+        when(categoryRepository.findAccessible(any(), any())).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> service.create(EMAIL, new WishRequests.CreateWish(
                 "Moto", new BigDecimal("18000"), null, UUID.randomUUID(), null, null)))
-                .isInstanceOf(IllegalArgumentException.class);
+                .isInstanceOf(ResourceNotFoundException.class);
     }
 
     @Test
@@ -150,6 +157,13 @@ class WishServiceTest {
         Wish existente = wish("Moto", "1000");
         existente.setSavedAmount(new BigDecimal("900"));
         when(wishRepository.findByIdAndUserId(id, USER_ID)).thenReturn(Optional.of(existente));
+        // O saldo só muda pelo UPDATE atômico; o stub reproduz o efeito dele
+        // na linha que o serviço relê em seguida
+        when(wishRepository.adjustSavedAmount(eq(id), eq(USER_ID), any(), any(), any()))
+                .thenAnswer(inv -> {
+                    existente.setSavedAmount(existente.getSavedAmount().add(inv.getArgument(2)));
+                    return 1;
+                });
 
         // comparar campo a campo rejeitaria: 2.000 guardados contra o alvo
         // ANTIGO de 1.000. A checagem tem de ver o estado final
@@ -158,6 +172,23 @@ class WishServiceTest {
 
         assertThat(existente.getTargetAmount()).isEqualByComparingTo("5000");
         assertThat(existente.getSavedAmount()).isEqualByComparingTo("2000");
+        // Vai como diferença, para somar com um aporte concorrente em vez de apagá-lo
+        verify(wishRepository).adjustSavedAmount(eq(id), eq(USER_ID),
+                argThat(d -> d.compareTo(new BigDecimal("1100")) == 0), any(), any());
+    }
+
+    @Test
+    void metaEncerradaRecusaMudarOGuardadoComMotivoProprio() {
+        UUID id = UUID.randomUUID();
+        Wish existente = wish("Moto", "1000");
+        existente.setStatus(Wish.Status.PURCHASED);
+        when(wishRepository.findByIdAndUserId(id, USER_ID)).thenReturn(Optional.of(existente));
+        when(wishRepository.adjustSavedAmount(any(), any(), any(), any(), any())).thenReturn(0);
+
+        assertThatThrownBy(() -> service.update(EMAIL, id, new WishRequests.UpdateWish(
+                null, null, new BigDecimal("500"), null, null, null, null)))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("comprada ou arquivada");
     }
 
     @Test
@@ -202,6 +233,8 @@ class WishServiceTest {
         when(wishRepository.findByIdAndUserId(id, USER_ID)).thenReturn(Optional.of(existente));
 
         UUID transacao = UUID.randomUUID();
+        when(bankTransactionRepository.findByIdAndUserId(transacao, USER_ID))
+                .thenReturn(Optional.of(BankTransaction.builder().id(transacao).user(user).build()));
         WishResponses.WishItem item = service.purchase(EMAIL, id,
                 new WishRequests.PurchaseWish(LocalDate.of(2026, 8, 20), transacao));
 
@@ -246,6 +279,40 @@ class WishServiceTest {
     }
 
     @Test
+    void categoriaDeOutroDonoNaoEEncontrada() {
+        UUID categoriaAlheia = UUID.randomUUID();
+        when(categoryRepository.findAccessible(categoriaAlheia, USER_ID)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.create(EMAIL, new WishRequests.CreateWish(
+                "Moto", new BigDecimal("18000"), null, categoriaAlheia, null, null)))
+                .isInstanceOf(ResourceNotFoundException.class);
+    }
+
+    @Test
+    void patchTambemNaoAceitaCategoriaDeOutroDono() {
+        UUID id = UUID.randomUUID();
+        UUID categoriaAlheia = UUID.randomUUID();
+        when(wishRepository.findByIdAndUserId(id, USER_ID)).thenReturn(Optional.of(wish("Moto", "18000")));
+        when(categoryRepository.findAccessible(categoriaAlheia, USER_ID)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.update(EMAIL, id, new WishRequests.UpdateWish(
+                null, null, null, categoriaAlheia, null, null, null)))
+                .isInstanceOf(ResourceNotFoundException.class);
+    }
+
+    @Test
+    void lancamentoDeOutroDonoNaoEEncontradoNaCompra() {
+        UUID id = UUID.randomUUID();
+        UUID transacaoAlheia = UUID.randomUUID();
+        when(wishRepository.findByIdAndUserId(id, USER_ID)).thenReturn(Optional.of(wish("Moto", "18000")));
+        when(bankTransactionRepository.findByIdAndUserId(transacaoAlheia, USER_ID)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.purchase(EMAIL, id,
+                new WishRequests.PurchaseWish(null, transacaoAlheia)))
+                .isInstanceOf(ResourceNotFoundException.class);
+    }
+
+    @Test
     void observacaoVaziaViraNuloEmVezDeStringEmBranco() {
         WishResponses.WishItem item = service.create(EMAIL, new WishRequests.CreateWish(
                 "Moto", new BigDecimal("18000"), null, null, null, "   "));
@@ -259,7 +326,7 @@ class WishServiceTest {
         UUID id = UUID.randomUUID();
         when(wishRepository.findByIdAndUserId(id, USER_ID)).thenReturn(Optional.of(wish("Moto", "18000")));
         WishService noBrasil = new WishService(wishRepository, userRepository, categoryRepository,
-                projectionService, NOITE_DE_31_DE_MARCO);
+                bankTransactionRepository, projectionService, NOITE_DE_31_DE_MARCO);
 
         assertThat(noBrasil.purchase(EMAIL, id, new WishRequests.PurchaseWish(null, null)).purchasedAt())
                 .isEqualTo(LocalDate.of(2026, 3, 31));

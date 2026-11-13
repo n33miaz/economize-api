@@ -67,7 +67,9 @@ public class PluggyItem {
     private OffsetDateTime providerUpdatedAt;
 
     // Quando pedimos coleta nova. Existe para nao pedir em rajada: o Pluggy
-    // cobra por atualizacao e o banco do outro lado tem limite proprio.
+    // cobra por atualizacao e o banco do outro lado tem limite proprio. Quando
+    // a recusa vira NEEDS_USER_ACTION, este tambem e o marco a partir do qual
+    // uma coleta nova prova que a pessoa reconectou.
     @Column(name = "update_requested_at")
     private OffsetDateTime updateRequestedAt;
 

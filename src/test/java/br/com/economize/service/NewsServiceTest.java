@@ -17,11 +17,13 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.Sinks;
 import reactor.test.StepVerifier;
 
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Set;
@@ -30,6 +32,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
@@ -240,6 +243,56 @@ class NewsServiceTest {
     }
 
     @Test
+    @DisplayName("Boot frio durante ciclo agendado aguarda o ciclo em andamento")
+    void coldStartShouldJoinRefreshAlreadyInFlight() {
+        Sinks.One<FeedFetchResult> gate = Sinks.one();
+        NewsProvider provider = new NewsProvider() {
+            @Override
+            public String getId() {
+                return "fonte-em-andamento";
+            }
+
+            @Override
+            public String getName() {
+                return getId();
+            }
+
+            @Override
+            public String getRegion() {
+                return "br";
+            }
+
+            @Override
+            public String getCategory() {
+                return "economia";
+            }
+
+            @Override
+            public Mono<FeedFetchResult> fetch(String etag, String lastModified) {
+                return gate.asMono();
+            }
+        };
+        when(registry.getAll()).thenReturn(List.of(provider));
+        NewsRefreshScheduler inFlightRefresher = new NewsRefreshScheduler(registry, store,
+                new NewsRelevanceFilter(), new br.com.economize.config.NewsFeedsProperties());
+        NewsService inFlightService = new NewsService(registry, store, inFlightRefresher,
+                new NewsRelevanceFilter());
+
+        inFlightRefresher.refreshNow();
+        assertNull(store.lastAttemptAt(), "ciclo em andamento ainda nao consome a tentativa fria");
+        // Uma tentativa anterior nao pode impedir a espera pelo ciclo atual.
+        store.markAttempted();
+
+        StepVerifier.create(inFlightService.getTopHeadlines(query(null, null, null, null, null, null)))
+                .expectSubscription()
+                .then(() -> gate.tryEmitValue(FeedFetchResult.updated(List.of(
+                        article("Copom mantem Selic", "https://fonte.test/1", "2026-08-14T09:00:00Z",
+                                "fonte-em-andamento", "selic-cdi")), null, null)))
+                .assertNext(response -> assertEquals(1, response.getTotalResults()))
+                .verifyComplete();
+    }
+
+    @Test
     @DisplayName("Boot frio: se o refresh não terminar em 3 s responde vazio, sem travar a tela")
     void coldStartShouldGiveUpWaitingAfterThreeSeconds() {
         when(refresher.refreshNow()).thenReturn(Mono.never());
@@ -270,6 +323,30 @@ class NewsServiceTest {
     }
 
     @Test
+    @DisplayName("Boot frio com feeds fora do ar espera a próxima tentativa antes de refazer o ciclo")
+    void coldStartFailureIsThrottledBeforeTryingAgain() {
+        TestClock clock = new TestClock();
+        NewsSnapshotStore retryStore = new NewsSnapshotStore(Duration.ofDays(3), Duration.ofMinutes(2), clock);
+        NewsService retryService = new NewsService(registry, retryStore, refresher, new NewsRelevanceFilter());
+        when(refresher.refreshNow()).thenReturn(Mono.empty());
+
+        StepVerifier.create(retryService.getTopHeadlines(query(null, null, null, null, null, null)))
+                .assertNext(response -> assertNull(response.getUpdatedAt()))
+                .verifyComplete();
+        StepVerifier.create(retryService.getTopHeadlines(query(null, null, null, null, null, null)))
+                .assertNext(response -> assertNull(response.getUpdatedAt()))
+                .verifyComplete();
+        assertEquals(NOW, retryStore.lastAttemptAt());
+        verify(refresher).refreshNow();
+
+        clock.advance(Duration.ofMinutes(2));
+        StepVerifier.create(retryService.getTopHeadlines(query(null, null, null, null, null, null)))
+                .assertNext(response -> assertNull(response.getUpdatedAt()))
+                .verifyComplete();
+        verify(refresher, times(2)).refreshNow();
+    }
+
+    @Test
     @DisplayName("GET /topics deve expor o vocabulário fixo do radar")
     void shouldExposeTopicVocabulary() {
         var topics = newsService.getTopics();
@@ -278,5 +355,28 @@ class NewsServiceTest {
         assertEquals(13, topics.topics().size());
         assertEquals("selic-cdi", topics.topics().get(0).id());
         assertEquals("Selic e CDI", topics.topics().get(0).label());
+    }
+
+    private static final class TestClock extends Clock {
+        private Instant now = NOW;
+
+        @Override
+        public ZoneId getZone() {
+            return ZoneOffset.UTC;
+        }
+
+        @Override
+        public Clock withZone(ZoneId zone) {
+            return this;
+        }
+
+        @Override
+        public Instant instant() {
+            return now;
+        }
+
+        void advance(Duration duration) {
+            now = now.plus(duration);
+        }
     }
 }

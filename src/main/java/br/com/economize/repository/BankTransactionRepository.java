@@ -32,6 +32,11 @@ public interface BankTransactionRepository extends JpaRepository<BankTransaction
 
     List<BankTransaction> findAllByUserIdAndUploadIdOrderByDateDesc(UUID userId, UUID uploadId);
 
+    List<BankTransaction> findAllByUserIdAndUploadIdInOrderByDateDesc(UUID userId, Collection<UUID> uploadIds);
+
+    long countByUserIdAndUploadIdInAndReviewStatusIn(UUID userId, Collection<UUID> uploadIds,
+                                                      Collection<BankTransaction.ReviewStatus> reviewStatuses);
+
     // EC-113: os lançamentos de UMA conta dentro de uma janela — a consulta que
     // monta a fatura do cartão. É o único leitor do índice
     // (account_id, date) criado na V16; o user_id continua na cláusula por
@@ -379,6 +384,17 @@ public interface BankTransactionRepository extends JpaRepository<BankTransaction
     @Query("update BankTransaction t set t.familyTransfer = false "
             + "where t.user.id = :userId and t.id in :ids")
     int clearFamilyTransfer(@Param("userId") UUID userId, @Param("ids") Collection<UUID> ids);
+
+    /**
+     * Solta TODAS as marcas de Pix da casa de um usuário — quem sai da casa
+     * (ou a vê desfeita) não tem mais com quem trocar dinheiro "da casa".
+     * Amarrado ao user_id: nunca toca linha de outra pessoa.
+     */
+    @Modifying
+    @Transactional
+    @Query("update BankTransaction t set t.familyTransfer = false "
+            + "where t.user.id = :userId and t.familyTransfer = true")
+    int clearAllFamilyTransfers(@Param("userId") UUID userId);
 
     /**
      * Solta a marca de descarte E o motivo. Sem limpar o motivo, a linha

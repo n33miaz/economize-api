@@ -26,6 +26,22 @@ public class MarketSourcesProperties {
      */
     private int awesomeDailyBudget = 120;
 
+    /**
+     * Parte do teto da AwesomeAPI que o histórico ({@code /daily}) não pode
+     * tocar: é a da Home ({@code /all}), cujo pior caso é fixo — cache de 30 min
+     * = 48 recargas/dia. O histórico fica com {@code teto - reserva} (72).
+     */
+    private int awesomeHomeReserve = 48;
+
+    /**
+     * Por quanto tempo a resposta de fallback (snapshot, vazio, papel
+     * desconhecido) de macro, Tesouro, histórico e cotação estrangeira é
+     * reaproveitada sem voltar ao provedor. Curto de propósito: corta a rajada
+     * de aberturas de tela durante uma falha sem esconder a volta da fonte. Ver
+     * {@link br.com.economize.service.provider.RecentFallbackCache}.
+     */
+    private java.time.Duration fallbackWindow = java.time.Duration.ofMinutes(2);
+
     /** Frankfurter: câmbio de referência do BCE, sem chave. */
     private String frankfurterUrl = "https://api.frankfurter.app";
 

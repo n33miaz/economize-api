@@ -1,9 +1,12 @@
 package br.com.economize.service;
 
+import br.com.economize.exception.ResourceNotFoundException;
 import br.com.economize.model.BankTransaction;
+import br.com.economize.model.Category;
 import br.com.economize.model.Report;
 import br.com.economize.model.User;
 import br.com.economize.repository.BankTransactionRepository;
+import br.com.economize.repository.CategoryRepository;
 import br.com.economize.repository.ReportRepository;
 import br.com.economize.repository.UserRepository;
 import br.com.economize.service.event.DomainEventPublisher;
@@ -24,7 +27,10 @@ import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -58,6 +64,9 @@ class ReportServiceTest {
     @Mock
     private DomainEventPublisher eventPublisher;
 
+    @Mock
+    private CategoryRepository categoryRepository;
+
     @InjectMocks
     private ReportService service;
 
@@ -82,7 +91,10 @@ class ReportServiceTest {
 
     private Report gerar(List<BankTransaction> transacoes) {
         when(userRepository.findByEmail(EMAIL)).thenReturn(Optional.of(user));
-        when(bankTransactionRepository.findAllByUserIdOrderByDateDesc(user.getId()))
+        // só a janela é pedida ao banco; o limite superior anda um
+        // microssegundo para o instante final continuar incluído
+        when(bankTransactionRepository.findAllByUserIdAndDateGreaterThanEqualAndDateLessThanOrderByDateDesc(
+                user.getId(), INICIO, FIM.plusNanos(1_000)))
                 .thenReturn(transacoes);
 
         service.generate(EMAIL, Report.Period.MONTHLY, INICIO, FIM);
@@ -272,5 +284,68 @@ class ReportServiceTest {
 
         assertThat(report.getTotalIncome()).isEqualByComparingTo("0");
         assertThat(report.getTotalExpense()).isEqualByComparingTo("0");
+    }
+
+    // ------------------------------------------------- janela e categoria raiz
+
+    @Test
+    @DisplayName("Datas invertidas respondem 400 e não gravam relatório zerado")
+    void datasInvertidas400() {
+        assertThatThrownBy(() -> service.generate(EMAIL, Report.Period.MONTHLY, FIM, INICIO))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("início");
+        verifyNoInteractions(bankTransactionRepository, reportRepository);
+    }
+
+    @Test
+    @DisplayName("Janela acima do teto responde 400 sem ler o histórico")
+    void janelaLongaDemais400() {
+        assertThatThrownBy(() -> service.generate(EMAIL, Report.Period.YEARLY,
+                INICIO.minusYears(3), FIM))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("366");
+        verifyNoInteractions(bankTransactionRepository, reportRepository);
+    }
+
+    @Test
+    @DisplayName("Subcategoria soma na raiz, como na Análise")
+    void subcategoriaSomaNaRaiz() {
+        Category alimentacao = Category.builder().id(UUID.randomUUID()).name("Alimentação")
+                .slug("alimentacao").systemKey("FOOD").build();
+        Category delivery = Category.builder().id(UUID.randomUUID()).name("Delivery")
+                .slug("delivery").parent(alimentacao).build();
+        Category moradia = Category.builder().id(UUID.randomUUID()).name("Moradia")
+                .slug("moradia").systemKey("HOUSING").build();
+        when(categoryRepository.findVisibleTo(user.getId())).thenReturn(List.of(alimentacao, delivery, moradia));
+
+        BankTransaction mercado = tx("-300.00", "FOOD", 10);
+        mercado.setCategoryId(alimentacao.getId());
+        BankTransaction ifood1 = tx("-250.00", "delivery", 11);
+        ifood1.setCategoryId(delivery.getId());
+        BankTransaction ifood2 = tx("-250.00", "delivery", 12);
+        ifood2.setCategoryId(delivery.getId());
+        BankTransaction aluguel = tx("-700.00", "HOUSING", 5);
+        aluguel.setCategoryId(moradia.getId());
+
+        Report report = gerar(List.of(mercado, ifood1, ifood2, aluguel));
+
+        // pelo campo legado, "delivery" (500) seria fatia própria e a dominante
+        // seria Moradia (700); pela raiz, Alimentação soma 800 e domina
+        assertThat(report.getCategoriesJson())
+                .contains("\"FOOD\":{\"income\":0,\"expense\":800.00}")
+                .doesNotContain("delivery");
+        assertThat(report.getDominantCategory()).isEqualTo("FOOD");
+    }
+
+    @Test
+    @DisplayName("Relatório inexistente ou de outro usuário é 404")
+    void detalheInexistente404() {
+        when(userRepository.findByEmail(EMAIL)).thenReturn(Optional.of(user));
+        UUID id = UUID.randomUUID();
+        when(reportRepository.findByIdAndUserId(id, user.getId())).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.detail(EMAIL, id)).isInstanceOf(ResourceNotFoundException.class);
+        assertThatThrownBy(() -> service.delete(EMAIL, id)).isInstanceOf(ResourceNotFoundException.class);
+        verify(reportRepository, never()).delete(any());
     }
 }

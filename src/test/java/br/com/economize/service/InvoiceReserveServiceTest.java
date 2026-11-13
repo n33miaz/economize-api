@@ -164,6 +164,25 @@ class InvoiceReserveServiceTest {
     }
 
     @Test
+    @DisplayName("ano com sinal ou mais de 4 dígitos é recusado — não cabe no VARCHAR(7)")
+    void shouldRejectYearOutsideFourDigits() {
+        ConnectorAccount cartao = card();
+        when(accountService.requireOwned(cartao.getId(), user.getId())).thenReturn(cartao);
+
+        // YearMonth.parse aceita os dois; o banco não, e o estouro virava 500
+        for (String ref : new String[] {"+10000-01", "-2026-01", "12026-01"}) {
+            assertThatThrownBy(() -> service.save(EMAIL, cartao.getId(), ref,
+                    new BigDecimal("10.00"), null, null))
+                    .as(ref)
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("AAAA-MM");
+        }
+        assertThatThrownBy(() -> service.delete(EMAIL, cartao.getId(), "+10000-01"))
+                .isInstanceOf(IllegalArgumentException.class);
+        verify(repository, never()).save(any());
+    }
+
+    @Test
     @DisplayName("a referência é normalizada, então 2026-09 e 2026-9 apontam para o mesmo ciclo")
     void shouldNormalizeReference() {
         ConnectorAccount cartao = card();

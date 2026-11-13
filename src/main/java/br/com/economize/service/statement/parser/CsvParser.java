@@ -1,9 +1,11 @@
 package br.com.economize.service.statement.parser;
 
+import br.com.economize.config.StatementImportProperties;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.csv.CSVFormat;
 import org.apache.commons.csv.CSVParser;
 import org.apache.commons.csv.CSVRecord;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
@@ -48,6 +50,18 @@ public class CsvParser implements StatementParserStrategy {
     private static final int HEADER_SEARCH_LIMIT = 20;
     private static final Pattern ACCENTS = Pattern.compile("\\p{M}+");
 
+    private final StatementImportProperties limits;
+
+    /** Usado pelos testes que montam o parser à mão; o Spring injeta o outro. */
+    public CsvParser() {
+        this(new StatementImportProperties());
+    }
+
+    @Autowired
+    public CsvParser(StatementImportProperties limits) {
+        this.limits = limits;
+    }
+
     @Override
     public StatementFormat format() {
         return StatementFormat.CSV;
@@ -56,6 +70,16 @@ public class CsvParser implements StatementParserStrategy {
     @Override
     public List<ParsedTransaction> parse(InputStream input) {
         String content = decode(input);
+        // Conta as linhas ANTES de materializar a lista: daqui para baixo o
+        // conteúdo é copiado algumas vezes (lista, junção do corpo, registros), e
+        // um arquivo com centenas de milhares de linhas multiplicaria o custo. O
+        // serviço confere o teto de novo depois do parse, para todos os formatos;
+        // a folga aqui é a do preâmbulo que alguns bancos põem antes do cabeçalho.
+        long lineCount = content.lines().count();
+        if (lineCount > (long) limits.getMaxRows() + HEADER_SEARCH_LIMIT) {
+            throw new IllegalArgumentException("O arquivo tem mais de " + limits.getMaxRows()
+                    + " lançamentos. Exporte um período menor do extrato.");
+        }
         List<String> lines = content.lines().toList();
 
         HeaderInfo header = findHeader(lines);
