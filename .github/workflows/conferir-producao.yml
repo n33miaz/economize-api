@@ -1,0 +1,115 @@
+name: Conferir produção
+
+# O Render publica o develop em produção a cada push, e até aqui nada conferia
+# se a publicação entrou e funciona. Este workflow faz isso depois de cada merge:
+#
+#   1. espera o /actuator/info dizer que o commit no ar é o que acabou de ser
+#      juntado (deploy.commit, vindo do RENDER_GIT_COMMIT — ver
+#      DeployInfoContributor). O plano gratuito leva minutos para construir a
+#      imagem e trocar o container, por isso a espera é longa;
+#   2. faz uma fumaça SÓ DE LEITURA e sem login: saúde UP, identidade da build,
+#      versão mínima do app e uma rota autenticada que precisa responder 401
+#      sem token — a prova de que a segurança subiu junto.
+#
+# Falhou ou estourou o tempo: abre uma issue para o dono, com o passo que
+# falhou e o link do run. Passou: silêncio.
+#
+# Não há rota pública de mercado/cotações para usar na fumaça: o SecurityConfig
+# só libera auth (POSTs, que não são leitura), a versão do app e o Actuator.
+
+on:
+  push:
+    branches: [develop]
+  # Para conferir na mão o que está no ar (compara com o commit escolhido)
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+# Dois merges seguidos: o Render publica só o mais novo, e a conferência do
+# antigo esperaria um commit que nunca vai aparecer — abriria issue à toa
+concurrency:
+  group: conferir-producao
+  cancel-in-progress: true
+
+env:
+  API: https://economize-api.onrender.com
+  # Commit inteiro: o /info traz o SHA completo do Render
+  ESPERADO: ${{ github.sha }}
+
+jobs:
+  conferir:
+    name: Deploy entrou e responde
+    runs-on: ubuntu-latest
+    # Maior que a espera do script (20 min) de propósito: se o teto do JOB
+    # estourasse primeiro, o job seria CANCELADO e o passo da issue não rodaria
+    timeout-minutes: 30
+    steps:
+      - name: Esperar o commit novo no /actuator/info
+        run: |
+          echo "PASSO=esperar o commit ${ESPERADO::7} no /actuator/info" >> "$GITHUB_ENV"
+          limite=$(( $(date +%s) + 20 * 60 ))
+          visto=""
+          while [ "$(date +%s)" -lt "$limite" ]; do
+            # --max-time alto: instância dormindo leva mais de 2 min para acordar
+            visto=$(curl -sS --max-time 240 "$API/actuator/info?_=$GITHUB_RUN_ID" \
+              | jq -r '.deploy.commit // empty' 2>/dev/null || true)
+            if [ "$visto" = "$ESPERADO" ]; then
+              echo "no ar: $visto"
+              exit 0
+            fi
+            echo "ainda não: no ar '${visto:-?}', esperado '$ESPERADO'"
+            sleep 30
+          done
+          echo "::error::Em 20 min o /actuator/info não mostrou $ESPERADO (último visto: '${visto:-nada}')"
+          exit 1
+
+      - name: Saúde UP
+        run: |
+          echo "PASSO=GET /actuator/health = UP" >> "$GITHUB_ENV"
+          corpo=$(curl -sS --max-time 60 --retry 3 --retry-delay 10 --retry-all-errors "$API/actuator/health")
+          echo "$corpo"
+          [ "$(echo "$corpo" | jq -r '.status')" = "UP" ]
+
+      - name: Identidade da build
+        run: |
+          echo "PASSO=GET /actuator/info com build.time" >> "$GITHUB_ENV"
+          corpo=$(curl -sS --max-time 60 --retry 3 --retry-delay 10 --retry-all-errors "$API/actuator/info")
+          echo "$corpo"
+          echo "$corpo" | jq -e '.build.time and .build.version' > /dev/null
+
+      - name: Versão mínima do app responde
+        run: |
+          echo "PASSO=GET /api/v1/app/version = 200" >> "$GITHUB_ENV"
+          codigo=$(curl -sS -o /tmp/versao.json -w "%{http_code}" --max-time 60 \
+            --retry 3 --retry-delay 10 --retry-all-errors "$API/api/v1/app/version")
+          echo "HTTP $codigo"; cat /tmp/versao.json; echo
+          [ "$codigo" = "200" ]
+          jq -e 'type == "object"' /tmp/versao.json > /dev/null
+
+      - name: Rota autenticada sem token dá 401
+        run: |
+          echo "PASSO=GET /api/v1/users/me sem token = 401" >> "$GITHUB_ENV"
+          # Os cabeçalhos de versão existem para o filtro de versão mínima não
+          # responder 426 antes da segurança: o que se quer ver é o 401 dela
+          codigo=$(curl -sS -o /dev/null -w "%{http_code}" --max-time 60 \
+            -H "X-App-Platform: web" -H "X-App-Version: 999.0.0" \
+            "$API/api/v1/users/me")
+          echo "HTTP $codigo"
+          [ "$codigo" = "401" ]
+
+      - name: Abrir issue se falhou
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          curto="${ESPERADO::7}"
+          run="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          corpo=$(printf '%s\n\n%s\n%s\n%s\n' \
+            "@n33miaz a conferência pós-deploy da API falhou." \
+            "- Commit: $ESPERADO" \
+            "- Passo que falhou: ${PASSO:-desconhecido}" \
+            "- Run: $run")
+          gh issue create --title "Produção: conferência falhou em $curto" --body "$corpo"

@@ -74,6 +74,23 @@ class ActuatorInfoTest {
     }
 
     @Test
+    @DisplayName("O /info diz qual commit está no ar, e mais nada além da build")
+    void infoDizOCommitEMaisNada() {
+        // A conferência pós-deploy compara este campo com o commit juntado.
+        // Fora do Render não há RENDER_GIT_COMMIT, e o valor é "local"
+        client.get().uri("/actuator/info")
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.deploy.commit").isEqualTo("local")
+                .jsonPath("$.deploy.length()").isEqualTo(1)
+                // O /info é público: qualquer chave nova no topo (um info.* que
+                // vazou, um contribuidor ligado sem querer) quebra aqui
+                .jsonPath("$.length()").isEqualTo(2)
+                .jsonPath("$.build").exists();
+    }
+
+    @Test
     @DisplayName("Sem token a saúde responde, mas sem o detalhe dos componentes")
     void saudeSemTokenNaoDetalha() {
         // Só o corpo: no ambiente de teste algum indicador pode estar DOWN
@@ -133,5 +150,9 @@ class ActuatorInfoTest {
                 .isEqualTo("when-authorized");
         org.assertj.core.api.Assertions.assertThat(
                 producao.getProperty("management.info.java.enabled")).isEqualTo("false");
+        // O contribuidor de ambiente publicaria todo info.* — até uma variável
+        // INFO_* criada no painel. O commit sai do DeployInfoContributor
+        org.assertj.core.api.Assertions.assertThat(
+                producao.getProperty("management.info.env.enabled")).isNotEqualTo("true");
     }
 }
