@@ -402,6 +402,18 @@ class WishProjectionServiceTest {
     }
 
     @Test
+    void prazoGiganteComSobraDeCentavosFicaForaDeAlcance() {
+        // A divisão dá 10^17 ciclos. Converter antes de comparar com o teto
+        // truncava para int e podia exibir um prazo curto, fisicamente impossível.
+        givenCycles(new AnalyticsService.CycleNet(new BigDecimal("5000"), new BigDecimal("4999.99")));
+
+        WishProjection projection = service.project(wish("1000000000000000"), service.baselineFor(USER, TODAY), TODAY);
+
+        assertThat(projection.monthsToAfford()).isNull();
+        assertThat(projection.estimatedDate()).isNull();
+    }
+
+    @Test
     void medianaDeContagemParEAMediaDosDoisCentrais() {
         assertThat(WishProjectionService.median(List.of(
                 new BigDecimal("100"), new BigDecimal("300"),
