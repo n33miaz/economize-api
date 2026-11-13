@@ -88,6 +88,9 @@ public class AccountPrivacyService {
             // descarta o cache de versão da sessão depois do commit: sem isso o
             // token seguiria valendo até 30 s depois da conta sumir
             sessionVersionService.revokeAll(user);
+            // explícito, mesmo com o revokeAll já descartando: a exclusão não
+            // pode depender de um efeito colateral para o token deixar de valer
+            sessionVersionService.forget(user.getEmail());
             // o que o JPA tem pendente (o código de recuperação riscado, a
             // versão da sessão) vai ao banco ANTES do SQL apagar as linhas; e o
             // contexto esquece as entidades, para o commit não tentar regravar
